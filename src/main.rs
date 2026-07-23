@@ -1,0 +1,816 @@
+#![allow(unused)]
+
+use std::ops::{Index, Range};
+
+#[derive(Debug)]
+struct Package {
+	srcs: Vec<Source>,
+}
+
+impl Package {
+	fn new() -> Self {
+		Self { srcs: Vec::new() }
+	}
+
+	fn get_src(&self, id: SourceId) -> &Source {
+		&self.srcs[id.0]
+	}
+
+	fn add_src(&mut self, file: String, chars: Vec<char>) -> SourceId {
+		let id = SourceId(self.srcs.len());
+		let src = Source { id, file, chars };
+		self.srcs.push(src);
+		id
+	}
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct SourceId(usize);
+
+#[derive(Debug)]
+struct Source {
+	id: SourceId,
+	file: String,
+	chars: Vec<char>,
+}
+
+impl Source {
+	fn len(&self) -> usize {
+		self.chars.len()
+	}
+
+	fn loc(&self, idx: usize) -> Location {
+		let mut i = 0;
+		let mut lin = 1;
+		let mut col = 1;
+		while i < idx && i < self.chars.len() {
+			if self.chars[i] == '\n' {
+				lin += 1;
+				col = 1;
+			} else {
+				col += 1;
+			}
+			i += 1;
+		}
+		Location {
+			file: self.file.clone(),
+			lin,
+			col,
+		}
+	}
+}
+
+impl Index<usize> for Source {
+	type Output = char;
+
+	fn index(&self, idx: usize) -> &Self::Output {
+		&self.chars[idx]
+	}
+}
+
+impl Index<Range<usize>> for Source {
+	type Output = [char];
+
+	fn index(&self, idx: Range<usize>) -> &Self::Output {
+		&self.chars[idx.start..idx.end]
+	}
+}
+
+use std::fmt::{self, Display, Formatter};
+
+#[derive(Debug)]
+struct Location {
+	file: String,
+	lin: usize,
+	col: usize,
+}
+
+impl Display for Location {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		write!(f, "{}:{},{}", self.file, self.lin, self.col)
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Token {
+	src: SourceId,
+	tag: TokenTag,
+	idx: usize,
+	len: usize,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum TokenTag {
+	Eof,
+
+	Def,
+	End,
+	Print,
+
+	Ident,
+	Num,
+
+	Eq,
+
+	LParen,
+	RParen,
+
+	Comma,
+}
+
+impl TokenTag {
+	fn name(&self) -> &'static str {
+		match self {
+			TokenTag::Eof => "EOF",
+
+			TokenTag::Def => "DEF",
+			TokenTag::End => "END",
+			TokenTag::Print => "PRINT",
+
+			TokenTag::Ident => "IDENT",
+			TokenTag::Num => "NUM",
+
+			TokenTag::Eq => "EQ",
+
+			TokenTag::LParen => "LPAREN",
+			TokenTag::RParen => "RPAREN",
+
+			TokenTag::Comma => "COMMA",
+		}
+	}
+}
+
+struct Lexer<'src> {
+	src: &'src Source,
+	idx: usize,
+}
+
+impl<'src> Lexer<'src> {
+	fn new(src: &'src Source) -> Self {
+		Self { src, idx: 0 }
+	}
+
+	fn lex(mut self) -> Result<Vec<Token>, Error> {
+		let mut toks = Vec::new();
+		while self.idx < self.src.len() {
+			let tok = self.lex_next()?;
+			toks.push(tok);
+		}
+		Ok(toks)
+	}
+
+	fn lex_next(&mut self) -> Result<Token, Error> {
+		while self.idx < self.src.len() && self.src[self.idx].is_whitespace() {
+			self.idx += 1;
+		}
+		if self.idx == self.src.len() {
+			return Ok(Token {
+				src: self.src.id,
+				tag: TokenTag::Eof,
+				idx: self.idx,
+				len: 0,
+			});
+		}
+		match self.src[self.idx] {
+			':' => {
+				if self.idx + 1 < self.src.len() && self.src[self.idx + 1] == '=' {
+					self.idx += 2;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::Eq,
+						idx: self.idx - 2,
+						len: 2,
+					})
+				} else {
+					let ch = self.src[self.idx];
+					Err(Error::Syntax(
+						self.src.loc(self.idx),
+						format!("unexpected char '{}'", ch),
+					))
+				}
+			}
+			'(' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::LParen,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			')' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::RParen,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			',' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Comma,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			ch => {
+				if ch.is_alphabetic() || ch == '_' {
+					self.lex_ident()
+				} else if ch.is_numeric() {
+					self.lex_num()
+				} else {
+					Err(Error::Syntax(
+						self.src.loc(self.idx),
+						format!("unexpected char '{}'", ch),
+					))
+				}
+			}
+		}
+	}
+
+	fn lex_ident(&mut self) -> Result<Token, Error> {
+		let idx = self.idx;
+		while self.idx < self.src.len()
+			&& (self.src[self.idx].is_alphabetic()
+				|| self.src[self.idx].is_numeric()
+				|| self.src[self.idx] == '_')
+		{
+			self.idx += 1;
+		}
+		let span = self.src[idx..self.idx].iter().collect::<String>();
+		let tag = match span.as_str() {
+			"def" => TokenTag::Def,
+			"end" => TokenTag::End,
+			"print" => TokenTag::Print,
+			_ => TokenTag::Ident,
+		};
+		Ok(Token {
+			src: self.src.id,
+			tag,
+			idx,
+			len: self.idx - idx,
+		})
+	}
+
+	fn lex_num(&mut self) -> Result<Token, Error> {
+		let idx = self.idx;
+		while self.idx < self.src.len() && self.src[self.idx].is_numeric() {
+			self.idx += 1;
+		}
+		if self.idx < self.src.len() && self.src[self.idx] == '.' {
+			self.idx += 1;
+			while self.idx < self.src.len() && self.src[self.idx].is_numeric() {
+				self.idx += 1;
+			}
+		}
+		Ok(Token {
+			src: self.src.id,
+			tag: TokenTag::Num,
+			idx,
+			len: self.idx - idx,
+		})
+	}
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct StmtId(usize);
+
+#[derive(Debug)]
+enum Stmt {
+	Def(Def),
+	Print(Print),
+	Expr(ExprId),
+}
+
+#[derive(Debug)]
+struct Def(Token, SymId, Vec<SymId>, Vec<StmtId>);
+
+#[derive(Debug)]
+enum Place {
+	Ident(Ident),
+}
+
+#[derive(Debug)]
+struct Print(Token, ExprId);
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ExprId(usize);
+
+#[derive(Debug)]
+enum Expr {
+	Call(Call),
+	Assign(Assign),
+	Ident(Ident),
+	Lit(Lit),
+}
+
+#[derive(Debug)]
+struct Call(Token, ExprId, Vec<ExprId>);
+
+#[derive(Debug)]
+struct Assign(Token, Place, ExprId);
+
+#[derive(Debug, Clone)]
+struct Ident(Token, SymId);
+
+#[derive(Debug)]
+enum Lit {
+	Num(Token, f64),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ChunkId(usize);
+
+#[derive(Debug)]
+struct Chunk {
+	src: SourceId,
+	stmts: Vec<Stmt>,
+	exprs: Vec<Expr>,
+	top: Vec<StmtId>,
+}
+
+impl Chunk {
+	fn new(src: SourceId) -> Self {
+		Self {
+			src,
+			stmts: Vec::new(),
+			exprs: Vec::new(),
+			top: Vec::new(),
+		}
+	}
+
+	fn get_stmt(&self, stmt_id: StmtId) -> &Stmt {
+		&self.stmts[stmt_id.0]
+	}
+
+	fn add_stmt(&mut self, stmt: Stmt) -> StmtId {
+		self.stmts.push(stmt);
+		StmtId(self.stmts.len() - 1)
+	}
+
+	fn get_expr(&self, expr_id: ExprId) -> &Expr {
+		&self.exprs[expr_id.0]
+	}
+
+	fn add_expr(&mut self, expr: Expr) -> ExprId {
+		self.exprs.push(expr);
+		ExprId(self.exprs.len() - 1)
+	}
+
+	fn add_to_top(&mut self, stmt_id: StmtId) {
+		self.top.push(stmt_id);
+	}
+}
+
+struct Parser<'src> {
+	src: &'src Source,
+	toks: Vec<Token>,
+	idx: usize,
+	chunk: Chunk,
+	syms: Interner,
+}
+
+impl<'src> Parser<'src> {
+	fn new(src: &'src Source, toks: Vec<Token>) -> Self {
+		Self {
+			src,
+			toks,
+			idx: 0,
+			chunk: Chunk::new(src.id),
+			syms: Interner::new(),
+		}
+	}
+
+	fn parse(mut self) -> Result<(Chunk, Interner), Error> {
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::Eof {
+			let stmt_id = self.parse_stmt()?;
+			self.chunk.add_to_top(stmt_id);
+		}
+		Ok((self.chunk, self.syms))
+	}
+
+	fn parse_stmt(&mut self) -> Result<StmtId, Error> {
+		let stmt = match self.toks[self.idx].tag {
+			TokenTag::Def => self.parse_def_stmt()?,
+			TokenTag::Print => self.parse_print_stmt()?,
+			_ => {
+				let expr_id = self.parse_expr()?;
+				Stmt::Expr(expr_id)
+			}
+		};
+		Ok(self.chunk.add_stmt(stmt))
+	}
+
+	fn parse_def_stmt(&mut self) -> Result<Stmt, Error> {
+		let tok = self.take(TokenTag::Def)?;
+		let ident = self.take(TokenTag::Ident)?;
+		let span = self.src[ident.idx..ident.idx + ident.len]
+			.iter()
+			.collect::<String>();
+		let name = self.syms.get_or_add(&span);
+		let mut params = Vec::new();
+		self.take(TokenTag::LParen)?;
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
+			let tok = self.take(TokenTag::Ident)?;
+			let span = self.src[tok.idx..tok.idx + tok.len]
+				.iter()
+				.collect::<String>();
+			let param = self.syms.get_or_add(&span);
+			params.push(param);
+			match self.toks[self.idx].tag {
+				TokenTag::Comma => {
+					self.idx += 1;
+				}
+				TokenTag::RParen => {}
+				_ => {
+					let tok = self.toks[self.idx];
+					return Err(Error::Syntax(
+						self.src.loc(tok.idx),
+						format!("unexpected token {}", tok.tag.name()),
+					));
+				}
+			}
+		}
+		self.take(TokenTag::RParen)?;
+		let mut body = Vec::new();
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+			let stmt_id = self.parse_stmt()?;
+			body.push(stmt_id);
+		}
+		self.take(TokenTag::End)?;
+		Ok(Stmt::Def(Def(tok, name, params, body)))
+	}
+
+	fn parse_print_stmt(&mut self) -> Result<Stmt, Error> {
+		let tok = self.take(TokenTag::Print)?;
+		let expr_id = self.parse_expr()?;
+		Ok(Stmt::Print(Print(tok, expr_id)))
+	}
+
+	fn parse_expr(&mut self) -> Result<ExprId, Error> {
+		let expr = self.parse_expr_unit()?;
+		let expr_id = self.chunk.add_expr(expr);
+		let tok = self.toks[self.idx];
+		match tok.tag {
+			TokenTag::Eq => {
+				self.idx += 1;
+				let place = match self.chunk.get_expr(expr_id) {
+					Expr::Ident(ident) => Place::Ident(ident.clone()),
+					_ => {
+						return Err(Error::Syntax(
+							self.src.loc(tok.idx),
+							format!("unexpected token {}", tok.tag.name()),
+						));
+					}
+				};
+				let val_expr_id = self.parse_expr()?;
+				let expr = Expr::Assign(Assign(tok, place, val_expr_id));
+				let expr_id = self.chunk.add_expr(expr);
+				Ok(expr_id)
+			}
+			TokenTag::LParen => {
+				let mut args = Vec::new();
+				self.take(TokenTag::LParen)?;
+				while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
+					let arg = self.parse_expr()?;
+					args.push(arg);
+					match self.toks[self.idx].tag {
+						TokenTag::Comma => {
+							self.idx += 1;
+						}
+						TokenTag::RParen => {}
+						_ => {
+							return Err(Error::Syntax(
+								self.src.loc(tok.idx),
+								format!("unexpected token {}", tok.tag.name()),
+							));
+						}
+					}
+				}
+				self.take(TokenTag::RParen)?;
+				let expr = Expr::Call(Call(tok, expr_id, args));
+				let expr_id = self.chunk.add_expr(expr);
+				Ok(expr_id)
+			}
+			_ => Ok(expr_id),
+		}
+	}
+
+	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {
+		match self.toks[self.idx].tag {
+			TokenTag::Ident => self.parse_ident_expr(),
+			TokenTag::Num => self.parse_num_lit_expr(),
+			_ => {
+				let tok = &self.toks[self.idx];
+				Err(Error::Syntax(
+					self.src.loc(tok.idx),
+					format!("unexpected token {}", tok.tag.name()),
+				))
+			}
+		}
+	}
+
+	fn parse_ident_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Ident)?;
+		let span = self.src[tok.idx..tok.idx + tok.len]
+			.iter()
+			.collect::<String>();
+		let sym_id = self.syms.get_or_add(&span);
+		Ok(Expr::Ident(Ident(tok, sym_id)))
+	}
+
+	fn parse_num_lit_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Num)?;
+		let span = self.src[tok.idx..tok.idx + tok.len]
+			.iter()
+			.collect::<String>();
+		let num = span.parse().unwrap();
+		Ok(Expr::Lit(Lit::Num(tok, num)))
+	}
+
+	fn take(&mut self, tag: TokenTag) -> Result<Token, Error> {
+		let tok = &self.toks[self.idx];
+		if tok.tag == tag {
+			self.idx += 1;
+			Ok(*tok)
+		} else {
+			Err(Error::Syntax(
+				self.src.loc(tok.idx),
+				format!("unexpected token {}", tok.tag.name()),
+			))
+		}
+	}
+}
+
+#[derive(Debug)]
+enum Error {
+	Syntax(Location, String),
+	Runtime(Location, String),
+}
+
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+struct SymId(usize);
+
+#[derive(Debug)]
+struct Sym(SymId, String);
+
+struct Interner {
+	syms: Vec<Sym>,
+	ids: HashMap<String, SymId>,
+}
+
+impl Interner {
+	fn new() -> Self {
+		Self {
+			syms: Vec::new(),
+			ids: HashMap::new(),
+		}
+	}
+
+	fn get_or_add(&mut self, name: &str) -> SymId {
+		match self.get_by_name(&name) {
+			Some(Sym(id, _)) => *id,
+			None => {
+				let id = SymId(self.syms.len());
+				let sym = Sym(id, String::from(name));
+				self.syms.push(sym);
+				self.ids.insert(String::from(name), id);
+				id
+			}
+		}
+	}
+
+	fn get_by_name(&self, name: &str) -> Option<&Sym> {
+		match self.ids.get(name) {
+			Some(id) => Some(&self.syms[id.0]),
+			None => None,
+		}
+	}
+
+	fn get_by_id(&self, id: SymId) -> &Sym {
+		&self.syms[id.0]
+	}
+}
+
+#[derive(Debug, Clone)]
+enum Val {
+	Nil,
+	Num(f64),
+	Ref(Ref),
+}
+
+use std::cell::RefCell;
+use std::ops::Deref;
+use std::rc::Rc;
+
+#[derive(Debug, Clone)]
+struct Ref(Rc<RefCell<Obj>>);
+
+impl Ref {
+	fn new(obj: Obj) -> Self {
+		Self(Rc::new(RefCell::new(obj)))
+	}
+
+	fn get(&self) -> impl Deref<Target = Obj> {
+		self.0.borrow()
+	}
+}
+
+#[derive(Debug)]
+enum Obj {
+	Proc(Proc),
+}
+
+#[derive(Debug)]
+struct Proc {
+	name: SymId,
+	params: Vec<SymId>,
+	body: Vec<StmtId>,
+}
+
+struct Environment {
+	vals: HashMap<SymId, Val>,
+}
+
+impl Environment {
+	fn new() -> Self {
+		Self {
+			vals: HashMap::new(),
+		}
+	}
+
+	fn lookup(&self, name: SymId) -> Option<Val> {
+		match self.vals.get(&name) {
+			Some(val) => Some(val.clone()),
+			None => None,
+		}
+	}
+
+	fn assign(&mut self, name: SymId, val: Val) {
+		self.vals.insert(name, val);
+	}
+}
+
+struct Interpreter<'pkg> {
+	pkg: &'pkg Package,
+	syms: Interner,
+	env: Environment,
+}
+
+impl<'pkg> Interpreter<'pkg> {
+	fn new(pkg: &'pkg Package, syms: Interner) -> Self {
+		Self {
+			pkg,
+			syms,
+			env: Environment::new(),
+		}
+	}
+
+	fn eval(mut self, chunk: Chunk) -> Result<(), Error> {
+		for stmt_id in &chunk.top {
+			self.eval_stmt(&chunk, *stmt_id)?;
+		}
+		Ok(())
+	}
+
+	fn eval_stmt(&mut self, chunk: &Chunk, stmt_id: StmtId) -> Result<(), Error> {
+		match chunk.get_stmt(stmt_id) {
+			Stmt::Def(Def(_, name, params, body)) => {
+				let obj = Obj::Proc(Proc {
+					name: *name,
+					params: params.to_vec(),
+					body: body.to_vec(),
+				});
+				let val = Val::Ref(Ref::new(obj));
+				self.env.assign(*name, val);
+				Ok(())
+			}
+			Stmt::Print(Print(_, val_expr_id)) => {
+				let val = self.eval_expr(chunk, *val_expr_id)?;
+				match val {
+					Val::Nil => {
+						println!("nil")
+					}
+					Val::Num(num) => println!("{}", num),
+					Val::Ref(rf) => match &*rf.get() {
+						Obj::Proc(proc) => {
+							let name = self.syms.get_by_id(proc.name);
+							print!("def {}(", name.1);
+							for (i, param) in proc.params.iter().enumerate() {
+								let param = self.syms.get_by_id(*param);
+								print!("{}", param.1);
+								if i + 1 != proc.params.len() {
+									print!(", ");
+								}
+							}
+							print!(")\n");
+						}
+					},
+				}
+				Ok(())
+			}
+			Stmt::Expr(expr_id) => {
+				self.eval_expr(chunk, *expr_id)?;
+				Ok(())
+			}
+		}
+	}
+
+	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Error> {
+		match chunk.get_expr(expr_id) {
+			Expr::Call(Call(tok, val_id, arg_ids)) => {
+				let mut args = Vec::with_capacity(arg_ids.len());
+				for arg_id in arg_ids {
+					let arg = self.eval_expr(chunk, *arg_id)?;
+					args.push(arg);
+				}
+				match self.eval_expr(chunk, *val_id)? {
+					Val::Ref(rf) => match &*rf.get() {
+						Obj::Proc(proc) => {
+							for stmt_id in &proc.body {
+								self.eval_stmt(chunk, *stmt_id)?;
+							}
+							Ok(Val::Nil)
+						}
+					},
+					val => {
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(tok.idx);
+						Err(Error::Runtime(
+							loc,
+							format!("call of non-callable {:?}", val),
+						))
+					}
+				}
+			}
+			Expr::Assign(Assign(_, place, val_expr_id)) => {
+				let val = self.eval_expr(chunk, *val_expr_id)?;
+				match place {
+					Place::Ident(Ident(_, sym_id)) => {
+						self.env.assign(*sym_id, val.clone());
+						Ok(val)
+					}
+				}
+			}
+			Expr::Ident(Ident(tok, sym_id)) => match self.env.lookup(*sym_id) {
+				Some(val) => Ok(val),
+				None => {
+					let src = self.pkg.get_src(chunk.src);
+					let loc = src.loc(tok.idx);
+					let name = self.syms.get_by_id(*sym_id);
+					Err(Error::Runtime(loc, format!("unbound ident '{}'", name.1)))
+				}
+			},
+			Expr::Lit(lit) => Ok(match lit {
+				Lit::Num(_, num) => Val::Num(*num),
+			}),
+		}
+	}
+}
+
+use std::env;
+use std::fs;
+use std::process;
+
+fn main() -> Result<(), Error> {
+	let args = env::args().collect::<Vec<_>>();
+	if args.len() != 2 {
+		eprintln!("usage: hrm <file>");
+		process::exit(1);
+	}
+	let file = args[1].clone();
+	let chars = match fs::read_to_string(&file) {
+		Ok(str) => str.chars().collect::<Vec<_>>(),
+		Err(_) => {
+			eprintln!("error: cannot read file '{}'", file);
+			process::exit(1);
+		}
+	};
+
+	let mut pkg = Package::new();
+	let src_id = pkg.add_src(file, chars);
+	let src = pkg.get_src(src_id);
+
+	match Lexer::new(src)
+		.lex()
+		.and_then(|toks| Parser::new(src, toks).parse())
+		.and_then(|(chunk, syms)| Interpreter::new(&pkg, syms).eval(chunk))
+	{
+		Ok(()) => Ok(()),
+		Err(err) => match err {
+			Error::Syntax(loc, msg) => {
+				eprintln!("{}: syntax error: {}", loc, msg);
+				process::exit(1);
+			}
+			Error::Runtime(loc, msg) => {
+				eprintln!("{}: runtime error: {}", loc, msg);
+				process::exit(1);
+			}
+		},
+	}
+}

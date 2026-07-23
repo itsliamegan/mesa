@@ -1,0 +1,6 @@
+def write()
+	print 1.7
+end
+
+num := 5.23
+write()
