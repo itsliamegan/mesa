@@ -947,9 +947,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							for item in items {
 								self.scope.borrow_mut().assign(*name, item.clone());
 								for stmt_id in body {
-									if let Some(val) = self.eval_stmt(chunk, *stmt_id)? {
-										self.scope = outer_scope;
-										return Ok(Some(val));
+									match self.eval_stmt(chunk, *stmt_id) {
+										Ok(Some(val)) => {
+											self.scope = outer_scope;
+											return Ok(Some(val));
+										}
+										Ok(None) => {},
+										Err(err) => {
+											self.scope = outer_scope;
+											return Err(err)
+										}
 									}
 								}
 							}
@@ -1013,7 +1020,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							self.scope = Rc::new(RefCell::new(callee_scope));
 							for stmt_id in &proc.body {
 								match self.eval_stmt(chunk, *stmt_id) {
-									Ok(Some(val)) => return Ok(val),
+									Ok(Some(val)) => {
+										self.scope = caller_scope;
+										return Ok(val);
+									}
 									Ok(None) => {}
 									Err(err) => {
 										self.scope = caller_scope;
