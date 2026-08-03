@@ -271,7 +271,15 @@ impl<'src> Lexer<'src> {
 		let idx = self.idx;
 		self.idx += 1;
 		while self.idx < self.src.len() && self.src[self.idx] != '"' {
-			self.idx += 1;
+			if self.src[self.idx] == '\\' && self.idx + 1 < self.src.len() {
+				self.idx += 2;
+			} else {
+				self.idx += 1;
+			}
+		}
+		if self.idx == self.src.len() {
+			let loc = self.src.loc(idx);
+			return Err(Error::Syntax(loc, format!("unterminated string literal")));
 		}
 		self.idx += 1;
 		Ok(Token {
@@ -568,9 +576,29 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_str_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Str)?;
-		let str = self.src[tok.idx + 1..tok.idx + tok.len - 1]
-			.iter()
-			.collect::<String>();
+		let mut idx = tok.idx + 1;
+		let mut str = String::with_capacity(tok.len);
+		while idx < self.src.len() && idx < tok.idx + tok.len - 1 {
+			if self.src[idx] == '\\' {
+				match self.src[idx + 1] {
+					'n' => str.push('\n'),
+					't' => str.push('\t'),
+					'"' => str.push('"'),
+					'\\' => str.push('\\'),
+					char => {
+						let loc = self.src.loc(idx);
+						return Err(Error::Syntax(
+							loc,
+							format!("unsupported escape sequence '\\{}'", char),
+						));
+					}
+				}
+				idx += 2;
+			} else {
+				str.push(self.src[idx]);
+				idx += 1;
+			}
+		}
 		Ok(Expr::Lit(Lit::Str(tok, str)))
 	}
 

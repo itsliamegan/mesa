@@ -2,4 +2,4 @@ def id(val)
 	return val
 end
 
-print id("Hello, world!")
+print id("Hello,\nworld!")
