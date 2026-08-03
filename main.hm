@@ -7,4 +7,6 @@ vals := [
 	5.23,
 ]
 
-print vals
+each val in vals do
+	print val
+end

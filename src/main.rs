@@ -104,6 +104,9 @@ enum TokenTag {
 	Eof,
 
 	Def,
+	Each,
+	Do,
+	In,
 	End,
 	Return,
 	Print,
@@ -130,6 +133,9 @@ impl TokenTag {
 			TokenTag::Eof => "EOF",
 
 			TokenTag::Def => "DEF",
+			TokenTag::Each => "EACH",
+			TokenTag::Do => "DO",
+			TokenTag::In => "IN",
 			TokenTag::End => "END",
 			TokenTag::Return => "RETURN",
 			TokenTag::Print => "PRINT",
@@ -274,6 +280,9 @@ impl<'src> Lexer<'src> {
 		let span = self.src[idx..self.idx].iter().collect::<String>();
 		let tag = match span.as_str() {
 			"def" => TokenTag::Def,
+			"each" => TokenTag::Each,
+			"do" => TokenTag::Do,
+			"in" => TokenTag::In,
 			"end" => TokenTag::End,
 			"return" => TokenTag::Return,
 			"print" => TokenTag::Print,
@@ -340,6 +349,7 @@ struct StmtId(usize);
 #[derive(Debug)]
 enum Stmt {
 	Def(Def),
+	Each(Each),
 	Return(Return),
 	Print(Print),
 	Expr(ExprId),
@@ -347,6 +357,9 @@ enum Stmt {
 
 #[derive(Debug)]
 struct Def(Token, SymId, Vec<SymId>, Vec<StmtId>);
+
+#[derive(Debug)]
+struct Each(Token, SymId, ExprId, Vec<StmtId>);
 
 #[derive(Debug)]
 enum Place {
@@ -462,6 +475,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	fn parse_stmt(&mut self) -> Result<StmtId, Error> {
 		let stmt = match self.toks[self.idx].tag {
 			TokenTag::Def => self.parse_def_stmt()?,
+			TokenTag::Each => self.parse_each_stmt()?,
 			TokenTag::Return => self.parse_return_stmt()?,
 			TokenTag::Print => self.parse_print_stmt()?,
 			_ => {
@@ -510,6 +524,25 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		}
 		self.take(TokenTag::End)?;
 		Ok(Stmt::Def(Def(tok, name, params, body)))
+	}
+
+	fn parse_each_stmt(&mut self) -> Result<Stmt, Error> {
+		let tok = self.take(TokenTag::Each)?;
+		let ident = self.take(TokenTag::Ident)?;
+		let span = self.src[ident.idx..ident.idx + ident.len]
+			.iter()
+			.collect::<String>();
+		let item = self.syms.get_or_add(&span);
+		self.take(TokenTag::In)?;
+		let iter = self.parse_expr()?;
+		self.take(TokenTag::Do)?;
+		let mut body = Vec::new();
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+			let stmt_id = self.parse_stmt()?;
+			body.push(stmt_id);
+		}
+		self.take(TokenTag::End)?;
+		Ok(Stmt::Each(Each(tok, item, iter, body)))
 	}
 
 	fn parse_return_stmt(&mut self) -> Result<Stmt, Error> {
@@ -707,6 +740,7 @@ enum SyntaxError {
 enum RuntimeError {
 	WrongArgCount(usize, usize),
 	CallNonCallable(String),
+	IterNonIterable(String),
 	UnboundIdent(String),
 }
 
@@ -737,6 +771,7 @@ impl Display for RuntimeError {
 				write!(f, "wrong number of args; have {}, want {}", have, want)
 			}
 			Self::CallNonCallable(val) => write!(f, "call of non-callable {}", val),
+			Self::IterNonIterable(val) => write!(f, "iter of non-iterable {}", val),
 			Self::UnboundIdent(ident) => write!(f, "unbound ident '{}'", ident),
 		}
 	}
@@ -900,6 +935,40 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = Val::Ref(Ref::new(obj));
 				self.scope.borrow_mut().assign(*name, val);
 				Ok(None)
+			}
+			Stmt::Each(Each(tok, name, iter, body)) => {
+				let iter = self.eval_expr(chunk, *iter)?;
+				match iter {
+					Val::Ref(rf) => match &*rf.get() {
+						Obj::List(items) => {
+							let outer_scope = self.scope.clone();
+							let inner_scope = Scope::within(outer_scope.clone());
+							self.scope = Rc::new(RefCell::new(inner_scope));
+							for item in items {
+								self.scope.borrow_mut().assign(*name, item.clone());
+								for stmt_id in body {
+									if let Some(val) = self.eval_stmt(chunk, *stmt_id)? {
+										self.scope = outer_scope;
+										return Ok(Some(val));
+									}
+								}
+							}
+							self.scope = outer_scope;
+							Ok(None)
+						}
+						obj => {
+							let src = self.pkg.get_src(chunk.src);
+							let loc = src.loc(tok.idx);
+							Err(Error::Runtime(loc, RuntimeError::IterNonIterable(format!("{:?}", obj))))
+						}
+					}
+					val => {
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(tok.idx);
+						Err(Error::Runtime(loc, RuntimeError::IterNonIterable(format!("{:?}", val))))
+					}
+
+				}
 			}
 			Stmt::Return(Return(_, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
