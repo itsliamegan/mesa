@@ -105,10 +105,13 @@ enum TokenTag {
 
 	Def,
 	End,
+	Return,
 	Print,
 
 	Ident,
 	Num,
+	Bool,
+	Nil,
 
 	Eq,
 
@@ -125,10 +128,13 @@ impl TokenTag {
 
 			TokenTag::Def => "DEF",
 			TokenTag::End => "END",
+			TokenTag::Return => "RETURN",
 			TokenTag::Print => "PRINT",
 
 			TokenTag::Ident => "IDENT",
 			TokenTag::Num => "NUM",
+			TokenTag::Bool => "BOOL",
+			TokenTag::Nil => "NIL",
 
 			TokenTag::Eq => "EQ",
 
@@ -244,7 +250,10 @@ impl<'src> Lexer<'src> {
 		let tag = match span.as_str() {
 			"def" => TokenTag::Def,
 			"end" => TokenTag::End,
+			"return" => TokenTag::Return,
 			"print" => TokenTag::Print,
+			"true" | "false" => TokenTag::Bool,
+			"nil" => TokenTag::Nil,
 			_ => TokenTag::Ident,
 		};
 		Ok(Token {
@@ -281,6 +290,7 @@ struct StmtId(usize);
 #[derive(Debug)]
 enum Stmt {
 	Def(Def),
+	Return(Return),
 	Print(Print),
 	Expr(ExprId),
 }
@@ -292,6 +302,9 @@ struct Def(Token, SymId, Vec<SymId>, Vec<StmtId>);
 enum Place {
 	Ident(Ident),
 }
+
+#[derive(Debug)]
+struct Return(Token, ExprId);
 
 #[derive(Debug)]
 struct Print(Token, ExprId);
@@ -319,6 +332,8 @@ struct Ident(Token, SymId);
 #[derive(Debug)]
 enum Lit {
 	Num(Token, f64),
+	Bool(Token, bool),
+	Nil(Token),
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -365,36 +380,37 @@ impl Chunk {
 	}
 }
 
-struct Parser<'src> {
+struct Parser<'syms, 'src> {
+	syms: &'syms mut Interner,
 	src: &'src Source,
 	toks: Vec<Token>,
 	idx: usize,
 	chunk: Chunk,
-	syms: Interner,
 }
 
-impl<'src> Parser<'src> {
-	fn new(src: &'src Source, toks: Vec<Token>) -> Self {
+impl<'syms, 'src> Parser<'syms, 'src> {
+	fn new(syms: &'syms mut Interner, src: &'src Source, toks: Vec<Token>) -> Self {
 		Self {
+			syms,
 			src,
 			toks,
 			idx: 0,
 			chunk: Chunk::new(src.id),
-			syms: Interner::new(),
 		}
 	}
 
-	fn parse(mut self) -> Result<(Chunk, Interner), Error> {
+	fn parse(mut self) -> Result<Chunk, Error> {
 		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::Eof {
 			let stmt_id = self.parse_stmt()?;
 			self.chunk.add_to_top(stmt_id);
 		}
-		Ok((self.chunk, self.syms))
+		Ok(self.chunk)
 	}
 
 	fn parse_stmt(&mut self) -> Result<StmtId, Error> {
 		let stmt = match self.toks[self.idx].tag {
 			TokenTag::Def => self.parse_def_stmt()?,
+			TokenTag::Return => self.parse_return_stmt()?,
 			TokenTag::Print => self.parse_print_stmt()?,
 			_ => {
 				let expr_id = self.parse_expr()?;
@@ -442,6 +458,12 @@ impl<'src> Parser<'src> {
 		}
 		self.take(TokenTag::End)?;
 		Ok(Stmt::Def(Def(tok, name, params, body)))
+	}
+
+	fn parse_return_stmt(&mut self) -> Result<Stmt, Error> {
+		let tok = self.take(TokenTag::Return)?;
+		let expr_id = self.parse_expr()?;
+		Ok(Stmt::Return(Return(tok, expr_id)))
 	}
 
 	fn parse_print_stmt(&mut self) -> Result<Stmt, Error> {
@@ -503,6 +525,8 @@ impl<'src> Parser<'src> {
 		match self.toks[self.idx].tag {
 			TokenTag::Ident => self.parse_ident_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
+			TokenTag::Bool => self.parse_bool_lit_expr(),
+			TokenTag::Nil => self.parse_nil_lit_expr(),
 			_ => {
 				let tok = &self.toks[self.idx];
 				Err(Error::Syntax(
@@ -529,6 +553,20 @@ impl<'src> Parser<'src> {
 			.collect::<String>();
 		let num = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Num(tok, num)))
+	}
+
+	fn parse_bool_lit_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Bool)?;
+		let span = self.src[tok.idx..tok.idx + tok.len]
+			.iter()
+			.collect::<String>();
+		let bool = span.parse().unwrap();
+		Ok(Expr::Lit(Lit::Bool(tok, bool)))
+	}
+
+	fn parse_nil_lit_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Nil)?;
+		Ok(Expr::Lit(Lit::Nil(tok)))
 	}
 
 	fn take(&mut self, tag: TokenTag) -> Result<Token, Error> {
@@ -573,7 +611,7 @@ impl Interner {
 	}
 
 	fn get_or_add(&mut self, name: &str) -> SymId {
-		match self.get_by_name(&name) {
+		match self.get_by_name(name) {
 			Some(Sym(id, _)) => *id,
 			None => {
 				let id = SymId(self.syms.len());
@@ -601,6 +639,7 @@ impl Interner {
 enum Val {
 	Nil,
 	Num(f64),
+	Bool(bool),
 	Ref(Ref),
 }
 
@@ -631,23 +670,37 @@ struct Proc {
 	name: SymId,
 	params: Vec<SymId>,
 	body: Vec<StmtId>,
+	scope: Rc<RefCell<Scope>>,
 }
 
-struct Environment {
+#[derive(Debug)]
+struct Scope {
 	vals: HashMap<SymId, Val>,
+	outer: Option<Rc<RefCell<Scope>>>,
 }
 
-impl Environment {
-	fn new() -> Self {
+impl Scope {
+	fn root() -> Self {
 		Self {
 			vals: HashMap::new(),
+			outer: None,
+		}
+	}
+
+	fn within(outer: Rc<RefCell<Self>>) -> Self {
+		Self {
+			vals: HashMap::new(),
+			outer: Some(outer),
 		}
 	}
 
 	fn lookup(&self, name: SymId) -> Option<Val> {
 		match self.vals.get(&name) {
 			Some(val) => Some(val.clone()),
-			None => None,
+			None => match &self.outer {
+				Some(outer) => outer.borrow().lookup(name),
+				None => None,
+			},
 		}
 	}
 
@@ -656,39 +709,46 @@ impl Environment {
 	}
 }
 
-struct Interpreter<'pkg> {
+struct Interpreter<'syms, 'pkg> {
+	syms: &'syms Interner,
 	pkg: &'pkg Package,
-	syms: Interner,
-	env: Environment,
+	scope: Rc<RefCell<Scope>>,
 }
 
-impl<'pkg> Interpreter<'pkg> {
-	fn new(pkg: &'pkg Package, syms: Interner) -> Self {
+impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
+	fn new(syms: &'syms Interner, pkg: &'pkg Package) -> Self {
 		Self {
-			pkg,
 			syms,
-			env: Environment::new(),
+			pkg,
+			scope: Rc::new(RefCell::new(Scope::root())),
 		}
 	}
 
 	fn eval(mut self, chunk: Chunk) -> Result<(), Error> {
 		for stmt_id in &chunk.top {
-			self.eval_stmt(&chunk, *stmt_id)?;
+			if let Some(val) = self.eval_stmt(&chunk, *stmt_id)? {
+				return Ok(());
+			}
 		}
 		Ok(())
 	}
 
-	fn eval_stmt(&mut self, chunk: &Chunk, stmt_id: StmtId) -> Result<(), Error> {
+	fn eval_stmt(&mut self, chunk: &Chunk, stmt_id: StmtId) -> Result<Option<Val>, Error> {
 		match chunk.get_stmt(stmt_id) {
 			Stmt::Def(Def(_, name, params, body)) => {
 				let obj = Obj::Proc(Proc {
 					name: *name,
 					params: params.to_vec(),
 					body: body.to_vec(),
+					scope: self.scope.clone(),
 				});
 				let val = Val::Ref(Ref::new(obj));
-				self.env.assign(*name, val);
-				Ok(())
+				self.scope.borrow_mut().assign(*name, val);
+				Ok(None)
+			}
+			Stmt::Return(Return(_, val_expr_id)) => {
+				let val = self.eval_expr(chunk, *val_expr_id)?;
+				Ok(Some(val))
 			}
 			Stmt::Print(Print(_, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
@@ -697,6 +757,7 @@ impl<'pkg> Interpreter<'pkg> {
 						println!("nil")
 					}
 					Val::Num(num) => println!("{}", num),
+					Val::Bool(bool) => println!("{}", bool),
 					Val::Ref(rf) => match &*rf.get() {
 						Obj::Proc(proc) => {
 							let name = self.syms.get_by_id(proc.name);
@@ -712,11 +773,11 @@ impl<'pkg> Interpreter<'pkg> {
 						}
 					},
 				}
-				Ok(())
+				Ok(None)
 			}
 			Stmt::Expr(expr_id) => {
 				self.eval_expr(chunk, *expr_id)?;
-				Ok(())
+				Ok(None)
 			}
 		}
 	}
@@ -732,9 +793,35 @@ impl<'pkg> Interpreter<'pkg> {
 				match self.eval_expr(chunk, *val_id)? {
 					Val::Ref(rf) => match &*rf.get() {
 						Obj::Proc(proc) => {
-							for stmt_id in &proc.body {
-								self.eval_stmt(chunk, *stmt_id)?;
+							if args.len() != proc.params.len() {
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(tok.idx);
+								return Err(Error::Runtime(
+									loc,
+									format!(
+										"wrong number of args; have {}, want {}",
+										args.len(),
+										proc.params.len()
+									),
+								));
 							}
+							let caller_scope = self.scope.clone();
+							let mut callee_scope = Scope::within(proc.scope.clone());
+							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
+								callee_scope.assign(*param, arg);
+							}
+							self.scope = Rc::new(RefCell::new(callee_scope));
+							for stmt_id in &proc.body {
+								match self.eval_stmt(chunk, *stmt_id) {
+									Ok(Some(val)) => return Ok(val),
+									Ok(None) => {},
+									Err(err) => {
+										self.scope = caller_scope;
+										return Err(err);
+									}
+								}
+							}
+							self.scope = caller_scope;
 							Ok(Val::Nil)
 						}
 					},
@@ -752,12 +839,12 @@ impl<'pkg> Interpreter<'pkg> {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
 					Place::Ident(Ident(_, sym_id)) => {
-						self.env.assign(*sym_id, val.clone());
+						self.scope.borrow_mut().assign(*sym_id, val.clone());
 						Ok(val)
 					}
 				}
 			}
-			Expr::Ident(Ident(tok, sym_id)) => match self.env.lookup(*sym_id) {
+			Expr::Ident(Ident(tok, sym_id)) => match self.scope.borrow().lookup(*sym_id) {
 				Some(val) => Ok(val),
 				None => {
 					let src = self.pkg.get_src(chunk.src);
@@ -768,6 +855,8 @@ impl<'pkg> Interpreter<'pkg> {
 			},
 			Expr::Lit(lit) => Ok(match lit {
 				Lit::Num(_, num) => Val::Num(*num),
+				Lit::Bool(_, bool) => Val::Bool(*bool),
+				Lit::Nil(_) => Val::Nil,
 			}),
 		}
 	}
@@ -777,7 +866,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-fn main() -> Result<(), Error> {
+fn main() {
 	let args = env::args().collect::<Vec<_>>();
 	if args.len() != 2 {
 		eprintln!("usage: hrm <file>");
@@ -792,16 +881,17 @@ fn main() -> Result<(), Error> {
 		}
 	};
 
+	let mut syms = Interner::new();
 	let mut pkg = Package::new();
 	let src_id = pkg.add_src(file, chars);
 	let src = pkg.get_src(src_id);
 
 	match Lexer::new(src)
 		.lex()
-		.and_then(|toks| Parser::new(src, toks).parse())
-		.and_then(|(chunk, syms)| Interpreter::new(&pkg, syms).eval(chunk))
+		.and_then(|toks| Parser::new(&mut syms, src, toks).parse())
+		.and_then(|chunk| Interpreter::new(&syms, &pkg).eval(chunk))
 	{
-		Ok(()) => Ok(()),
+		Ok(()) => {}
 		Err(err) => match err {
 			Error::Syntax(loc, msg) => {
 				eprintln!("{}: syntax error: {}", loc, msg);
