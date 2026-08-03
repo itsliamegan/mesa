@@ -116,6 +116,8 @@ enum TokenTag {
 
 	Eq,
 
+	LBrace,
+	RBrace,
 	LParen,
 	RParen,
 
@@ -140,6 +142,8 @@ impl TokenTag {
 
 			TokenTag::Eq => "EQ",
 
+			TokenTag::LBrace => "LBRACE",
+			TokenTag::RBrace => "RBRACE",
 			TokenTag::LParen => "LPAREN",
 			TokenTag::RParen => "RPAREN",
 
@@ -196,6 +200,24 @@ impl<'src> Lexer<'src> {
 						SyntaxError::UnexpectedChar(ch),
 					))
 				}
+			}
+			'[' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::LBrace,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			']' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::RBrace,
+					idx: self.idx - 1,
+					len: 1,
+				})
 			}
 			'(' => {
 				self.idx += 1;
@@ -362,6 +384,7 @@ enum Lit {
 	Str(Token, String),
 	Num(Token, f64),
 	Bool(Token, bool),
+	List(Token, Vec<ExprId>),
 	Nil(Token),
 }
 
@@ -534,6 +557,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 						}
 						TokenTag::RParen => {}
 						_ => {
+							let tok = self.toks[self.idx];
 							return Err(Error::Syntax(
 								self.src.loc(tok.idx),
 								SyntaxError::UnexpectedToken(tok),
@@ -556,6 +580,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
 			TokenTag::Bool => self.parse_bool_lit_expr(),
+			TokenTag::LBrace => self.parse_list_lit_expr(),
 			TokenTag::Nil => self.parse_nil_lit_expr(),
 			_ => {
 				let tok = &self.toks[self.idx];
@@ -619,6 +644,30 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			.collect::<String>();
 		let bool = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Bool(tok, bool)))
+	}
+
+	fn parse_list_lit_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::LBrace)?;
+		let mut items = Vec::new();
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RBrace {
+			let item = self.parse_expr()?;
+			items.push(item);
+			match self.toks[self.idx].tag {
+				TokenTag::Comma => {
+					self.idx += 1;
+				}
+				TokenTag::RBrace => {}
+				_ => {
+					let tok = self.toks[self.idx];
+					return Err(Error::Syntax(
+						self.src.loc(tok.idx),
+						SyntaxError::UnexpectedToken(tok),
+					));
+				}
+			}
+		}
+		self.take(TokenTag::RBrace)?;
+		Ok(Expr::Lit(Lit::List(tok, items)))
 	}
 
 	fn parse_nil_lit_expr(&mut self) -> Result<Expr, Error> {
@@ -767,6 +816,7 @@ impl Ref {
 #[derive(Debug)]
 enum Obj {
 	Str(String),
+	List(Vec<Val>),
 	Proc(Proc),
 }
 
@@ -857,28 +907,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Stmt::Print(Print(_, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
-				match val {
-					Val::Nil => {
-						println!("nil")
-					}
-					Val::Num(num) => println!("{}", num),
-					Val::Bool(bool) => println!("{}", bool),
-					Val::Ref(rf) => match &*rf.get() {
-						Obj::Str(str) => println!("{}", str),
-						Obj::Proc(proc) => {
-							let name = self.syms.get_by_id(proc.name);
-							print!("def {}(", name.1);
-							for (i, param) in proc.params.iter().enumerate() {
-								let param = self.syms.get_by_id(*param);
-								print!("{}", param.1);
-								if i + 1 != proc.params.len() {
-									print!(", ");
-								}
-							}
-							print!(")\n");
-						}
-					},
-				}
+				println!("{}", rt_print(self.syms, &val));
 				Ok(None)
 			}
 			Stmt::Expr(expr_id) => {
@@ -970,9 +999,54 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Lit::Str(_, str) => Val::Ref(Ref::new(Obj::Str(str.clone()))),
 				Lit::Num(_, num) => Val::Num(*num),
 				Lit::Bool(_, bool) => Val::Bool(*bool),
+				Lit::List(_, item_ids) => {
+					let mut items = Vec::with_capacity(item_ids.len());
+					for item_id in item_ids {
+						let item = self.eval_expr(chunk, *item_id)?;
+						items.push(item);
+					}
+					Val::Ref(Ref::new(Obj::List(items)))
+				}
 				Lit::Nil(_) => Val::Nil,
 			}),
 		}
+	}
+}
+
+fn rt_print(syms: &Interner, val: &Val) -> String {
+	match val {
+		Val::Num(num) => format!("{}", num),
+		Val::Bool(bool) => format!("{}", bool),
+		Val::Ref(rf) => match &*rf.get() {
+			Obj::Str(str) => String::from(str),
+			Obj::List(items) => {
+				let mut res = String::new();
+				res.push('[');
+				for (i, item) in items.iter().enumerate() {
+					res.push_str(&rt_print(syms, item));
+					if i + 1 != items.len() {
+						res.push_str(", ");
+					}
+				}
+				res.push(']');
+				res
+			}
+			Obj::Proc(proc) => {
+				let mut res = String::new();
+				let name = syms.get_by_id(proc.name);
+				res.push_str(&format!("def {}(", name.1));
+				for (i, param) in proc.params.iter().enumerate() {
+					let param = syms.get_by_id(*param);
+					res.push_str(&param.1);
+					if i + 1 != proc.params.len() {
+						res.push_str(", ");
+					}
+				}
+				res.push(')');
+				res
+			}
+		},
+		Val::Nil => String::from("nil"),
 	}
 }
 

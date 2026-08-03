@@ -2,4 +2,9 @@ def id(val)
 	return val
 end
 
-print id("Hello,\nworld!")
+vals := [
+	id("Hello,\tworld!"),
+	5.23,
+]
+
+print vals
