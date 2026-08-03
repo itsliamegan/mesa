@@ -2,11 +2,4 @@ def id(val)
 	return val
 end
 
-def write()
-	print 1.7
-end
-
-print id(true)
-print id(5.23)
-print id
-print write()
+print id("Hello, world!")

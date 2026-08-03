@@ -109,6 +109,7 @@ enum TokenTag {
 	Print,
 
 	Ident,
+	Str,
 	Num,
 	Bool,
 	Nil,
@@ -132,6 +133,7 @@ impl TokenTag {
 			TokenTag::Print => "PRINT",
 
 			TokenTag::Ident => "IDENT",
+			TokenTag::Str => "STR",
 			TokenTag::Num => "NUM",
 			TokenTag::Bool => "BOOL",
 			TokenTag::Nil => "NIL",
@@ -222,6 +224,7 @@ impl<'src> Lexer<'src> {
 					len: 1,
 				})
 			}
+			'"' => self.lex_str(),
 			ch => {
 				if ch.is_alphabetic() || ch == '_' {
 					self.lex_ident()
@@ -259,6 +262,21 @@ impl<'src> Lexer<'src> {
 		Ok(Token {
 			src: self.src.id,
 			tag,
+			idx,
+			len: self.idx - idx,
+		})
+	}
+
+	fn lex_str(&mut self) -> Result<Token, Error> {
+		let idx = self.idx;
+		self.idx += 1;
+		while self.idx < self.src.len() && self.src[self.idx] != '"' {
+			self.idx += 1;
+		}
+		self.idx += 1;
+		Ok(Token {
+			src: self.src.id,
+			tag: TokenTag::Str,
 			idx,
 			len: self.idx - idx,
 		})
@@ -331,6 +349,7 @@ struct Ident(Token, SymId);
 
 #[derive(Debug)]
 enum Lit {
+	Str(Token, String),
 	Num(Token, f64),
 	Bool(Token, bool),
 	Nil(Token),
@@ -524,6 +543,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {
 		match self.toks[self.idx].tag {
 			TokenTag::Ident => self.parse_ident_expr(),
+			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
 			TokenTag::Bool => self.parse_bool_lit_expr(),
 			TokenTag::Nil => self.parse_nil_lit_expr(),
@@ -544,6 +564,14 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			.collect::<String>();
 		let sym_id = self.syms.get_or_add(&span);
 		Ok(Expr::Ident(Ident(tok, sym_id)))
+	}
+
+	fn parse_str_lit_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Str)?;
+		let str = self.src[tok.idx + 1..tok.idx + tok.len - 1]
+			.iter()
+			.collect::<String>();
+		Ok(Expr::Lit(Lit::Str(tok, str)))
 	}
 
 	fn parse_num_lit_expr(&mut self) -> Result<Expr, Error> {
@@ -637,10 +665,10 @@ impl Interner {
 
 #[derive(Debug, Clone)]
 enum Val {
-	Nil,
 	Num(f64),
 	Bool(bool),
 	Ref(Ref),
+	Nil,
 }
 
 use std::cell::RefCell;
@@ -662,6 +690,7 @@ impl Ref {
 
 #[derive(Debug)]
 enum Obj {
+	Str(String),
 	Proc(Proc),
 }
 
@@ -759,6 +788,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Val::Num(num) => println!("{}", num),
 					Val::Bool(bool) => println!("{}", bool),
 					Val::Ref(rf) => match &*rf.get() {
+						Obj::Str(str) => println!("{}", str),
 						Obj::Proc(proc) => {
 							let name = self.syms.get_by_id(proc.name);
 							print!("def {}(", name.1);
@@ -814,7 +844,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							for stmt_id in &proc.body {
 								match self.eval_stmt(chunk, *stmt_id) {
 									Ok(Some(val)) => return Ok(val),
-									Ok(None) => {},
+									Ok(None) => {}
 									Err(err) => {
 										self.scope = caller_scope;
 										return Err(err);
@@ -823,6 +853,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							self.scope = caller_scope;
 							Ok(Val::Nil)
+						}
+						obj => {
+							let src = self.pkg.get_src(chunk.src);
+							let loc = src.loc(tok.idx);
+							Err(Error::Runtime(
+								loc,
+								format!("call of non-callable {:?}", obj),
+							))
 						}
 					},
 					val => {
@@ -854,6 +892,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
+				Lit::Str(_, str) => Val::Ref(Ref::new(Obj::Str(str.clone()))),
 				Lit::Num(_, num) => Val::Num(*num),
 				Lit::Bool(_, bool) => Val::Bool(*bool),
 				Lit::Nil(_) => Val::Nil,
