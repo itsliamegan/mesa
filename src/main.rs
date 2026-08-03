@@ -193,7 +193,7 @@ impl<'src> Lexer<'src> {
 					let ch = self.src[self.idx];
 					Err(Error::Syntax(
 						self.src.loc(self.idx),
-						format!("unexpected char '{}'", ch),
+						SyntaxError::UnexpectedChar(ch),
 					))
 				}
 			}
@@ -233,7 +233,7 @@ impl<'src> Lexer<'src> {
 				} else {
 					Err(Error::Syntax(
 						self.src.loc(self.idx),
-						format!("unexpected char '{}'", ch),
+						SyntaxError::UnexpectedChar(ch),
 					))
 				}
 			}
@@ -278,8 +278,10 @@ impl<'src> Lexer<'src> {
 			}
 		}
 		if self.idx == self.src.len() {
-			let loc = self.src.loc(idx);
-			return Err(Error::Syntax(loc, format!("unterminated string literal")));
+			return Err(Error::Syntax(
+				self.src.loc(idx),
+				SyntaxError::UnterminatedStrLit,
+			));
 		}
 		self.idx += 1;
 		Ok(Token {
@@ -469,10 +471,10 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				}
 				TokenTag::RParen => {}
 				_ => {
-					let tok = self.toks[self.idx];
+					let tok = &self.toks[self.idx];
 					return Err(Error::Syntax(
 						self.src.loc(tok.idx),
-						format!("unexpected token {}", tok.tag.name()),
+						SyntaxError::UnexpectedToken(*tok),
 					));
 				}
 			}
@@ -511,7 +513,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 					_ => {
 						return Err(Error::Syntax(
 							self.src.loc(tok.idx),
-							format!("unexpected token {}", tok.tag.name()),
+							SyntaxError::UnexpectedToken(tok),
 						));
 					}
 				};
@@ -534,7 +536,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 						_ => {
 							return Err(Error::Syntax(
 								self.src.loc(tok.idx),
-								format!("unexpected token {}", tok.tag.name()),
+								SyntaxError::UnexpectedToken(tok),
 							));
 						}
 					}
@@ -559,7 +561,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				let tok = &self.toks[self.idx];
 				Err(Error::Syntax(
 					self.src.loc(tok.idx),
-					format!("unexpected token {}", tok.tag.name()),
+					SyntaxError::UnexpectedToken(*tok),
 				))
 			}
 		}
@@ -586,10 +588,9 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 					'"' => str.push('"'),
 					'\\' => str.push('\\'),
 					char => {
-						let loc = self.src.loc(idx);
 						return Err(Error::Syntax(
-							loc,
-							format!("unsupported escape sequence '\\{}'", char),
+							self.src.loc(idx),
+							SyntaxError::UnsupportedStrEsc(char),
 						));
 					}
 				}
@@ -633,7 +634,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		} else {
 			Err(Error::Syntax(
 				self.src.loc(tok.idx),
-				format!("unexpected token {}", tok.tag.name()),
+				SyntaxError::UnexpectedToken(*tok),
 			))
 		}
 	}
@@ -641,8 +642,55 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 #[derive(Debug)]
 enum Error {
-	Syntax(Location, String),
-	Runtime(Location, String),
+	Syntax(Location, SyntaxError),
+	Runtime(Location, RuntimeError),
+}
+
+#[derive(Debug)]
+enum SyntaxError {
+	UnexpectedChar(char),
+	UnexpectedToken(Token),
+	UnterminatedStrLit,
+	UnsupportedStrEsc(char),
+}
+
+#[derive(Debug)]
+enum RuntimeError {
+	WrongArgCount(usize, usize),
+	CallNonCallable(String),
+	UnboundIdent(String),
+}
+
+impl Display for Error {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::Syntax(loc, err) => write!(f, "{}: syntax error: {}", loc, err),
+			Self::Runtime(loc, err) => write!(f, "{}: runtime error: {}", loc, err),
+		}
+	}
+}
+
+impl Display for SyntaxError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::UnexpectedChar(char) => write!(f, "unexpected char '{}'", char),
+			Self::UnexpectedToken(tok) => write!(f, "unexpected token {}", tok.tag.name()),
+			Self::UnterminatedStrLit => write!(f, "unterminated string literal"),
+			Self::UnsupportedStrEsc(esc) => write!(f, "unsupported escape sequence '\\{}'", esc),
+		}
+	}
+}
+
+impl Display for RuntimeError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::WrongArgCount(have, want) => {
+				write!(f, "wrong number of args; have {}, want {}", have, want)
+			}
+			Self::CallNonCallable(val) => write!(f, "call of non-callable {}", val),
+			Self::UnboundIdent(ident) => write!(f, "unbound ident '{}'", ident),
+		}
+	}
 }
 
 use std::collections::HashMap;
@@ -856,11 +904,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								let loc = src.loc(tok.idx);
 								return Err(Error::Runtime(
 									loc,
-									format!(
-										"wrong number of args; have {}, want {}",
-										args.len(),
-										proc.params.len()
-									),
+									RuntimeError::WrongArgCount(args.len(), proc.params.len()),
 								));
 							}
 							let caller_scope = self.scope.clone();
@@ -887,7 +931,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let loc = src.loc(tok.idx);
 							Err(Error::Runtime(
 								loc,
-								format!("call of non-callable {:?}", obj),
+								RuntimeError::CallNonCallable(format!("{:?}", obj)),
 							))
 						}
 					},
@@ -896,7 +940,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.idx);
 						Err(Error::Runtime(
 							loc,
-							format!("call of non-callable {:?}", val),
+							RuntimeError::CallNonCallable(format!("{:?}", val)),
 						))
 					}
 				}
@@ -916,7 +960,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(tok.idx);
 					let name = self.syms.get_by_id(*sym_id);
-					Err(Error::Runtime(loc, format!("unbound ident '{}'", name.1)))
+					Err(Error::Runtime(
+						loc,
+						RuntimeError::UnboundIdent(name.1.clone()),
+					))
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
@@ -959,15 +1006,6 @@ fn main() {
 		.and_then(|chunk| Interpreter::new(&syms, &pkg).eval(chunk))
 	{
 		Ok(()) => {}
-		Err(err) => match err {
-			Error::Syntax(loc, msg) => {
-				eprintln!("{}: syntax error: {}", loc, msg);
-				process::exit(1);
-			}
-			Error::Runtime(loc, msg) => {
-				eprintln!("{}: runtime error: {}", loc, msg);
-				process::exit(1);
-			}
-		},
+		Err(err) => eprintln!("{}", err),
 	}
 }
