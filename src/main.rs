@@ -964,7 +964,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		for decl_id in &chunk.top {
 			match self.eval_decl(&chunk, *decl_id) {
 				Ok(()) => {}
-				Err(Signal::Return(val)) => break,
+				Err(Signal::Return(_)) => break,
 				Err(Signal::Error(err)) => return Err(err),
 			}
 		}
@@ -993,53 +993,50 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
-			Expr::Each(Each(tok, name, iter, body)) => {
-				let iter = self.eval_expr(chunk, *iter)?;
-				match iter {
-					Val::Ref(rf) => match &*rf.get() {
-						Obj::List(items) => {
-							let outer_scope = self.scope.clone();
-							let inner_scope = Scope::within(outer_scope.clone());
-							self.scope = Rc::new(RefCell::new(inner_scope));
-							for item in items {
-								self.scope.borrow_mut().assign(*name, item.clone());
-								for expr_id in body {
-									match self.eval_expr(chunk, *expr_id) {
-										Ok(_) => {}
-										Err(Signal::Return(val)) => {
-											self.scope = outer_scope;
-											return Err(Signal::Return(val));
-										}
-										Err(Signal::Error(err)) => {
-											self.scope = outer_scope;
-											return Err(Signal::Error(err));
-										}
+			Expr::Each(Each(tok, name, iter, body)) => match self.eval_expr(chunk, *iter)? {
+				Val::Ref(rf) => match &*rf.get() {
+					Obj::List(items) => {
+						let outer_scope = self.scope.clone();
+						let inner_scope = Scope::within(outer_scope.clone());
+						self.scope = Rc::new(RefCell::new(inner_scope));
+						for item in items {
+							self.scope.borrow_mut().assign(*name, item.clone());
+							for expr_id in body {
+								match self.eval_expr(chunk, *expr_id) {
+									Ok(_) => {}
+									Err(Signal::Return(val)) => {
+										self.scope = outer_scope;
+										return Err(Signal::Return(val));
+									}
+									Err(Signal::Error(err)) => {
+										self.scope = outer_scope;
+										return Err(Signal::Error(err));
 									}
 								}
 							}
-							self.scope = outer_scope;
-							Ok(Val::Nil)
 						}
-						obj => {
-							let src = self.pkg.get_src(chunk.src);
-							let loc = src.loc(tok.idx);
-							Err(Signal::Error(Error::Runtime(
-								loc,
-								RuntimeError::IterNonIterable(format!("{:?}", obj)),
-							)))
-						}
-					},
-					val => {
+						self.scope = outer_scope;
+						Ok(Val::Nil)
+					}
+					obj => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(tok.idx);
 						Err(Signal::Error(Error::Runtime(
 							loc,
-							RuntimeError::IterNonIterable(format!("{:?}", val)),
+							RuntimeError::IterNonIterable(format!("{:?}", obj)),
 						)))
 					}
+				},
+				val => {
+					let src = self.pkg.get_src(chunk.src);
+					let loc = src.loc(tok.idx);
+					Err(Signal::Error(Error::Runtime(
+						loc,
+						RuntimeError::IterNonIterable(format!("{:?}", val)),
+					)))
 				}
-			}
-			Expr::When(When(tok, cond, then_branch, else_branch)) => {
+			},
+			Expr::When(When(_, cond, then_branch, else_branch)) => {
 				let cond = match self.eval_expr(chunk, *cond)? {
 					Val::Bool(true) => true,
 					Val::Num(num) if num > 0.0 => true,
@@ -1047,49 +1044,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					_ => false,
 				};
 				if cond {
-					let outer_scope = self.scope.clone();
-					let inner_scope = Scope::within(outer_scope.clone());
-					self.scope = Rc::new(RefCell::new(inner_scope));
-					let mut res = Val::Nil;
-					for expr_id in then_branch {
-						match self.eval_expr(chunk, *expr_id) {
-							Ok(val) => {
-								res = val;
-							}
-							Err(Signal::Return(val)) => {
-								self.scope = outer_scope;
-								return Err(Signal::Return(val));
-							}
-							Err(Signal::Error(err)) => {
-								self.scope = outer_scope;
-								return Err(Signal::Error(err));
-							}
-						}
-					}
-					self.scope = outer_scope;
-					Ok(res)
+					let scope = Scope::within(self.scope.clone());
+					self.eval_exprs(chunk, scope, then_branch)
 				} else if let Some(else_branch) = else_branch {
-					let outer_scope = self.scope.clone();
-					let inner_scope = Scope::within(outer_scope.clone());
-					self.scope = Rc::new(RefCell::new(inner_scope));
-					let mut res = Val::Nil;
-					for expr_id in else_branch {
-						match self.eval_expr(chunk, *expr_id) {
-							Ok(val) => {
-								res = val;
-							}
-							Err(Signal::Return(val)) => {
-								self.scope = outer_scope;
-								return Err(Signal::Return(val));
-							}
-							Err(Signal::Error(err)) => {
-								self.scope = outer_scope;
-								return Err(Signal::Error(err));
-							}
-						}
-					}
-					self.scope = outer_scope;
-					Ok(res)
+					let scope = Scope::within(self.scope.clone());
+					self.eval_exprs(chunk, scope, else_branch)
 				} else {
 					Ok(Val::Nil)
 				}
@@ -1120,30 +1079,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									RuntimeError::WrongArgCount(args.len(), proc.params.len()),
 								)));
 							}
-							let caller_scope = self.scope.clone();
-							let mut callee_scope = Scope::within(proc.scope.clone());
+							let mut scope = Scope::within(proc.scope.clone());
 							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-								callee_scope.assign(*param, arg);
+								scope.assign(*param, arg);
 							}
-							self.scope = Rc::new(RefCell::new(callee_scope));
-							let mut res = Val::Nil;
-							for expr_id in &proc.body {
-								match self.eval_expr(chunk, *expr_id) {
-									Ok(val) => {
-										res = val;
-									}
-									Err(Signal::Return(val)) => {
-										self.scope = caller_scope;
-										return Ok(val);
-									}
-									Err(Signal::Error(err)) => {
-										self.scope = caller_scope;
-										return Err(Signal::Error(err));
-									}
-								}
-							}
-							self.scope = caller_scope;
-							Ok(res)
+							self.eval_exprs(chunk, scope, &proc.body)
 						}
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
@@ -1200,6 +1140,29 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Lit::Nil(_) => Val::Nil,
 			}),
 		}
+	}
+
+	fn eval_exprs(&mut self, chunk: &Chunk, scope: Scope, body: &[ExprId]) -> Result<Val, Signal> {
+		let saved = self.scope.clone();
+		self.scope = Rc::new(RefCell::new(scope));
+		let mut res = Val::Nil;
+		for expr_id in body {
+			match self.eval_expr(chunk, *expr_id) {
+				Ok(val) => {
+					res = val;
+				}
+				Err(Signal::Return(val)) => {
+					self.scope = saved;
+					return Err(Signal::Return(val));
+				}
+				Err(Signal::Error(err)) => {
+					self.scope = saved;
+					return Err(Signal::Error(err));
+				}
+			}
+		}
+		self.scope = saved;
+		Ok(res)
 	}
 }
 
