@@ -1227,7 +1227,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
 								scope.assign(*param, arg);
 							}
-							self.eval_exprs(chunk, scope, &proc.body)
+							match self.eval_exprs(chunk, scope, &proc.body) {
+								Ok(val) => Ok(val),
+								Err(Signal::Return(val)) => Ok(val),
+								Err(err) => Err(err),
+							}
 						}
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
