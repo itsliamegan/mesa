@@ -124,9 +124,12 @@ enum TokenTag {
 
 	LBrace,
 	RBrace,
+	LBrack,
+	RBrack,
 	LParen,
 	RParen,
 
+	Colon,
 	Comma,
 }
 
@@ -156,9 +159,12 @@ impl TokenTag {
 
 			TokenTag::LBrace => "LBRACE",
 			TokenTag::RBrace => "RBRACE",
+			TokenTag::LBrack => "LBRACK",
+			TokenTag::RBrack => "RBRACK",
 			TokenTag::LParen => "LPAREN",
 			TokenTag::RParen => "RPAREN",
 
+			TokenTag::Colon => "COLON",
 			TokenTag::Comma => "COMMA",
 		}
 	}
@@ -206,14 +212,16 @@ impl<'src> Lexer<'src> {
 						len: 2,
 					})
 				} else {
-					let ch = self.src[self.idx];
-					Err(Error::Syntax(
-						self.src.loc(self.idx),
-						SyntaxError::UnexpectedChar(ch),
-					))
+					self.idx += 1;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::Colon,
+						idx: self.idx - 1,
+						len: 1,
+					})
 				}
 			}
-			'[' => {
+			'{' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -222,11 +230,29 @@ impl<'src> Lexer<'src> {
 					len: 1,
 				})
 			}
-			']' => {
+			'}' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RBrace,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			'[' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::LBrack,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			']' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::RBrack,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -411,6 +437,7 @@ enum Lit {
 	Num(Token, f64),
 	Bool(Token, bool),
 	List(Token, Vec<ExprId>),
+	Dict(Token, Vec<(ExprId, ExprId)>),
 	Nil(Token),
 }
 
@@ -596,7 +623,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
 			TokenTag::Bool => self.parse_bool_lit_expr(),
-			TokenTag::LBrace => self.parse_list_lit_expr(),
+			TokenTag::LBrack => self.parse_list_lit_expr(),
+			TokenTag::LBrace => self.parse_dict_lit_expr(),
 			TokenTag::Nil => self.parse_nil_lit_expr(),
 			_ => {
 				let tok = &self.toks[self.idx];
@@ -721,11 +749,37 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	}
 
 	fn parse_list_lit_expr(&mut self) -> Result<Expr, Error> {
-		let tok = self.take(TokenTag::LBrace)?;
+		let tok = self.take(TokenTag::LBrack)?;
 		let mut items = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RBrace {
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RBrack {
 			let item = self.parse_expr()?;
 			items.push(item);
+			match self.toks[self.idx].tag {
+				TokenTag::Comma => {
+					self.idx += 1;
+				}
+				TokenTag::RBrack => {}
+				_ => {
+					let tok = self.toks[self.idx];
+					return Err(Error::Syntax(
+						self.src.loc(tok.idx),
+						SyntaxError::UnexpectedToken(tok),
+					));
+				}
+			}
+		}
+		self.take(TokenTag::RBrack)?;
+		Ok(Expr::Lit(Lit::List(tok, items)))
+	}
+
+	fn parse_dict_lit_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::LBrace)?;
+		let mut pairs = Vec::new();
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RBrace {
+			let key = self.parse_expr()?;
+			self.take(TokenTag::Colon)?;
+			let val = self.parse_expr()?;
+			pairs.push((key, val));
 			match self.toks[self.idx].tag {
 				TokenTag::Comma => {
 					self.idx += 1;
@@ -741,7 +795,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			}
 		}
 		self.take(TokenTag::RBrace)?;
-		Ok(Expr::Lit(Lit::List(tok, items)))
+		Ok(Expr::Lit(Lit::Dict(tok, pairs)))
 	}
 
 	fn parse_nil_lit_expr(&mut self) -> Result<Expr, Error> {
@@ -864,12 +918,40 @@ impl Interner {
 	}
 }
 
+use std::cmp::{Eq, PartialEq};
+use std::hash::{Hash, Hasher};
+
 #[derive(Debug, Clone)]
 enum Val {
 	Num(f64),
 	Bool(bool),
 	Ref(Ref),
 	Nil,
+}
+
+impl PartialEq for Val {
+	fn eq(&self, other: &Self) -> bool {
+		match (self, other) {
+			(Self::Num(num), Self::Num(other_num)) => num == other_num,
+			(Self::Bool(bool), Self::Bool(other_bool)) => bool == other_bool,
+			(Self::Ref(rf), Self::Ref(other_rf)) => rf == other_rf,
+			(Self::Nil, Self::Nil) => true,
+			_ => false
+		}
+	}
+}
+
+impl Eq for Val {}
+
+impl Hash for Val {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		match self {
+			Self::Num(num) => num.to_bits().hash(state),
+			Self::Bool(bool) => bool.hash(state),
+			Self::Ref(rf) => rf.hash(state),
+			Self::Nil => ().hash(state),
+		}
+	}
 }
 
 use std::cell::RefCell;
@@ -889,10 +971,25 @@ impl Ref {
 	}
 }
 
+impl PartialEq for Ref {
+	fn eq(&self, other: &Self) -> bool {
+		self.0.as_ptr() == other.0.as_ptr()
+	}
+}
+
+impl Eq for Ref {}
+
+impl Hash for Ref {
+	fn hash<H: Hasher>(&self, state: &mut H) {
+		self.0.as_ptr().hash(state)
+	}
+}
+
 #[derive(Debug)]
 enum Obj {
 	Str(String),
 	List(Vec<Val>),
+	Dict(HashMap<Val, Val>),
 	Proc(Proc),
 }
 
@@ -1137,6 +1234,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					Val::Ref(Ref::new(Obj::List(items)))
 				}
+				Lit::Dict(_, pair_ids) => {
+					let mut pairs = HashMap::with_capacity(pair_ids.len());
+					for (key_id, val_id) in pair_ids {
+						let key = self.eval_expr(chunk, *key_id)?;
+						let val = self.eval_expr(chunk, *val_id)?;
+						pairs.insert(key, val);
+					}
+					Val::Ref(Ref::new(Obj::Dict(pairs)))
+				}
 				Lit::Nil(_) => Val::Nil,
 			}),
 		}
@@ -1182,6 +1288,20 @@ fn rt_print(syms: &Interner, val: &Val) -> String {
 					}
 				}
 				res.push(']');
+				res
+			}
+			Obj::Dict(entries) => {
+				let mut res = String::new();
+				res.push('{');
+				for (i, (key, val)) in entries.iter().enumerate() {
+					res.push_str(&rt_print(syms, key));
+					res.push_str(": ");
+					res.push_str(&rt_print(syms, val));
+					if i + 1 != entries.len() {
+						res.push_str(", ");
+					}
+				}
+				res.push('}');
 				res
 			}
 			Obj::Proc(proc) => {

@@ -2,6 +2,12 @@ def id(val)
 	val
 end
 
+names := {
+	"id": id
+}
+
+print names
+
 vals := [
 	id("Hello,\tworld!"),
 	when nil then "?" else false end,
