@@ -1171,7 +1171,7 @@ fn rt_print(syms: &Interner, val: &Val) -> String {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
 		Val::Ref(rf) => match &*rf.get() {
-			Obj::Str(str) => String::from(str),
+			Obj::Str(str) => format!("\"{}\"", str),
 			Obj::List(items) => {
 				let mut res = String::new();
 				res.push('[');
