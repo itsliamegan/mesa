@@ -353,40 +353,26 @@ impl<'src> Lexer<'src> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-struct StmtId(usize);
+struct DeclId(usize);
 
 #[derive(Debug)]
-enum Stmt {
+enum Decl {
 	Def(Def),
-	Each(Each),
-	Return(Return),
-	Print(Print),
 	Expr(ExprId),
 }
 
 #[derive(Debug)]
-struct Def(Token, SymId, Vec<SymId>, Vec<StmtId>);
-
-#[derive(Debug)]
-struct Each(Token, SymId, ExprId, Vec<StmtId>);
-
-#[derive(Debug)]
-enum Place {
-	Ident(Ident),
-}
-
-#[derive(Debug)]
-struct Return(Token, ExprId);
-
-#[derive(Debug)]
-struct Print(Token, ExprId);
+struct Def(Token, SymId, Vec<SymId>, Vec<ExprId>);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct ExprId(usize);
 
 #[derive(Debug)]
 enum Expr {
+	Each(Each),
 	When(When),
+	Return(Return),
+	Print(Print),
 	Call(Call),
 	Assign(Assign),
 	Ident(Ident),
@@ -394,13 +380,27 @@ enum Expr {
 }
 
 #[derive(Debug)]
-struct When(Token, ExprId, Vec<StmtId>, Option<Vec<StmtId>>);
+struct Each(Token, SymId, ExprId, Vec<ExprId>);
+
+#[derive(Debug)]
+struct When(Token, ExprId, Vec<ExprId>, Option<Vec<ExprId>>);
+
+#[derive(Debug)]
+struct Return(Token, ExprId);
+
+#[derive(Debug)]
+struct Print(Token, ExprId);
 
 #[derive(Debug)]
 struct Call(Token, ExprId, Vec<ExprId>);
 
 #[derive(Debug)]
 struct Assign(Token, Place, ExprId);
+
+#[derive(Debug)]
+enum Place {
+	Ident(Ident),
+}
 
 #[derive(Debug, Clone)]
 struct Ident(Token, SymId);
@@ -420,28 +420,28 @@ struct ChunkId(usize);
 #[derive(Debug)]
 struct Chunk {
 	src: SourceId,
-	stmts: Vec<Stmt>,
+	decls: Vec<Decl>,
 	exprs: Vec<Expr>,
-	top: Vec<StmtId>,
+	top: Vec<DeclId>,
 }
 
 impl Chunk {
 	fn new(src: SourceId) -> Self {
 		Self {
 			src,
-			stmts: Vec::new(),
+			decls: Vec::new(),
 			exprs: Vec::new(),
 			top: Vec::new(),
 		}
 	}
 
-	fn get_stmt(&self, stmt_id: StmtId) -> &Stmt {
-		&self.stmts[stmt_id.0]
+	fn get_decl(&self, decl_id: DeclId) -> &Decl {
+		&self.decls[decl_id.0]
 	}
 
-	fn add_stmt(&mut self, stmt: Stmt) -> StmtId {
-		self.stmts.push(stmt);
-		StmtId(self.stmts.len() - 1)
+	fn add_decl(&mut self, decl: Decl) -> DeclId {
+		self.decls.push(decl);
+		DeclId(self.decls.len() - 1)
 	}
 
 	fn get_expr(&self, expr_id: ExprId) -> &Expr {
@@ -453,8 +453,8 @@ impl Chunk {
 		ExprId(self.exprs.len() - 1)
 	}
 
-	fn add_to_top(&mut self, stmt_id: StmtId) {
-		self.top.push(stmt_id);
+	fn add_to_top(&mut self, decl_id: DeclId) {
+		self.top.push(decl_id);
 	}
 }
 
@@ -479,27 +479,24 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse(mut self) -> Result<Chunk, Error> {
 		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::Eof {
-			let stmt_id = self.parse_stmt()?;
-			self.chunk.add_to_top(stmt_id);
+			let decl_id = self.parse_decl()?;
+			self.chunk.add_to_top(decl_id);
 		}
 		Ok(self.chunk)
 	}
 
-	fn parse_stmt(&mut self) -> Result<StmtId, Error> {
-		let stmt = match self.toks[self.idx].tag {
-			TokenTag::Def => self.parse_def_stmt()?,
-			TokenTag::Each => self.parse_each_stmt()?,
-			TokenTag::Return => self.parse_return_stmt()?,
-			TokenTag::Print => self.parse_print_stmt()?,
+	fn parse_decl(&mut self) -> Result<DeclId, Error> {
+		let decl = match self.toks[self.idx].tag {
+			TokenTag::Def => self.parse_def_decl()?,
 			_ => {
 				let expr_id = self.parse_expr()?;
-				Stmt::Expr(expr_id)
+				Decl::Expr(expr_id)
 			}
 		};
-		Ok(self.chunk.add_stmt(stmt))
+		Ok(self.chunk.add_decl(decl))
 	}
 
-	fn parse_def_stmt(&mut self) -> Result<Stmt, Error> {
+	fn parse_def_decl(&mut self) -> Result<Decl, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let ident = self.take(TokenTag::Ident)?;
 		let span = self.src[ident.idx..ident.idx + ident.len]
@@ -532,42 +529,11 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		self.take(TokenTag::RParen)?;
 		let mut body = Vec::new();
 		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
-			let stmt_id = self.parse_stmt()?;
-			body.push(stmt_id);
+			let expr_id = self.parse_expr()?;
+			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok(Stmt::Def(Def(tok, name, params, body)))
-	}
-
-	fn parse_each_stmt(&mut self) -> Result<Stmt, Error> {
-		let tok = self.take(TokenTag::Each)?;
-		let ident = self.take(TokenTag::Ident)?;
-		let span = self.src[ident.idx..ident.idx + ident.len]
-			.iter()
-			.collect::<String>();
-		let item = self.syms.get_or_add(&span);
-		self.take(TokenTag::In)?;
-		let iter = self.parse_expr()?;
-		self.take(TokenTag::Do)?;
-		let mut body = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
-			let stmt_id = self.parse_stmt()?;
-			body.push(stmt_id);
-		}
-		self.take(TokenTag::End)?;
-		Ok(Stmt::Each(Each(tok, item, iter, body)))
-	}
-
-	fn parse_return_stmt(&mut self) -> Result<Stmt, Error> {
-		let tok = self.take(TokenTag::Return)?;
-		let expr_id = self.parse_expr()?;
-		Ok(Stmt::Return(Return(tok, expr_id)))
-	}
-
-	fn parse_print_stmt(&mut self) -> Result<Stmt, Error> {
-		let tok = self.take(TokenTag::Print)?;
-		let expr_id = self.parse_expr()?;
-		Ok(Stmt::Print(Print(tok, expr_id)))
+		Ok(Decl::Def(Def(tok, name, params, body)))
 	}
 
 	fn parse_expr(&mut self) -> Result<ExprId, Error> {
@@ -623,6 +589,9 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {
 		match self.toks[self.idx].tag {
 			TokenTag::When => self.parse_when_expr(),
+			TokenTag::Each => self.parse_each_expr(),
+			TokenTag::Return => self.parse_return_expr(),
+			TokenTag::Print => self.parse_print_expr(),
 			TokenTag::Ident => self.parse_ident_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
@@ -639,6 +608,37 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		}
 	}
 
+	fn parse_each_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Each)?;
+		let ident = self.take(TokenTag::Ident)?;
+		let span = self.src[ident.idx..ident.idx + ident.len]
+			.iter()
+			.collect::<String>();
+		let item = self.syms.get_or_add(&span);
+		self.take(TokenTag::In)?;
+		let iter = self.parse_expr()?;
+		self.take(TokenTag::Do)?;
+		let mut body = Vec::new();
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+			let expr_id = self.parse_expr()?;
+			body.push(expr_id);
+		}
+		self.take(TokenTag::End)?;
+		Ok(Expr::Each(Each(tok, item, iter, body)))
+	}
+
+	fn parse_return_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Return)?;
+		let expr_id = self.parse_expr()?;
+		Ok(Expr::Return(Return(tok, expr_id)))
+	}
+
+	fn parse_print_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Print)?;
+		let expr_id = self.parse_expr()?;
+		Ok(Expr::Print(Print(tok, expr_id)))
+	}
+
 	fn parse_when_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::When)?;
 		let cond = self.parse_expr()?;
@@ -648,15 +648,15 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			&& self.toks[self.idx].tag != TokenTag::End
 			&& self.toks[self.idx].tag != TokenTag::Else
 		{
-			let stmt_id = self.parse_stmt()?;
-			then_branch.push(stmt_id);
+			let expr_id = self.parse_expr()?;
+			then_branch.push(expr_id);
 		}
 		let else_branch = if self.toks[self.idx].tag == TokenTag::Else {
 			self.take(TokenTag::Else)?;
 			let mut else_branch = Vec::new();
 			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
-				let stmt_id = self.parse_stmt()?;
-				else_branch.push(stmt_id);
+				let expr_id = self.parse_expr()?;
+				else_branch.push(expr_id);
 			}
 			Some(else_branch)
 		} else {
@@ -900,7 +900,7 @@ enum Obj {
 struct Proc {
 	name: SymId,
 	params: Vec<SymId>,
-	body: Vec<StmtId>,
+	body: Vec<ExprId>,
 	scope: Rc<RefCell<Scope>>,
 }
 
@@ -961,8 +961,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 
 	fn eval(mut self, chunk: Chunk) -> Result<(), Error> {
-		for stmt_id in &chunk.top {
-			match self.eval_stmt(&chunk, *stmt_id) {
+		for decl_id in &chunk.top {
+			match self.eval_decl(&chunk, *decl_id) {
 				Ok(()) => {}
 				Err(Signal::Return(val)) => break,
 				Err(Signal::Error(err)) => return Err(err),
@@ -971,9 +971,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		Ok(())
 	}
 
-	fn eval_stmt(&mut self, chunk: &Chunk, stmt_id: StmtId) -> Result<(), Signal> {
-		match chunk.get_stmt(stmt_id) {
-			Stmt::Def(Def(_, name, params, body)) => {
+	fn eval_decl(&mut self, chunk: &Chunk, decl_id: DeclId) -> Result<(), Signal> {
+		match chunk.get_decl(decl_id) {
+			Decl::Def(Def(_, name, params, body)) => {
 				let obj = Obj::Proc(Proc {
 					name: *name,
 					params: params.to_vec(),
@@ -984,7 +984,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				self.scope.borrow_mut().assign(*name, val);
 				Ok(())
 			}
-			Stmt::Each(Each(tok, name, iter, body)) => {
+			Decl::Expr(expr_id) => {
+				self.eval_expr(chunk, *expr_id)?;
+				Ok(())
+			}
+		}
+	}
+
+	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
+		match chunk.get_expr(expr_id) {
+			Expr::Each(Each(tok, name, iter, body)) => {
 				let iter = self.eval_expr(chunk, *iter)?;
 				match iter {
 					Val::Ref(rf) => match &*rf.get() {
@@ -994,9 +1003,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							self.scope = Rc::new(RefCell::new(inner_scope));
 							for item in items {
 								self.scope.borrow_mut().assign(*name, item.clone());
-								for stmt_id in body {
-									match self.eval_stmt(chunk, *stmt_id) {
-										Ok(()) => {}
+								for expr_id in body {
+									match self.eval_expr(chunk, *expr_id) {
+										Ok(_) => {}
 										Err(Signal::Return(val)) => {
 											self.scope = outer_scope;
 											return Err(Signal::Return(val));
@@ -1009,7 +1018,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 							}
 							self.scope = outer_scope;
-							Ok(())
+							Ok(Val::Nil)
 						}
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
@@ -1030,24 +1039,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Stmt::Return(Return(_, val_expr_id)) => {
-				let val = self.eval_expr(chunk, *val_expr_id)?;
-				Err(Signal::Return(val))
-			}
-			Stmt::Print(Print(_, val_expr_id)) => {
-				let val = self.eval_expr(chunk, *val_expr_id)?;
-				println!("{}", rt_print(self.syms, &val));
-				Ok(())
-			}
-			Stmt::Expr(expr_id) => {
-				self.eval_expr(chunk, *expr_id)?;
-				Ok(())
-			}
-		}
-	}
-
-	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
-		match chunk.get_expr(expr_id) {
 			Expr::When(When(tok, cond, then_branch, else_branch)) => {
 				let cond = match self.eval_expr(chunk, *cond)? {
 					Val::Bool(true) => true,
@@ -1059,9 +1050,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let outer_scope = self.scope.clone();
 					let inner_scope = Scope::within(outer_scope.clone());
 					self.scope = Rc::new(RefCell::new(inner_scope));
-					for stmt_id in then_branch {
-						match self.eval_stmt(chunk, *stmt_id) {
-							Ok(()) => {}
+					let mut res = Val::Nil;
+					for expr_id in then_branch {
+						match self.eval_expr(chunk, *expr_id) {
+							Ok(val) => {
+								res = val;
+							}
 							Err(Signal::Return(val)) => {
 								self.scope = outer_scope;
 								return Err(Signal::Return(val));
@@ -1073,14 +1067,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 					}
 					self.scope = outer_scope;
-					Ok(Val::Nil)
+					Ok(res)
 				} else if let Some(else_branch) = else_branch {
 					let outer_scope = self.scope.clone();
 					let inner_scope = Scope::within(outer_scope.clone());
 					self.scope = Rc::new(RefCell::new(inner_scope));
-					for stmt_id in else_branch {
-						match self.eval_stmt(chunk, *stmt_id) {
-							Ok(()) => {}
+					let mut res = Val::Nil;
+					for expr_id in else_branch {
+						match self.eval_expr(chunk, *expr_id) {
+							Ok(val) => {
+								res = val;
+							}
 							Err(Signal::Return(val)) => {
 								self.scope = outer_scope;
 								return Err(Signal::Return(val));
@@ -1092,10 +1089,19 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 					}
 					self.scope = outer_scope;
-					Ok(Val::Nil)
+					Ok(res)
 				} else {
 					Ok(Val::Nil)
 				}
+			}
+			Expr::Return(Return(_, val_expr_id)) => {
+				let val = self.eval_expr(chunk, *val_expr_id)?;
+				Err(Signal::Return(val))
+			}
+			Expr::Print(Print(_, val_expr_id)) => {
+				let val = self.eval_expr(chunk, *val_expr_id)?;
+				println!("{}", rt_print(self.syms, &val));
+				Ok(Val::Nil)
 			}
 			Expr::Call(Call(tok, val_id, arg_ids)) => {
 				let mut args = Vec::with_capacity(arg_ids.len());
@@ -1120,9 +1126,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								callee_scope.assign(*param, arg);
 							}
 							self.scope = Rc::new(RefCell::new(callee_scope));
-							for stmt_id in &proc.body {
-								match self.eval_stmt(chunk, *stmt_id) {
-									Ok(()) => {}
+							let mut res = Val::Nil;
+							for expr_id in &proc.body {
+								match self.eval_expr(chunk, *expr_id) {
+									Ok(val) => {
+										res = val;
+									}
 									Err(Signal::Return(val)) => {
 										self.scope = caller_scope;
 										return Ok(val);
@@ -1134,7 +1143,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 							}
 							self.scope = caller_scope;
-							Ok(Val::Nil)
+							Ok(res)
 						}
 						obj => {
 							let src = self.pkg.get_src(chunk.src);

@@ -1,17 +1,25 @@
 def id(val)
-	return val
+	val
 end
 
 vals := [
 	id("Hello,\tworld!"),
-	nil,
+	when nil then "?" else false end,
 	5.23,
 ]
 
-each val in vals do
-	when val then
-		print val
+when false then
+	print "!"
+else
+	print "."
+end
+
+res := each val in vals do
+	print when val then
+		val
 	else
-		print "not"
+		"!"
 	end
 end
+
+print res
