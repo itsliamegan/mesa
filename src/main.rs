@@ -411,6 +411,7 @@ enum Expr {
 	When(When),
 	Return(Return),
 	Call(Call),
+	Script(Script),
 	Assign(Assign),
 	Ident(Ident),
 	Builtin(Builtin),
@@ -428,6 +429,9 @@ struct Return(Token, ExprId);
 
 #[derive(Debug)]
 struct Call(Token, ExprId, Vec<ExprId>);
+
+#[derive(Debug)]
+struct Script(Token, ExprId, ExprId);
 
 #[derive(Debug)]
 struct Assign(Token, Place, ExprId);
@@ -595,6 +599,15 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				};
 				let val_expr_id = self.parse_expr()?;
 				let expr = Expr::Assign(Assign(tok, place, val_expr_id));
+				let expr_id = self.chunk.add_expr(expr);
+				Ok(expr_id)
+			}
+			TokenTag::LBrack => {
+				self.idx += 1;
+				let val_id = expr_id;
+				let key_id = self.parse_expr()?;
+				self.take(TokenTag::RBrack)?;
+				let expr = Expr::Script(Script(tok, val_id, key_id));
 				let expr_id = self.chunk.add_expr(expr);
 				Ok(expr_id)
 			}
@@ -864,6 +877,8 @@ enum RuntimeError {
 	WrongArgCount(usize, usize),
 	CallNonCallable(String),
 	IterNonIterable(String),
+	ScriptNonScriptable(String),
+	ScriptNonIndex(String),
 	UnboundIdent(String),
 }
 
@@ -896,6 +911,8 @@ impl Display for RuntimeError {
 			}
 			Self::CallNonCallable(val) => write!(f, "call of non-callable {}", val),
 			Self::IterNonIterable(val) => write!(f, "iter of non-iterable {}", val),
+			Self::ScriptNonScriptable(val) => write!(f, "script of non-scriptable {}", val),
+			Self::ScriptNonIndex(val) => write!(f, "script with non-index {}", val),
 			Self::UnboundIdent(ident) => write!(f, "unbound ident '{}'", ident),
 		}
 	}
@@ -1002,7 +1019,10 @@ impl Ref {
 
 impl PartialEq for Ref {
 	fn eq(&self, other: &Self) -> bool {
-		self.0.as_ptr() == other.0.as_ptr()
+		match (&*self.get(), &*other.get()) {
+			(Obj::Str(str), Obj::Str(other_str)) => str == other_str,
+			_ => self.0.as_ptr() == other.0.as_ptr(),
+		}
 	}
 }
 
@@ -1010,7 +1030,10 @@ impl Eq for Ref {}
 
 impl Hash for Ref {
 	fn hash<H: Hasher>(&self, state: &mut H) {
-		self.0.as_ptr().hash(state)
+		match &*self.get() {
+			Obj::Str(str) => str.hash(state),
+			_ => self.0.as_ptr().hash(state),
+		}
 	}
 }
 
@@ -1211,7 +1234,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let loc = src.loc(tok.idx);
 							Err(Signal::Error(Error::Runtime(
 								loc,
-								RuntimeError::CallNonCallable(format!("{:?}", obj)),
+								RuntimeError::CallNonCallable(rt_debug(
+									self.syms,
+									&Val::Ref(rf.clone()),
+								)),
 							)))
 						}
 					},
@@ -1220,11 +1246,58 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.idx);
 						Err(Signal::Error(Error::Runtime(
 							loc,
-							RuntimeError::CallNonCallable(format!("{:?}", val)),
+							RuntimeError::CallNonCallable(rt_debug(self.syms, &val)),
 						)))
 					}
 				}
 			}
+			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
+				Val::Ref(rf) => match &*rf.get() {
+					Obj::List(items) => {
+						let idx = match self.eval_expr(chunk, *key_id)? {
+							Val::Num(num) if num >= 0.0 => num.trunc() as usize,
+							val => {
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(tok.idx);
+								return Err(Signal::Error(Error::Runtime(
+									loc,
+									RuntimeError::ScriptNonIndex(rt_debug(self.syms, &val)),
+								)));
+							}
+						};
+						match items.get(idx) {
+							Some(val) => Ok(val.clone()),
+							None => Ok(Val::Nil),
+						}
+					}
+					Obj::Dict(pairs) => {
+						let key = self.eval_expr(chunk, *key_id)?;
+						match pairs.get(&key) {
+							Some(val) => Ok(val.clone()),
+							None => Ok(Val::Nil),
+						}
+					}
+					obj => {
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(tok.idx);
+						Err(Signal::Error(Error::Runtime(
+							loc,
+							RuntimeError::ScriptNonScriptable(rt_debug(
+								self.syms,
+								&Val::Ref(rf.clone()),
+							)),
+						)))
+					}
+				},
+				val => {
+					let src = self.pkg.get_src(chunk.src);
+					let loc = src.loc(tok.idx);
+					Err(Signal::Error(Error::Runtime(
+						loc,
+						RuntimeError::ScriptNonScriptable(rt_debug(self.syms, &val)),
+					)))
+				}
+			},
 			Expr::Assign(Assign(_, place, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {

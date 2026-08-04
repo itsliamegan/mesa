@@ -6,7 +6,7 @@ names := {
 	"id": id
 }
 
-$dbg(names)
+$dbg(names["id"])
 
 vals := [
 	id("Hello,\tworld!"),
@@ -19,6 +19,8 @@ when false then
 else
 	$dbg(".")
 end
+
+$dbg(vals[1])
 
 res := each val in vals do
 	$dbg(when val then
