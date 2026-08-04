@@ -112,9 +112,9 @@ enum TokenTag {
 	Else,
 	End,
 	Return,
-	Print,
 
 	Ident,
+	Builtin,
 	Str,
 	Num,
 	Bool,
@@ -147,9 +147,9 @@ impl TokenTag {
 			TokenTag::Else => "ELSE",
 			TokenTag::End => "END",
 			TokenTag::Return => "RETURN",
-			TokenTag::Print => "PRINT",
 
 			TokenTag::Ident => "IDENT",
+			TokenTag::Builtin => "BUILTIN",
 			TokenTag::Str => "STR",
 			TokenTag::Num => "NUM",
 			TokenTag::Bool => "BOOL",
@@ -285,6 +285,7 @@ impl<'src> Lexer<'src> {
 				})
 			}
 			'"' => self.lex_str(),
+			'$' => self.lex_builtin(),
 			ch => {
 				if ch.is_alphabetic() || ch == '_' {
 					self.lex_ident()
@@ -320,7 +321,6 @@ impl<'src> Lexer<'src> {
 			"else" => TokenTag::Else,
 			"end" => TokenTag::End,
 			"return" => TokenTag::Return,
-			"print" => TokenTag::Print,
 			"true" | "false" => TokenTag::Bool,
 			"nil" => TokenTag::Nil,
 			_ => TokenTag::Ident,
@@ -330,6 +330,18 @@ impl<'src> Lexer<'src> {
 			tag,
 			idx,
 			len: self.idx - idx,
+		})
+	}
+
+	fn lex_builtin(&mut self) -> Result<Token, Error> {
+		let idx = self.idx;
+		self.idx += 1;
+		let len = self.lex_ident()?.len + 1;
+		Ok(Token {
+			src: self.src.id,
+			tag: TokenTag::Builtin,
+			idx,
+			len,
 		})
 	}
 
@@ -398,10 +410,10 @@ enum Expr {
 	Each(Each),
 	When(When),
 	Return(Return),
-	Print(Print),
 	Call(Call),
 	Assign(Assign),
 	Ident(Ident),
+	Builtin(Builtin),
 	Lit(Lit),
 }
 
@@ -413,9 +425,6 @@ struct When(Token, ExprId, Vec<ExprId>, Option<Vec<ExprId>>);
 
 #[derive(Debug)]
 struct Return(Token, ExprId);
-
-#[derive(Debug)]
-struct Print(Token, ExprId);
 
 #[derive(Debug)]
 struct Call(Token, ExprId, Vec<ExprId>);
@@ -430,6 +439,11 @@ enum Place {
 
 #[derive(Debug, Clone)]
 struct Ident(Token, SymId);
+
+#[derive(Debug, Clone)]
+enum Builtin {
+	Debug(Token, ExprId),
+}
 
 #[derive(Debug)]
 enum Lit {
@@ -618,8 +632,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Return => self.parse_return_expr(),
-			TokenTag::Print => self.parse_print_expr(),
 			TokenTag::Ident => self.parse_ident_expr(),
+			TokenTag::Builtin => self.parse_builtin_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
 			TokenTag::Bool => self.parse_bool_lit_expr(),
@@ -661,12 +675,6 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		Ok(Expr::Return(Return(tok, expr_id)))
 	}
 
-	fn parse_print_expr(&mut self) -> Result<Expr, Error> {
-		let tok = self.take(TokenTag::Print)?;
-		let expr_id = self.parse_expr()?;
-		Ok(Expr::Print(Print(tok, expr_id)))
-	}
-
 	fn parse_when_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::When)?;
 		let cond = self.parse_expr()?;
@@ -701,6 +709,25 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			.collect::<String>();
 		let sym_id = self.syms.get_or_add(&span);
 		Ok(Expr::Ident(Ident(tok, sym_id)))
+	}
+
+	fn parse_builtin_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Builtin)?;
+		let span = self.src[tok.idx..tok.idx + tok.len]
+			.iter()
+			.collect::<String>();
+		match span.as_str() {
+			"$dbg" => {
+				self.take(TokenTag::LParen)?;
+				let val = self.parse_expr()?;
+				self.take(TokenTag::RParen)?;
+				Ok(Expr::Builtin(Builtin::Debug(tok, val)))
+			}
+			_ => Err(Error::Syntax(
+				self.src.loc(tok.idx),
+				SyntaxError::UnknownBuiltin(span),
+			)),
+		}
 	}
 
 	fn parse_str_lit_expr(&mut self) -> Result<Expr, Error> {
@@ -829,6 +856,7 @@ enum SyntaxError {
 	UnexpectedToken(Token),
 	UnterminatedStrLit,
 	UnsupportedStrEsc(char),
+	UnknownBuiltin(String),
 }
 
 #[derive(Debug)]
@@ -855,6 +883,7 @@ impl Display for SyntaxError {
 			Self::UnexpectedToken(tok) => write!(f, "unexpected token {}", tok.tag.name()),
 			Self::UnterminatedStrLit => write!(f, "unterminated string literal"),
 			Self::UnsupportedStrEsc(esc) => write!(f, "unsupported escape sequence '\\{}'", esc),
+			Self::UnknownBuiltin(builtin) => write!(f, "unknown builtin '{}'", builtin),
 		}
 	}
 }
@@ -936,7 +965,7 @@ impl PartialEq for Val {
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool == other_bool,
 			(Self::Ref(rf), Self::Ref(other_rf)) => rf == other_rf,
 			(Self::Nil, Self::Nil) => true,
-			_ => false
+			_ => false,
 		}
 	}
 }
@@ -1154,11 +1183,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				Err(Signal::Return(val))
 			}
-			Expr::Print(Print(_, val_expr_id)) => {
-				let val = self.eval_expr(chunk, *val_expr_id)?;
-				println!("{}", rt_print(self.syms, &val));
-				Ok(Val::Nil)
-			}
 			Expr::Call(Call(tok, val_id, arg_ids)) => {
 				let mut args = Vec::with_capacity(arg_ids.len());
 				for arg_id in arg_ids {
@@ -1222,6 +1246,24 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					)))
 				}
 			},
+			Expr::Builtin(builtin) => match builtin {
+				Builtin::Debug(_, val_id) => {
+					let val = self.eval_expr(chunk, *val_id)?;
+					let desc = match &val {
+						Val::Num(_) => "Num",
+						Val::Bool(_) => "Bool",
+						Val::Ref(rf) => match &*rf.get() {
+							Obj::Str(_) => "Str",
+							Obj::List(_) => "List",
+							Obj::Dict(_) => "Dict",
+							Obj::Proc(_) => "Proc",
+						},
+						Val::Nil => "Nil",
+					};
+					println!("({})\t{}", desc, rt_debug(self.syms, &val));
+					Ok(val)
+				}
+			},
 			Expr::Lit(lit) => Ok(match lit {
 				Lit::Str(_, str) => Val::Ref(Ref::new(Obj::Str(str.clone()))),
 				Lit::Num(_, num) => Val::Num(*num),
@@ -1272,7 +1314,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 }
 
-fn rt_print(syms: &Interner, val: &Val) -> String {
+fn rt_debug(syms: &Interner, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
@@ -1282,7 +1324,7 @@ fn rt_print(syms: &Interner, val: &Val) -> String {
 				let mut res = String::new();
 				res.push('[');
 				for (i, item) in items.iter().enumerate() {
-					res.push_str(&rt_print(syms, item));
+					res.push_str(&rt_debug(syms, item));
 					if i + 1 != items.len() {
 						res.push_str(", ");
 					}
@@ -1294,9 +1336,9 @@ fn rt_print(syms: &Interner, val: &Val) -> String {
 				let mut res = String::new();
 				res.push('{');
 				for (i, (key, val)) in entries.iter().enumerate() {
-					res.push_str(&rt_print(syms, key));
+					res.push_str(&rt_debug(syms, key));
 					res.push_str(": ");
-					res.push_str(&rt_print(syms, val));
+					res.push_str(&rt_debug(syms, val));
 					if i + 1 != entries.len() {
 						res.push_str(", ");
 					}

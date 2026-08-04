@@ -6,7 +6,7 @@ names := {
 	"id": id
 }
 
-print names
+$dbg(names)
 
 vals := [
 	id("Hello,\tworld!"),
@@ -15,17 +15,17 @@ vals := [
 ]
 
 when false then
-	print "!"
+	$dbg("!")
 else
-	print "."
+	$dbg(".")
 end
 
 res := each val in vals do
-	print when val then
+	$dbg(when val then
 		val
 	else
 		"!"
-	end
+	end)
 end
 
-print res
+$dbg(res)
