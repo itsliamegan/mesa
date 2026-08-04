@@ -4,9 +4,14 @@ end
 
 vals := [
 	id("Hello,\tworld!"),
+	nil,
 	5.23,
 ]
 
 each val in vals do
-	print val
+	when val then
+		print val
+	else
+		print "not"
+	end
 end

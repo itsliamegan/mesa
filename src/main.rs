@@ -107,6 +107,9 @@ enum TokenTag {
 	Each,
 	Do,
 	In,
+	When,
+	Then,
+	Else,
 	End,
 	Return,
 	Print,
@@ -136,6 +139,9 @@ impl TokenTag {
 			TokenTag::Each => "EACH",
 			TokenTag::Do => "DO",
 			TokenTag::In => "IN",
+			TokenTag::When => "WHEN",
+			TokenTag::Then => "THEN",
+			TokenTag::Else => "ELSE",
 			TokenTag::End => "END",
 			TokenTag::Return => "RETURN",
 			TokenTag::Print => "PRINT",
@@ -283,6 +289,9 @@ impl<'src> Lexer<'src> {
 			"each" => TokenTag::Each,
 			"do" => TokenTag::Do,
 			"in" => TokenTag::In,
+			"when" => TokenTag::When,
+			"then" => TokenTag::Then,
+			"else" => TokenTag::Else,
 			"end" => TokenTag::End,
 			"return" => TokenTag::Return,
 			"print" => TokenTag::Print,
@@ -377,11 +386,15 @@ struct ExprId(usize);
 
 #[derive(Debug)]
 enum Expr {
+	When(When),
 	Call(Call),
 	Assign(Assign),
 	Ident(Ident),
 	Lit(Lit),
 }
+
+#[derive(Debug)]
+struct When(Token, ExprId, Vec<StmtId>, Option<Vec<StmtId>>);
 
 #[derive(Debug)]
 struct Call(Token, ExprId, Vec<ExprId>);
@@ -609,6 +622,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {
 		match self.toks[self.idx].tag {
+			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Ident => self.parse_ident_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
@@ -623,6 +637,33 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				))
 			}
 		}
+	}
+
+	fn parse_when_expr(&mut self) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::When)?;
+		let cond = self.parse_expr()?;
+		self.take(TokenTag::Then)?;
+		let mut then_branch = Vec::new();
+		while self.idx < self.toks.len()
+			&& self.toks[self.idx].tag != TokenTag::End
+			&& self.toks[self.idx].tag != TokenTag::Else
+		{
+			let stmt_id = self.parse_stmt()?;
+			then_branch.push(stmt_id);
+		}
+		let else_branch = if self.toks[self.idx].tag == TokenTag::Else {
+			self.take(TokenTag::Else)?;
+			let mut else_branch = Vec::new();
+			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+				let stmt_id = self.parse_stmt()?;
+				else_branch.push(stmt_id);
+			}
+			Some(else_branch)
+		} else {
+			None
+		};
+		self.take(TokenTag::End)?;
+		Ok(Expr::When(When(tok, cond, then_branch, else_branch)))
 	}
 
 	fn parse_ident_expr(&mut self) -> Result<Expr, Error> {
@@ -905,6 +946,11 @@ struct Interpreter<'syms, 'pkg> {
 	scope: Rc<RefCell<Scope>>,
 }
 
+enum Signal {
+	Return(Val),
+	Error(Error),
+}
+
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	fn new(syms: &'syms Interner, pkg: &'pkg Package) -> Self {
 		Self {
@@ -916,14 +962,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval(mut self, chunk: Chunk) -> Result<(), Error> {
 		for stmt_id in &chunk.top {
-			if let Some(val) = self.eval_stmt(&chunk, *stmt_id)? {
-				return Ok(());
+			match self.eval_stmt(&chunk, *stmt_id) {
+				Ok(()) => {}
+				Err(Signal::Return(val)) => break,
+				Err(Signal::Error(err)) => return Err(err),
 			}
 		}
 		Ok(())
 	}
 
-	fn eval_stmt(&mut self, chunk: &Chunk, stmt_id: StmtId) -> Result<Option<Val>, Error> {
+	fn eval_stmt(&mut self, chunk: &Chunk, stmt_id: StmtId) -> Result<(), Signal> {
 		match chunk.get_stmt(stmt_id) {
 			Stmt::Def(Def(_, name, params, body)) => {
 				let obj = Obj::Proc(Proc {
@@ -934,7 +982,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				});
 				let val = Val::Ref(Ref::new(obj));
 				self.scope.borrow_mut().assign(*name, val);
-				Ok(None)
+				Ok(())
 			}
 			Stmt::Each(Each(tok, name, iter, body)) => {
 				let iter = self.eval_expr(chunk, *iter)?;
@@ -948,53 +996,107 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								self.scope.borrow_mut().assign(*name, item.clone());
 								for stmt_id in body {
 									match self.eval_stmt(chunk, *stmt_id) {
-										Ok(Some(val)) => {
+										Ok(()) => {}
+										Err(Signal::Return(val)) => {
 											self.scope = outer_scope;
-											return Ok(Some(val));
+											return Err(Signal::Return(val));
 										}
-										Ok(None) => {},
-										Err(err) => {
+										Err(Signal::Error(err)) => {
 											self.scope = outer_scope;
-											return Err(err)
+											return Err(Signal::Error(err));
 										}
 									}
 								}
 							}
 							self.scope = outer_scope;
-							Ok(None)
+							Ok(())
 						}
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.idx);
-							Err(Error::Runtime(loc, RuntimeError::IterNonIterable(format!("{:?}", obj))))
+							Err(Signal::Error(Error::Runtime(
+								loc,
+								RuntimeError::IterNonIterable(format!("{:?}", obj)),
+							)))
 						}
-					}
+					},
 					val => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(tok.idx);
-						Err(Error::Runtime(loc, RuntimeError::IterNonIterable(format!("{:?}", val))))
+						Err(Signal::Error(Error::Runtime(
+							loc,
+							RuntimeError::IterNonIterable(format!("{:?}", val)),
+						)))
 					}
-
 				}
 			}
 			Stmt::Return(Return(_, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
-				Ok(Some(val))
+				Err(Signal::Return(val))
 			}
 			Stmt::Print(Print(_, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				println!("{}", rt_print(self.syms, &val));
-				Ok(None)
+				Ok(())
 			}
 			Stmt::Expr(expr_id) => {
 				self.eval_expr(chunk, *expr_id)?;
-				Ok(None)
+				Ok(())
 			}
 		}
 	}
 
-	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Error> {
+	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
+			Expr::When(When(tok, cond, then_branch, else_branch)) => {
+				let cond = match self.eval_expr(chunk, *cond)? {
+					Val::Bool(true) => true,
+					Val::Num(num) if num > 0.0 => true,
+					Val::Ref(_) => true,
+					_ => false,
+				};
+				if cond {
+					let outer_scope = self.scope.clone();
+					let inner_scope = Scope::within(outer_scope.clone());
+					self.scope = Rc::new(RefCell::new(inner_scope));
+					for stmt_id in then_branch {
+						match self.eval_stmt(chunk, *stmt_id) {
+							Ok(()) => {}
+							Err(Signal::Return(val)) => {
+								self.scope = outer_scope;
+								return Err(Signal::Return(val));
+							}
+							Err(Signal::Error(err)) => {
+								self.scope = outer_scope;
+								return Err(Signal::Error(err));
+							}
+						}
+					}
+					self.scope = outer_scope;
+					Ok(Val::Nil)
+				} else if let Some(else_branch) = else_branch {
+					let outer_scope = self.scope.clone();
+					let inner_scope = Scope::within(outer_scope.clone());
+					self.scope = Rc::new(RefCell::new(inner_scope));
+					for stmt_id in else_branch {
+						match self.eval_stmt(chunk, *stmt_id) {
+							Ok(()) => {}
+							Err(Signal::Return(val)) => {
+								self.scope = outer_scope;
+								return Err(Signal::Return(val));
+							}
+							Err(Signal::Error(err)) => {
+								self.scope = outer_scope;
+								return Err(Signal::Error(err));
+							}
+						}
+					}
+					self.scope = outer_scope;
+					Ok(Val::Nil)
+				} else {
+					Ok(Val::Nil)
+				}
+			}
 			Expr::Call(Call(tok, val_id, arg_ids)) => {
 				let mut args = Vec::with_capacity(arg_ids.len());
 				for arg_id in arg_ids {
@@ -1007,10 +1109,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							if args.len() != proc.params.len() {
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(tok.idx);
-								return Err(Error::Runtime(
+								return Err(Signal::Error(Error::Runtime(
 									loc,
 									RuntimeError::WrongArgCount(args.len(), proc.params.len()),
-								));
+								)));
 							}
 							let caller_scope = self.scope.clone();
 							let mut callee_scope = Scope::within(proc.scope.clone());
@@ -1020,14 +1122,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							self.scope = Rc::new(RefCell::new(callee_scope));
 							for stmt_id in &proc.body {
 								match self.eval_stmt(chunk, *stmt_id) {
-									Ok(Some(val)) => {
+									Ok(()) => {}
+									Err(Signal::Return(val)) => {
 										self.scope = caller_scope;
 										return Ok(val);
 									}
-									Ok(None) => {}
-									Err(err) => {
+									Err(Signal::Error(err)) => {
 										self.scope = caller_scope;
-										return Err(err);
+										return Err(Signal::Error(err));
 									}
 								}
 							}
@@ -1037,19 +1139,19 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.idx);
-							Err(Error::Runtime(
+							Err(Signal::Error(Error::Runtime(
 								loc,
 								RuntimeError::CallNonCallable(format!("{:?}", obj)),
-							))
+							)))
 						}
 					},
 					val => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(tok.idx);
-						Err(Error::Runtime(
+						Err(Signal::Error(Error::Runtime(
 							loc,
 							RuntimeError::CallNonCallable(format!("{:?}", val)),
-						))
+						)))
 					}
 				}
 			}
@@ -1068,10 +1170,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(tok.idx);
 					let name = self.syms.get_by_id(*sym_id);
-					Err(Error::Runtime(
+					Err(Signal::Error(Error::Runtime(
 						loc,
 						RuntimeError::UnboundIdent(name.1.clone()),
-					))
+					)))
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
