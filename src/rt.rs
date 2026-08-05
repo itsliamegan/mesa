@@ -7,8 +7,8 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::syn::{
-	Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Interner, Lit,
-	Location, Package, Place, Return, Script, SymId, Type, When,
+	self, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Interner,
+	Lit, Location, Package, Place, Return, Script, SymId, When,
 };
 
 #[derive(Debug)]
@@ -122,6 +122,37 @@ enum Obj {
 	List(Vec<Val>),
 	Dict(HashMap<Val, Val>),
 	Proc(Proc),
+	Type(TypeId),
+	Inst(TypeId, HashMap<SymId, Val>),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TypeId(usize);
+
+#[derive(Debug)]
+struct Type {
+	name: SymId,
+	fields: Vec<SymId>,
+}
+
+struct Types {
+	types: Vec<Type>,
+}
+
+impl Types {
+	fn new() -> Self {
+		Self { types: Vec::new() }
+	}
+
+	fn get_type(&self, id: TypeId) -> &Type {
+		&self.types[id.0]
+	}
+
+	fn add_type(&mut self, typ: Type) -> TypeId {
+		let id = TypeId(self.types.len());
+		self.types.push(typ);
+		id
+	}
 }
 
 #[derive(Debug)]
@@ -171,6 +202,7 @@ impl Scope {
 pub struct Interpreter<'syms, 'pkg> {
 	syms: &'syms Interner,
 	pkg: &'pkg Package,
+	types: Types,
 	scope: Rc<RefCell<Scope>>,
 }
 
@@ -180,10 +212,45 @@ enum Signal {
 }
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
-	pub fn new(syms: &'syms Interner, pkg: &'pkg Package) -> Self {
+	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
+		let mut types = Types::new();
+		types.add_type(Type {
+			name: syms.get_or_add("Num"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("Bool"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("Nil"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("Str"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("List"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("Dict"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("Type"),
+			fields: Vec::new(),
+		});
+		types.add_type(Type {
+			name: syms.get_or_add("Proc"),
+			fields: Vec::new(),
+		});
+
 		Self {
 			syms,
 			pkg,
+			types,
 			scope: Rc::new(RefCell::new(Scope::root())),
 		}
 	}
@@ -201,7 +268,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_decl(&mut self, chunk: &Chunk, decl_id: DeclId) -> Result<(), Signal> {
 		match chunk.get_decl(decl_id) {
-			Decl::Type(Type(_, name, attrs, body)) => Ok(()),
+			Decl::Type(syn::Type(_, name, fields, body)) => {
+				let typ = Type {
+					name: *name,
+					fields: fields.to_vec(),
+				};
+				let id = self.types.add_type(typ);
+				let obj = Obj::Type(id);
+				let val = Val::Ref(Ref::new(obj));
+				self.scope.borrow_mut().assign(*name, val);
+				Ok(())
+			}
 			Decl::Def(Def(_, name, params, body)) => {
 				let obj = Obj::Proc(Proc {
 					name: *name,
@@ -314,12 +391,31 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								Err(err) => Err(err),
 							}
 						}
+						Obj::Type(type_id) => {
+							let typ = self.types.get_type(*type_id);
+							if args.len() != typ.fields.len() {
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(tok.idx);
+								return Err(Signal::Error(Error::WrongArgCount(
+									loc,
+									args.len(),
+									typ.fields.len(),
+								)));
+							}
+							let mut fields = HashMap::new();
+							for (field, val) in typ.fields.iter().zip(args.into_iter()) {
+								fields.insert(*field, val);
+							}
+							let obj = Obj::Inst(*type_id, fields);
+							let val = Val::Ref(Ref::new(obj));
+							Ok(val)
+						}
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.idx);
 							Err(Signal::Error(Error::CallNonCallable(
 								loc,
-								rt_debug(self.syms, &Val::Ref(rf.clone())),
+								rt_debug(self.syms, &self.types, &Val::Ref(rf.clone())),
 							)))
 						}
 					},
@@ -328,7 +424,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.idx);
 						Err(Signal::Error(Error::CallNonCallable(
 							loc,
-							rt_debug(self.syms, &val),
+							rt_debug(self.syms, &self.types, &val),
 						)))
 					}
 				}
@@ -343,7 +439,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								let loc = src.loc(tok.idx);
 								return Err(Signal::Error(Error::ScriptNonIndex(
 									loc,
-									rt_debug(self.syms, &val),
+									rt_debug(self.syms, &self.types, &val),
 								)));
 							}
 						};
@@ -364,7 +460,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.idx);
 						Err(Signal::Error(Error::ScriptNonScriptable(
 							loc,
-							rt_debug(self.syms, &Val::Ref(rf.clone())),
+							rt_debug(self.syms, &self.types, &Val::Ref(rf.clone())),
 						)))
 					}
 				},
@@ -373,7 +469,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let loc = src.loc(tok.idx);
 					Err(Signal::Error(Error::ScriptNonScriptable(
 						loc,
-						rt_debug(self.syms, &val),
+						rt_debug(self.syms, &self.types, &val),
 					)))
 				}
 			},
@@ -406,10 +502,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Obj::List(_) => "List",
 							Obj::Dict(_) => "Dict",
 							Obj::Proc(_) => "Proc",
+							Obj::Type(_) => "Type",
+							Obj::Inst(type_id, _) => {
+								let typ = self.types.get_type(*type_id);
+								let name = self.syms.get_by_id(typ.name);
+								name.1.as_str()
+							}
 						},
 						Val::Nil => "Nil",
 					};
-					println!("({})\t{}", desc, rt_debug(self.syms, &val));
+					println!("({})\t{}", desc, rt_debug(self.syms, &self.types, &val));
 					Ok(val)
 				}
 			},
@@ -463,7 +565,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 }
 
-fn rt_debug(syms: &Interner, val: &Val) -> String {
+fn rt_debug(syms: &Interner, types: &Types, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
@@ -473,7 +575,7 @@ fn rt_debug(syms: &Interner, val: &Val) -> String {
 				let mut res = String::new();
 				res.push('[');
 				for (i, item) in items.iter().enumerate() {
-					res.push_str(&rt_debug(syms, item));
+					res.push_str(&rt_debug(syms, types, item));
 					if i + 1 != items.len() {
 						res.push_str(", ");
 					}
@@ -485,9 +587,9 @@ fn rt_debug(syms: &Interner, val: &Val) -> String {
 				let mut res = String::new();
 				res.push('{');
 				for (i, (key, val)) in entries.iter().enumerate() {
-					res.push_str(&rt_debug(syms, key));
+					res.push_str(&rt_debug(syms, types, key));
 					res.push_str(": ");
-					res.push_str(&rt_debug(syms, val));
+					res.push_str(&rt_debug(syms, types, val));
 					if i + 1 != entries.len() {
 						res.push_str(", ");
 					}
@@ -503,6 +605,35 @@ fn rt_debug(syms: &Interner, val: &Val) -> String {
 					let param = syms.get_by_id(*param);
 					res.push_str(&param.1);
 					if i + 1 != proc.params.len() {
+						res.push_str(", ");
+					}
+				}
+				res.push(')');
+				res
+			}
+			Obj::Type(id) => {
+				let typ = types.get_type(*id);
+				let name = syms.get_by_id(typ.name);
+				let mut res = String::new();
+				res.push_str(&format!("type {}(", name.1));
+				for (i, field) in typ.fields.iter().enumerate() {
+					let field = syms.get_by_id(*field);
+					res.push_str(&field.1);
+					if i + 1 != typ.fields.len() {
+						res.push_str(", ");
+					}
+				}
+				res.push(')');
+				res
+			}
+			Obj::Inst(type_id, fields) => {
+				let typ = types.get_type(*type_id);
+				let name = syms.get_by_id(typ.name);
+				let mut res = String::new();
+				res.push_str(&format!("{}(", name.1));
+				for (i, (_, field)) in fields.iter().enumerate() {
+					res.push_str(&rt_debug(syms, types, field));
+					if i + 1 != fields.len() {
 						res.push_str(", ");
 					}
 				}

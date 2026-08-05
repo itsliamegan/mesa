@@ -1,4 +1,15 @@
-type Person(name)
+type Debit(amount)
 end
 
-$dbg(Person)
+type Credit(amount)
+end
+
+type Account(txns)
+end
+
+acct := Account([
+	Credit(562.35),
+	Debit(19.62)
+])
+
+$dbg(acct)

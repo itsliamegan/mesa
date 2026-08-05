@@ -32,7 +32,7 @@ fn main() {
 
 	match Lexer::new(src).lex() {
 		Ok(toks) => match Parser::new(&mut syms, src, toks).parse() {
-			Ok(chunk) => match Interpreter::new(&syms, &pkg).eval(chunk) {
+			Ok(chunk) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
 				Ok(()) => {}
 				Err(err) => eprintln!("{}", err),
 			},

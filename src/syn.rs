@@ -587,7 +587,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			.iter()
 			.collect::<String>();
 		let name = self.syms.get_or_add(&span);
-		let mut attrs = Vec::new();
+		let mut fields = Vec::new();
 		if self.toks[self.idx].tag == TokenTag::LParen {
 			self.take(TokenTag::LParen)?;
 			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
@@ -595,8 +595,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				let span = self.src[tok.idx..tok.idx + tok.len]
 					.iter()
 					.collect::<String>();
-				let attr = self.syms.get_or_add(&span);
-				attrs.push(attr);
+				let field = self.syms.get_or_add(&span);
+				fields.push(field);
 				match self.toks[self.idx].tag {
 					TokenTag::Comma => {
 						self.idx += 1;
@@ -611,7 +611,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			self.take(TokenTag::RParen)?;
 		}
 		self.take(TokenTag::End)?;
-		Ok(Decl::Type(Type(tok, name, attrs, Vec::new())))
+		Ok(Decl::Type(Type(tok, name, fields, Vec::new())))
 	}
 
 	fn parse_def_decl(&mut self) -> Result<Decl, Error> {
