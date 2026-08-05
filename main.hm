@@ -1,33 +1,4 @@
-def id(val)
-	val
+type Person(name)
 end
 
-names := {
-	"id": id
-}
-
-$dbg(names["id"])
-
-vals := [
-	id("Hello,\tworld!"),
-	when nil then "?" else false end,
-	5.23,
-]
-
-when false then
-	$dbg("!")
-else
-	$dbg(".")
-end
-
-$dbg(vals[1])
-
-res := each val in vals do
-	$dbg(when val then
-		val
-	else
-		"!"
-	end)
-end
-
-$dbg(res)
+$dbg(Person)
