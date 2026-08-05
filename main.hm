@@ -14,3 +14,4 @@ acct := Account([
 
 $dbg(acct)
 $dbg(acct.txns)
+$dbg(acct.balance())
