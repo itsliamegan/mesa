@@ -164,6 +164,7 @@ pub enum TokenTag {
 
 	Colon,
 	Comma,
+	Dot,
 }
 
 impl TokenTag {
@@ -200,6 +201,7 @@ impl TokenTag {
 
 			TokenTag::Colon => "COLON",
 			TokenTag::Comma => "COMMA",
+			TokenTag::Dot => "DOT",
 		}
 	}
 }
@@ -314,6 +316,15 @@ impl<'src> Lexer<'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::Comma,
+					idx: self.idx - 1,
+					len: 1,
+				})
+			}
+			'.' => {
+				self.idx += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Dot,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -444,6 +455,7 @@ pub enum Expr {
 	When(When),
 	Return(Return),
 	Call(Call),
+	Access(Access),
 	Script(Script),
 	Assign(Assign),
 	Ident(Ident),
@@ -467,6 +479,9 @@ pub struct Return(pub Token, pub ExprId);
 
 #[derive(Debug)]
 pub struct Call(pub Token, pub ExprId, pub Vec<ExprId>);
+
+#[derive(Debug)]
+pub struct Access(pub Token, pub ExprId, pub SymId);
 
 #[derive(Debug)]
 pub struct Script(pub Token, pub ExprId, pub ExprId);
@@ -666,6 +681,18 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				};
 				let val_expr_id = self.parse_expr()?;
 				let expr = Expr::Assign(Assign(tok, place, val_expr_id));
+				let expr_id = self.chunk.add_expr(expr);
+				Ok(expr_id)
+			}
+			TokenTag::Dot => {
+				self.idx += 1;
+				let val_id = expr_id;
+				let ident = self.take(TokenTag::Ident)?;
+				let span = self.src[ident.idx..ident.idx + ident.len]
+					.iter()
+					.collect::<String>();
+				let field = self.syms.get_or_add(&span);
+				let expr = Expr::Access(Access(tok, val_id, field));
 				let expr_id = self.chunk.add_expr(expr);
 				Ok(expr_id)
 			}

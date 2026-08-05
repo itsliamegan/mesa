@@ -7,7 +7,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::syn::{
-	self, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Interner,
+	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Interner,
 	Lit, Location, Package, Place, Return, Script, SymId, When,
 };
 
@@ -16,6 +16,7 @@ pub enum Error {
 	WrongArgCount(Location, usize, usize),
 	CallNonCallable(Location, String),
 	IterNonIterable(Location, String),
+	AccessNonField(Location, String, String),
 	ScriptNonScriptable(Location, String),
 	ScriptNonIndex(Location, String),
 	UnboundIdent(Location, String),
@@ -27,6 +28,7 @@ impl Error {
 			Self::WrongArgCount(loc, _, _) => loc,
 			Self::CallNonCallable(loc, _) => loc,
 			Self::IterNonIterable(loc, _) => loc,
+			Self::AccessNonField(loc, _, _) => loc,
 			Self::ScriptNonScriptable(loc, _) => loc,
 			Self::ScriptNonIndex(loc, _) => loc,
 			Self::UnboundIdent(loc, _) => loc,
@@ -43,6 +45,7 @@ impl Display for Error {
 			}
 			Self::CallNonCallable(_, val) => write!(f, "call of non-callable {}", val),
 			Self::IterNonIterable(_, val) => write!(f, "iter of non-iterable {}", val),
+			Self::AccessNonField(_, typ, field) => write!(f, "no such field '{}' on type '{}'", field, typ),
 			Self::ScriptNonScriptable(_, val) => write!(f, "script of non-scriptable {}", val),
 			Self::ScriptNonIndex(_, val) => write!(f, "script with non-index {}", val),
 			Self::UnboundIdent(_, ident) => write!(f, "unbound ident '{}'", ident),
@@ -429,6 +432,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
+			Expr::Access(Access(tok, val_id, field)) => match self.eval_expr(chunk, *val_id)? {
+				Val::Ref(rf) => match &*rf.get() {
+					Obj::Inst(type_id, fields) => {
+						match fields.get(field) {
+							Some(val) => Ok(val.clone()),
+							None => {
+								let typ = self.types.get_type(*type_id);
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(tok.idx);
+								Err(Signal::Error(Error::AccessNonField(
+									loc,
+									self.syms.get_by_id(typ.name).1.to_string(),
+									self.syms.get_by_id(*field).1.to_string(),
+								)))
+							}
+						}
+					}
+					_ => todo!(),
+				},
+				_ => todo!(),
+			},
 			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Ref(rf) => match &*rf.get() {
 					Obj::List(items) => {
