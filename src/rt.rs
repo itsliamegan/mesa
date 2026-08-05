@@ -7,8 +7,8 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::syn::{
-	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Interner,
-	Lit, Location, Package, Place, Return, Script, SymId, When,
+	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident,
+	Interner, Lit, Location, Package, Place, Return, Script, SymId, When,
 };
 
 #[derive(Debug)]
@@ -16,7 +16,7 @@ pub enum Error {
 	WrongArgCount(Location, usize, usize),
 	CallNonCallable(Location, String),
 	IterNonIterable(Location, String),
-	AccessNonField(Location, String, String),
+	AccessNonMember(Location, String, String),
 	ScriptNonScriptable(Location, String),
 	ScriptNonIndex(Location, String),
 	UnboundIdent(Location, String),
@@ -28,7 +28,7 @@ impl Error {
 			Self::WrongArgCount(loc, _, _) => loc,
 			Self::CallNonCallable(loc, _) => loc,
 			Self::IterNonIterable(loc, _) => loc,
-			Self::AccessNonField(loc, _, _) => loc,
+			Self::AccessNonMember(loc, _, _) => loc,
 			Self::ScriptNonScriptable(loc, _) => loc,
 			Self::ScriptNonIndex(loc, _) => loc,
 			Self::UnboundIdent(loc, _) => loc,
@@ -45,7 +45,9 @@ impl Display for Error {
 			}
 			Self::CallNonCallable(_, val) => write!(f, "call of non-callable {}", val),
 			Self::IterNonIterable(_, val) => write!(f, "iter of non-iterable {}", val),
-			Self::AccessNonField(_, typ, field) => write!(f, "no such field '{}' on type '{}'", field, typ),
+			Self::AccessNonMember(_, typ, name) => {
+				write!(f, "no such member '{}' on type '{}'", name, typ)
+			}
 			Self::ScriptNonScriptable(_, val) => write!(f, "script of non-scriptable {}", val),
 			Self::ScriptNonIndex(_, val) => write!(f, "script with non-index {}", val),
 			Self::UnboundIdent(_, ident) => write!(f, "unbound ident '{}'", ident),
@@ -136,6 +138,7 @@ struct TypeId(usize);
 struct Type {
 	name: SymId,
 	fields: Vec<SymId>,
+	methods: HashMap<SymId, Ref>,
 }
 
 struct Types {
@@ -220,34 +223,42 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		types.add_type(Type {
 			name: syms.get_or_add("Num"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("Bool"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("Nil"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("Str"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("List"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("Dict"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("Type"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 		types.add_type(Type {
 			name: syms.get_or_add("Proc"),
 			fields: Vec::new(),
+			methods: HashMap::new(),
 		});
 
 		Self {
@@ -271,10 +282,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_decl(&mut self, chunk: &Chunk, decl_id: DeclId) -> Result<(), Signal> {
 		match chunk.get_decl(decl_id) {
-			Decl::Type(syn::Type(_, name, fields, body)) => {
+			Decl::Type(syn::Type(_, name, fields, items)) => {
+				let mut methods = HashMap::new();
+				for decl_id in items {
+					match chunk.get_decl(*decl_id) {
+						Decl::Type(syn::Type(_, _, _, _)) => todo!(),
+						Decl::Def(Def(_, name, params, body)) => {
+							let proc = Obj::Proc(Proc {
+								name: *name,
+								params: params.to_vec(),
+								body: body.to_vec(),
+								scope: self.scope.clone(),
+							});
+							methods.insert(*name, Ref::new(proc));
+						}
+						Decl::Expr(_) => todo!(),
+					}
+				}
 				let typ = Type {
 					name: *name,
 					fields: fields.to_vec(),
+					methods,
 				};
 				let id = self.types.add_type(typ);
 				let obj = Obj::Type(id);
@@ -432,23 +460,26 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Access(Access(tok, val_id, field)) => match self.eval_expr(chunk, *val_id)? {
+			Expr::Access(Access(tok, val_id, name)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Ref(rf) => match &*rf.get() {
-					Obj::Inst(type_id, fields) => {
-						match fields.get(field) {
-							Some(val) => Ok(val.clone()),
-							None => {
-								let typ = self.types.get_type(*type_id);
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.idx);
-								Err(Signal::Error(Error::AccessNonField(
-									loc,
-									self.syms.get_by_id(typ.name).1.to_string(),
-									self.syms.get_by_id(*field).1.to_string(),
-								)))
+					Obj::Inst(type_id, fields) => match fields.get(name) {
+						Some(val) => Ok(val.clone()),
+						None => {
+							let typ = self.types.get_type(*type_id);
+							match typ.methods.get(name) {
+								Some(rf) => Ok(Val::Ref(rf.clone())),
+								None => {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(tok.idx);
+									Err(Signal::Error(Error::AccessNonMember(
+										loc,
+										self.syms.get_by_id(typ.name).1.to_string(),
+										self.syms.get_by_id(*name).1.to_string(),
+									)))
+								}
 							}
 						}
-					}
+					},
 					_ => todo!(),
 				},
 				_ => todo!(),

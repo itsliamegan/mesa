@@ -5,6 +5,9 @@ type Credit(amount)
 end
 
 type Account(txns)
+	def balance()
+		5
+	end
 end
 
 acct := Account([

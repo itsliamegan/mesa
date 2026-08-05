@@ -625,8 +625,13 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			}
 			self.take(TokenTag::RParen)?;
 		}
+		let mut items = Vec::new();
+		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+			let item_id = self.parse_decl()?;
+			items.push(item_id);
+		}
 		self.take(TokenTag::End)?;
-		Ok(Decl::Type(Type(tok, name, fields, Vec::new())))
+		Ok(Decl::Type(Type(tok, name, fields, items)))
 	}
 
 	fn parse_def_decl(&mut self) -> Result<Decl, Error> {
@@ -706,7 +711,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				TokenTag::LParen => {
 					let mut args = Vec::new();
 					self.take(TokenTag::LParen)?;
-					while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
+					while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen
+					{
 						let arg = self.parse_expr()?;
 						args.push(arg);
 						match self.toks[self.idx].tag {
