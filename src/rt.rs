@@ -59,7 +59,7 @@ impl Display for Error {
 enum Val {
 	Num(f64),
 	Bool(bool),
-	Ref(Ref),
+	Obj(Rc<RefCell<Obj>>),
 	Nil,
 }
 
@@ -68,7 +68,12 @@ impl PartialEq for Val {
 		match (self, other) {
 			(Self::Num(num), Self::Num(other_num)) => num == other_num,
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool == other_bool,
-			(Self::Ref(rf), Self::Ref(other_rf)) => rf == other_rf,
+			(Self::Obj(rf), Self::Obj(other_rf)) => {
+				match (&*rf.borrow(), &*other_rf.borrow()) {
+					(Obj::Str(str), Obj::Str(other_str)) => str == other_str,
+					_ => rf.as_ptr() == other_rf.as_ptr(),
+				}
+			}
 			(Self::Nil, Self::Nil) => true,
 			_ => false,
 		}
@@ -82,41 +87,11 @@ impl Hash for Val {
 		match self {
 			Self::Num(num) => num.to_bits().hash(state),
 			Self::Bool(bool) => bool.hash(state),
-			Self::Ref(rf) => rf.hash(state),
+			Self::Obj(rf) => match &*rf.borrow() {
+				Obj::Str(str) => str.hash(state),
+				_ => rf.as_ptr().hash(state),
+			}
 			Self::Nil => ().hash(state),
-		}
-	}
-}
-
-#[derive(Debug, Clone)]
-struct Ref(Rc<RefCell<Obj>>);
-
-impl Ref {
-	fn new(obj: Obj) -> Self {
-		Self(Rc::new(RefCell::new(obj)))
-	}
-
-	fn get(&self) -> impl Deref<Target = Obj> {
-		self.0.borrow()
-	}
-}
-
-impl PartialEq for Ref {
-	fn eq(&self, other: &Self) -> bool {
-		match (&*self.get(), &*other.get()) {
-			(Obj::Str(str), Obj::Str(other_str)) => str == other_str,
-			_ => self.0.as_ptr() == other.0.as_ptr(),
-		}
-	}
-}
-
-impl Eq for Ref {}
-
-impl Hash for Ref {
-	fn hash<H: Hasher>(&self, state: &mut H) {
-		match &*self.get() {
-			Obj::Str(str) => str.hash(state),
-			_ => self.0.as_ptr().hash(state),
 		}
 	}
 }
@@ -178,7 +153,7 @@ struct Proc {
 #[derive(Debug)]
 struct Scope {
 	locals: HashMap<SymId, Val>,
-	inst: Option<Ref>,
+	inst: Option<Rc<RefCell<Obj>>>,
 	outer: Option<Rc<RefCell<Scope>>>,
 }
 
@@ -187,7 +162,7 @@ impl Scope {
 		match self.locals.get(&name) {
 			Some(val) => Some(val.clone()),
 			None => match &self.inst {
-				Some(rf) => match &*rf.get() {
+				Some(rf) => match &*rf.borrow() {
 					Obj::Inst(inst) => match inst.fields.get(&name) {
 						Some(val) => Some(val.clone()),
 						None => match &self.outer {
@@ -317,7 +292,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				};
 				let id = self.types.add_type(typ);
 				let obj = Obj::Type(id);
-				let val = Val::Ref(Ref::new(obj));
+				let val = Val::Obj(Rc::new(RefCell::new(obj)));
 				self.scope.borrow_mut().assign(*name, val);
 				Ok(())
 			}
@@ -328,7 +303,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					body: body.to_vec(),
 					scope: self.scope.clone(),
 				});
-				let val = Val::Ref(Ref::new(obj));
+				let val = Val::Obj(Rc::new(RefCell::new(obj)));
 				self.scope.borrow_mut().assign(*name, val);
 				Ok(())
 			}
@@ -342,7 +317,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
 			Expr::Each(Each(tok, name, iter, body)) => match self.eval_expr(chunk, *iter)? {
-				Val::Ref(rf) => match &*rf.get() {
+				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(items) => {
 						let outer_scope = self.scope.clone();
 						let inner_scope = Scope {
@@ -392,7 +367,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let cond = match self.eval_expr(chunk, *cond)? {
 					Val::Bool(true) => true,
 					Val::Num(num) if num > 0.0 => true,
-					Val::Ref(_) => true,
+					Val::Obj(_) => true,
 					_ => false,
 				};
 				if cond {
@@ -424,7 +399,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					args.push(arg);
 				}
 				match self.eval_expr(chunk, *val_id)? {
-					Val::Ref(rf) => match &*rf.get() {
+					Val::Obj(rf) => match &*rf.borrow() {
 						Obj::Proc(proc) => {
 							if args.len() != proc.params.len() {
 								let src = self.pkg.get_src(chunk.src);
@@ -468,7 +443,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								typ: *type_id,
 								fields,
 							});
-							let val = Val::Ref(Ref::new(obj));
+							let val = Val::Obj(Rc::new(RefCell::new(obj)));
 							Ok(val)
 						}
 						obj => {
@@ -476,7 +451,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let loc = src.loc(tok.idx);
 							Err(Signal::Error(Error::CallNonCallable(
 								loc,
-								rt_debug(self.syms, &self.types, &Val::Ref(rf.clone())),
+								rt_debug(self.syms, &self.types, &Val::Obj(rf.clone())),
 							)))
 						}
 					},
@@ -491,7 +466,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 			Expr::Access(Access(tok, val_id, name)) => match self.eval_expr(chunk, *val_id)? {
-				Val::Ref(rf) => match &*rf.get() {
+				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::Inst(inst) => match inst.fields.get(name) {
 						Some(val) => Ok(val.clone()),
 						None => {
@@ -499,7 +474,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							match typ.methods.get(name) {
 								Some(proc_rf) => {
 									let proc = proc_rf.borrow();
-									Ok(Val::Ref(Ref::new(Obj::Proc(Proc {
+									Ok(Val::Obj(Rc::new(RefCell::new(Obj::Proc(Proc {
 										name: proc.name,
 										params: proc.params.clone(),
 										body: proc.body.clone(),
@@ -508,7 +483,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											inst: Some(rf.clone()),
 											outer: Some(proc.scope.clone()),
 										}))
-									}))))
+									})))))
 								}
 								None => {
 									let src = self.pkg.get_src(chunk.src);
@@ -527,7 +502,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				_ => todo!(),
 			},
 			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
-				Val::Ref(rf) => match &*rf.get() {
+				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(items) => {
 						let idx = match self.eval_expr(chunk, *key_id)? {
 							Val::Num(num) if num >= 0.0 => num.trunc() as usize,
@@ -557,7 +532,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.idx);
 						Err(Signal::Error(Error::ScriptNonScriptable(
 							loc,
-							rt_debug(self.syms, &self.types, &Val::Ref(rf.clone())),
+							rt_debug(self.syms, &self.types, &Val::Obj(rf.clone())),
 						)))
 					}
 				},
@@ -594,7 +569,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let desc = match &val {
 						Val::Num(_) => "Num",
 						Val::Bool(_) => "Bool",
-						Val::Ref(rf) => match &*rf.get() {
+						Val::Obj(rf) => match &*rf.borrow() {
 							Obj::Str(_) => "Str",
 							Obj::List(_) => "List",
 							Obj::Dict(_) => "Dict",
@@ -613,7 +588,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
-				Lit::Str(_, str) => Val::Ref(Ref::new(Obj::Str(str.clone()))),
+				Lit::Str(_, str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(str.clone())))),
 				Lit::Num(_, num) => Val::Num(*num),
 				Lit::Bool(_, bool) => Val::Bool(*bool),
 				Lit::List(_, item_ids) => {
@@ -622,7 +597,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let item = self.eval_expr(chunk, *item_id)?;
 						items.push(item);
 					}
-					Val::Ref(Ref::new(Obj::List(items)))
+					Val::Obj(Rc::new(RefCell::new(Obj::List(items))))
 				}
 				Lit::Dict(_, pair_ids) => {
 					let mut pairs = HashMap::with_capacity(pair_ids.len());
@@ -631,7 +606,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let val = self.eval_expr(chunk, *val_id)?;
 						pairs.insert(key, val);
 					}
-					Val::Ref(Ref::new(Obj::Dict(pairs)))
+					Val::Obj(Rc::new(RefCell::new(Obj::Dict(pairs))))
 				}
 				Lit::Nil(_) => Val::Nil,
 			}),
@@ -666,7 +641,7 @@ fn rt_debug(syms: &Interner, types: &Types, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
-		Val::Ref(rf) => match &*rf.get() {
+		Val::Obj(rf) => match &*rf.borrow() {
 			Obj::Str(str) => format!("\"{}\"", str),
 			Obj::List(items) => {
 				let mut res = String::new();

@@ -18,3 +18,11 @@ acct := Account([
 $dbg(acct)
 $dbg(acct.txns)
 $dbg(acct.balance())
+
+dict := {
+	"name": "Alice",
+	nil: true,
+}
+
+$dbg(dict["name"])
+$dbg(dict[nil])
