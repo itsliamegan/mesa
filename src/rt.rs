@@ -8,7 +8,7 @@ use std::rc::Rc;
 
 use crate::syn::{
 	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident,
-	Interner, Lit, Location, Package, Place, Return, Script, SymId, When,
+	Interner, Lit, Location, Package, Place, Return, Script, SymId, Token, When,
 };
 
 #[derive(Debug)]
@@ -68,12 +68,10 @@ impl PartialEq for Val {
 		match (self, other) {
 			(Self::Num(num), Self::Num(other_num)) => num == other_num,
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool == other_bool,
-			(Self::Obj(rf), Self::Obj(other_rf)) => {
-				match (&*rf.borrow(), &*other_rf.borrow()) {
-					(Obj::Str(str), Obj::Str(other_str)) => str == other_str,
-					_ => rf.as_ptr() == other_rf.as_ptr(),
-				}
-			}
+			(Self::Obj(rf), Self::Obj(other_rf)) => match (&*rf.borrow(), &*other_rf.borrow()) {
+				(Obj::Str(str), Obj::Str(other_str)) => str == other_str,
+				_ => rf.as_ptr() == other_rf.as_ptr(),
+			},
 			(Self::Nil, Self::Nil) => true,
 			_ => false,
 		}
@@ -90,7 +88,7 @@ impl Hash for Val {
 			Self::Obj(rf) => match &*rf.borrow() {
 				Obj::Str(str) => str.hash(state),
 				_ => rf.as_ptr().hash(state),
-			}
+			},
 			Self::Nil => ().hash(state),
 		}
 	}
@@ -407,30 +405,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				match self.eval_expr(chunk, *val_id)? {
 					Val::Obj(rf) => match &*rf.borrow() {
-						Obj::Proc(proc) => {
-							if args.len() != proc.params.len() {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.idx);
-								return Err(Signal::Error(Error::WrongArgCount(
-									loc,
-									args.len(),
-									proc.params.len(),
-								)));
-							}
-							let mut scope = Scope {
-								locals: HashMap::new(),
-								inst: None,
-								outer: Some(proc.scope.clone()),
-							};
-							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-								scope.assign(*param, arg);
-							}
-							match self.eval_exprs(chunk, scope, &proc.body) {
-								Ok(val) => Ok(val),
-								Err(Signal::Return(val)) => Ok(val),
-								Err(err) => Err(err),
-							}
-						}
+						Obj::Proc(proc) => self.eval_proc_call(chunk, tok, proc, None, args),
 						Obj::Type(type_id) => {
 							let typ = self.types.get_type(*type_id);
 							if args.len() != typ.fields.len() {
@@ -453,31 +428,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let val = Val::Obj(Rc::new(RefCell::new(obj)));
 							Ok(val)
 						}
-						Obj::Method(meth) => {
-							let proc = meth.proc.borrow();
-							if args.len() != proc.params.len() {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.idx);
-								return Err(Signal::Error(Error::WrongArgCount(
-									loc,
-									args.len(),
-									proc.params.len(),
-								)));
-							}
-							let mut scope = Scope {
-								locals: HashMap::new(),
-								inst: Some(meth.inst.clone()),
-								outer: Some(proc.scope.clone()),
-							};
-							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-								scope.assign(*param, arg);
-							}
-							match self.eval_exprs(chunk, scope, &proc.body) {
-								Ok(val) => Ok(val),
-								Err(Signal::Return(val)) => Ok(val),
-								Err(err) => Err(err),
-							}
-						}
+						Obj::Method(meth) => self.eval_proc_call(
+							chunk,
+							tok,
+							&meth.proc.borrow(),
+							Some(meth.inst.clone()),
+							args,
+						),
 						obj => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.idx);
@@ -507,7 +464,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								Some(proc_rf) => {
 									Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
 										proc: proc_rf.clone(),
-										inst: inst_rf.clone()
+										inst: inst_rf.clone(),
 									})))))
 								}
 								None => {
@@ -636,6 +593,38 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				Lit::Nil(_) => Val::Nil,
 			}),
+		}
+	}
+
+	fn eval_proc_call(
+		&mut self,
+		chunk: &Chunk,
+		tok: &Token,
+		proc: &Proc,
+		inst: Option<Rc<RefCell<Obj>>>,
+		args: Vec<Val>,
+	) -> Result<Val, Signal> {
+		if args.len() != proc.params.len() {
+			let src = self.pkg.get_src(chunk.src);
+			let loc = src.loc(tok.idx);
+			return Err(Signal::Error(Error::WrongArgCount(
+				loc,
+				args.len(),
+				proc.params.len(),
+			)));
+		}
+		let mut scope = Scope {
+			locals: HashMap::new(),
+			inst,
+			outer: Some(proc.scope.clone()),
+		};
+		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
+			scope.assign(*param, arg);
+		}
+		match self.eval_exprs(chunk, scope, &proc.body) {
+			Ok(val) => Ok(val),
+			Err(Signal::Return(val)) => Ok(val),
+			Err(err) => Err(err),
 		}
 	}
 
