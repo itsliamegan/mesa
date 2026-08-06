@@ -97,12 +97,22 @@ impl Hash for Val {
 #[derive(Debug)]
 enum Obj {
 	Str(String),
-	List(Vec<Val>),
-	Dict(HashMap<Val, Val>),
+	List(List),
+	Dict(Dict),
 	Proc(Proc),
 	Type(TypeId),
 	Instance(Instance),
 	Method(Method),
+}
+
+#[derive(Debug)]
+struct List {
+	items: Vec<Val>,
+}
+
+#[derive(Debug)]
+struct Dict {
+	pairs: HashMap<Val, Val>,
 }
 
 #[derive(Debug)]
@@ -327,7 +337,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		match chunk.get_expr(expr_id) {
 			Expr::Each(Each(tok, name, iter, body)) => match self.eval_expr(chunk, *iter)? {
 				Val::Obj(rf) => match &*rf.borrow() {
-					Obj::List(items) => {
+					Obj::List(list) => {
 						let outer_scope = self.scope.clone();
 						let inner_scope = Scope {
 							locals: HashMap::new(),
@@ -335,7 +345,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							outer: Some(outer_scope.clone()),
 						};
 						self.scope = Rc::new(RefCell::new(inner_scope));
-						for item in items {
+						for item in &list.items {
 							self.scope.borrow_mut().assign(*name, item.clone());
 							for expr_id in body {
 								match self.eval_expr(chunk, *expr_id) {
@@ -485,7 +495,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
-					Obj::List(items) => {
+					Obj::List(list) => {
 						let idx = match self.eval_expr(chunk, *key_id)? {
 							Val::Num(num) if num >= 0.0 => num.trunc() as usize,
 							val => {
@@ -497,14 +507,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								)));
 							}
 						};
-						match items.get(idx) {
+						match list.items.get(idx) {
 							Some(val) => Ok(val.clone()),
 							None => Ok(Val::Nil),
 						}
 					}
-					Obj::Dict(pairs) => {
+					Obj::Dict(dict) => {
 						let key = self.eval_expr(chunk, *key_id)?;
-						match pairs.get(&key) {
+						match dict.pairs.get(&key) {
 							Some(val) => Ok(val.clone()),
 							None => Ok(Val::Nil),
 						}
@@ -595,7 +605,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let item = self.eval_expr(chunk, *item_id)?;
 						items.push(item);
 					}
-					Val::Obj(Rc::new(RefCell::new(Obj::List(items))))
+					Val::Obj(Rc::new(RefCell::new(Obj::List(List { items }))))
 				}
 				Lit::Dict(_, pair_ids) => {
 					let mut pairs = HashMap::with_capacity(pair_ids.len());
@@ -604,7 +614,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let val = self.eval_expr(chunk, *val_id)?;
 						pairs.insert(key, val);
 					}
-					Val::Obj(Rc::new(RefCell::new(Obj::Dict(pairs))))
+					Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict { pairs }))))
 				}
 				Lit::Nil(_) => Val::Nil,
 			}),
@@ -722,26 +732,26 @@ fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	match obj {
 		Obj::Str(str) => format!("\"{}\"", str),
-		Obj::List(items) => {
+		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
-			for (i, item) in items.iter().enumerate() {
+			for (i, item) in list.items.iter().enumerate() {
 				res.push_str(&rt_debug_val(syms, types, item));
-				if i + 1 != items.len() {
+				if i + 1 != list.items.len() {
 					res.push_str(", ");
 				}
 			}
 			res.push(']');
 			res
 		}
-		Obj::Dict(entries) => {
+		Obj::Dict(dict) => {
 			let mut res = String::new();
 			res.push('{');
-			for (i, (key, val)) in entries.iter().enumerate() {
+			for (i, (key, val)) in dict.pairs.iter().enumerate() {
 				res.push_str(&rt_debug_val(syms, types, key));
 				res.push_str(": ");
 				res.push_str(&rt_debug_val(syms, types, val));
-				if i + 1 != entries.len() {
+				if i + 1 != dict.pairs.len() {
 					res.push_str(", ");
 				}
 			}
