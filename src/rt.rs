@@ -123,6 +123,29 @@ struct Proc {
 	scope: Rc<RefCell<Scope>>,
 }
 
+macro_rules! def_core_types {
+	($( ($const_name:ident, $idx:expr, $str_name:expr) ),* $(,)?) => {
+		impl TypeId {
+			$( pub const $const_name: TypeId = TypeId($idx); )*
+		}
+
+		const CORE_TYPES: &[(TypeId, &'static str)] = &[
+			$( (TypeId::$const_name, $str_name) ),*
+		];
+	};
+}
+
+def_core_types! {
+	(NIL, 0, "Nil"),
+	(NUM, 1, "Num"),
+	(BOOL, 1, "Bool"),
+	(STR, 3, "Str"),
+	(LIST, 4, "List"),
+	(DICT, 5, "Dict"),
+	(TYPE, 6, "Type"),
+	(PROC, 7, "Proc"),
+}
+
 #[derive(Debug, Clone, Copy)]
 struct TypeId(usize);
 
@@ -138,8 +161,18 @@ struct TypeRegistry {
 }
 
 impl TypeRegistry {
-	fn new() -> Self {
-		Self { types: Vec::new() }
+	fn new(syms: &mut Interner) -> Self {
+		let mut types = Vec::with_capacity(CORE_TYPES.len());
+
+		for (_id, name) in CORE_TYPES {
+			types.push(Type {
+				name: syms.get_or_add(name),
+				fields: Vec::new(),
+				methods: HashMap::new(),
+			});
+		}
+
+		Self { types }
 	}
 
 	fn get_type(&self, id: TypeId) -> &Type {
@@ -218,59 +251,16 @@ enum Signal {
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
-		let mut types = TypeRegistry::new();
-		types.add_type(Type {
-			name: syms.get_or_add("Num"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("Bool"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("Nil"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("Str"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("List"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("Dict"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("Type"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-		types.add_type(Type {
-			name: syms.get_or_add("Proc"),
-			fields: Vec::new(),
-			methods: HashMap::new(),
-		});
-
-		let scope = Scope {
-			locals: HashMap::new(),
-			inst: None,
-			outer: None,
-		};
-
+		let types = TypeRegistry::new(syms);
 		Self {
 			syms,
 			pkg,
 			types,
-			scope: Rc::new(RefCell::new(scope)),
+			scope: Rc::new(RefCell::new(Scope {
+				locals: HashMap::new(),
+				inst: None,
+				outer: None,
+			})),
 		}
 	}
 
@@ -573,25 +563,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Debug(_, val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
-					let desc = match &val {
-						Val::Num(_) => "Num",
-						Val::Bool(_) => "Bool",
-						Val::Obj(rf) => match &*rf.borrow() {
-							Obj::Str(_) => "Str",
-							Obj::List(_) => "List",
-							Obj::Dict(_) => "Dict",
-							Obj::Proc(_) => "Proc",
-							Obj::Type(_) => "Type",
-							Obj::Instance(inst) => {
-								let typ = self.types.get_type(inst.typ);
-								let name = self.syms.get_by_id(typ.name);
-								name.1.as_str()
-							}
-							Obj::Method(_) => "Proc",
-						},
-						Val::Nil => "Nil",
-					};
-					println!("({})\t{}", desc, rt_debug_val(self.syms, &self.types, &val));
+					let typ = self.type_of(&val);
+					let desc = self.syms.get_by_id(self.type_of(&val).name);
+					println!(
+						"({})\t{}",
+						desc.1,
+						rt_debug_val(self.syms, &self.types, &val)
+					);
 					Ok(val)
 				}
 			},
@@ -678,45 +656,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn type_of(&self, val: &Val) -> &Type {
 		match val {
-			Val::Num(_) => self
-				.types
-				.get_by_name(self.syms.get_by_name("Num").unwrap().0)
-				.unwrap(),
-			Val::Bool(_) => self
-				.types
-				.get_by_name(self.syms.get_by_name("Bool").unwrap().0)
-				.unwrap(),
+			Val::Nil => self.types.get_type(TypeId::NIL),
+			Val::Num(_) => self.types.get_type(TypeId::NUM),
+			Val::Bool(_) => self.types.get_type(TypeId::BOOL),
 			Val::Obj(rf) => match &*rf.borrow() {
-				Obj::Str(_) => self
-					.types
-					.get_by_name(self.syms.get_by_name("Str").unwrap().0)
-					.unwrap(),
-				Obj::List(_) => self
-					.types
-					.get_by_name(self.syms.get_by_name("List").unwrap().0)
-					.unwrap(),
-				Obj::Dict(_) => self
-					.types
-					.get_by_name(self.syms.get_by_name("Dict").unwrap().0)
-					.unwrap(),
-				Obj::Proc(_) => self
-					.types
-					.get_by_name(self.syms.get_by_name("Proc").unwrap().0)
-					.unwrap(),
-				Obj::Type(_) => self
-					.types
-					.get_by_name(self.syms.get_by_name("Type").unwrap().0)
-					.unwrap(),
+				Obj::Str(_) => self.types.get_type(TypeId::STR),
+				Obj::List(_) => self.types.get_type(TypeId::LIST),
+				Obj::Dict(_) => self.types.get_type(TypeId::DICT),
+				Obj::Proc(_) => self.types.get_type(TypeId::PROC),
+				Obj::Type(_) => self.types.get_type(TypeId::TYPE),
 				Obj::Instance(inst) => self.types.get_type(inst.typ),
-				Obj::Method(_) => self
-					.types
-					.get_by_name(self.syms.get_by_name("Proc").unwrap().0)
-					.unwrap(),
+				Obj::Method(_) => self.types.get_type(TypeId::PROC),
 			},
-			Val::Nil => self
-				.types
-				.get_by_name(self.syms.get_by_name("Nil").unwrap().0)
-				.unwrap(),
 		}
 	}
 }
