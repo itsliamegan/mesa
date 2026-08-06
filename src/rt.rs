@@ -69,7 +69,7 @@ impl PartialEq for Val {
 			(Self::Num(num), Self::Num(other_num)) => num == other_num,
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool == other_bool,
 			(Self::Obj(rf), Self::Obj(other_rf)) => match (&*rf.borrow(), &*other_rf.borrow()) {
-				(Obj::Str(str), Obj::Str(other_str)) => str == other_str,
+				(Obj::Str(str), Obj::Str(other_str)) => str.chars == other_str.chars,
 				_ => rf.as_ptr() == other_rf.as_ptr(),
 			},
 			(Self::Nil, Self::Nil) => true,
@@ -86,7 +86,7 @@ impl Hash for Val {
 			Self::Num(num) => num.to_bits().hash(state),
 			Self::Bool(bool) => bool.hash(state),
 			Self::Obj(rf) => match &*rf.borrow() {
-				Obj::Str(str) => str.hash(state),
+				Obj::Str(str) => str.chars.hash(state),
 				_ => rf.as_ptr().hash(state),
 			},
 			Self::Nil => ().hash(state),
@@ -96,13 +96,18 @@ impl Hash for Val {
 
 #[derive(Debug)]
 enum Obj {
-	Str(String),
+	Str(Str),
 	List(List),
 	Dict(Dict),
 	Proc(Proc),
 	Type(TypeId),
 	Instance(Instance),
 	Method(Method),
+}
+
+#[derive(Debug)]
+struct Str {
+	chars: Box<str>,
 }
 
 #[derive(Debug)]
@@ -577,7 +582,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
-				Lit::Str(_, str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(str.clone())))),
+				Lit::Str(_, str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
+					chars: Box::from(str.as_str()),
+				})))),
 				Lit::Num(_, num) => Val::Num(*num),
 				Lit::Bool(_, bool) => Val::Bool(*bool),
 				Lit::List(_, item_ids) => {
@@ -685,7 +692,7 @@ fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 }
 fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	match obj {
-		Obj::Str(str) => format!("\"{}\"", str),
+		Obj::Str(str) => format!("\"{}\"", str.chars),
 		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
