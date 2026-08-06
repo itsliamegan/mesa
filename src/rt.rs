@@ -202,6 +202,22 @@ struct Method {
 	inst: Rc<RefCell<Obj>>,
 }
 
+impl Instance {
+	fn member(&self, types: &TypeRegistry, obj_rf: Rc<RefCell<Obj>>, name: SymId) -> Option<Val> {
+		let typ = types.get_type(self.typ);
+		if let Some(val) = self.fields.get(&name) {
+			Some(val.clone())
+		} else if let Some(proc_rf) = typ.methods.get(&name) {
+			Some(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
+				proc: proc_rf.clone(),
+				inst: obj_rf,
+			})))))
+		} else {
+			None
+		}
+	}
+}
+
 #[derive(Debug)]
 struct Scope {
 	locals: HashMap<SymId, Val>,
@@ -464,15 +480,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 				if let Val::Obj(obj_rf) = val
 					&& let Obj::Instance(inst) = &*obj_rf.borrow()
+					&& let Some(member) = inst.member(&self.types, obj_rf.clone(), *name)
 				{
-					if let Some(val) = inst.fields.get(name) {
-						return Ok(val.clone());
-					} else if let Some(proc_rf) = typ.methods.get(name) {
-						return Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
-							proc: proc_rf.clone(),
-							inst: obj_rf.clone(),
-						})))));
-					}
+					return Ok(member);
 				}
 
 				let src = self.pkg.get_src(chunk.src);
@@ -536,28 +546,21 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Ident(Ident(tok, sym_id)) => {
-				if let Some(val) = self.scope.borrow().lookup(*sym_id) {
+			Expr::Ident(Ident(tok, name)) => {
+				if let Some(val) = self.scope.borrow().lookup(*name) {
 					return Ok(val);
 				}
 
 				if let Some(inst_rf) = &self.scope.borrow().inst
 					&& let Obj::Instance(inst) = &*inst_rf.borrow()
+					&& let Some(member) = inst.member(&self.types, inst_rf.clone(), *name)
 				{
-					let typ = self.types.get_type(inst.typ);
-					if let Some(val) = inst.fields.get(sym_id) {
-						return Ok(val.clone());
-					} else if let Some(proc_rf) = typ.methods.get(sym_id) {
-						return Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
-							proc: proc_rf.clone(),
-							inst: inst_rf.clone(),
-						})))));
-					}
+					return Ok(member);
 				}
 
 				let src = self.pkg.get_src(chunk.src);
 				let loc = src.loc(tok.idx);
-				let name = self.syms.get_by_id(*sym_id);
+				let name = self.syms.get_by_id(*name);
 				Err(Signal::Error(Error::UnboundIdent(loc, name.1.clone())))
 			}
 			Expr::Builtin(builtin) => match builtin {
