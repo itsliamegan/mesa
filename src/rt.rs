@@ -103,7 +103,7 @@ enum Obj {
 	Dict(HashMap<Val, Val>),
 	Proc(Proc),
 	Type(TypeId),
-	Inst(Inst),
+	Instance(Instance),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -137,7 +137,7 @@ impl Types {
 }
 
 #[derive(Debug)]
-struct Inst {
+struct Instance {
 	typ: TypeId,
 	fields: HashMap<SymId, Val>,
 }
@@ -163,7 +163,7 @@ impl Scope {
 			Some(val) => Some(val.clone()),
 			None => match &self.inst {
 				Some(rf) => match &*rf.borrow() {
-					Obj::Inst(inst) => match inst.fields.get(&name) {
+					Obj::Instance(inst) => match inst.fields.get(&name) {
 						Some(val) => Some(val.clone()),
 						None => match &self.outer {
 							Some(outer) => outer.borrow().lookup(name),
@@ -439,7 +439,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							for (field, val) in typ.fields.iter().zip(args.into_iter()) {
 								fields.insert(*field, val);
 							}
-							let obj = Obj::Inst(Inst {
+							let obj = Obj::Instance(Instance {
 								typ: *type_id,
 								fields,
 							});
@@ -467,7 +467,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Expr::Access(Access(tok, val_id, name)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
-					Obj::Inst(inst) => match inst.fields.get(name) {
+					Obj::Instance(inst) => match inst.fields.get(name) {
 						Some(val) => Ok(val.clone()),
 						None => {
 							let typ = self.types.get_type(inst.typ);
@@ -575,7 +575,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Obj::Dict(_) => "Dict",
 							Obj::Proc(_) => "Proc",
 							Obj::Type(_) => "Type",
-							Obj::Inst(inst) => {
+							Obj::Instance(inst) => {
 								let typ = self.types.get_type(inst.typ);
 								let name = self.syms.get_by_id(typ.name);
 								name.1.as_str()
@@ -698,7 +698,7 @@ fn rt_debug(syms: &Interner, types: &Types, val: &Val) -> String {
 				res.push(')');
 				res
 			}
-			Obj::Inst(inst) => {
+			Obj::Instance(inst) => {
 				let typ = types.get_type(inst.typ);
 				let name = syms.get_by_id(typ.name);
 				let mut res = String::new();
