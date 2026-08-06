@@ -1,4 +1,8 @@
 type Account(balance)
+	def this()
+		self
+	end
+
 	def name()
 		"Checking"
 	end
@@ -15,3 +19,5 @@ acct.balance := 237.8
 $dbg(acct.balance)
 acct.name := name
 $dbg(acct.name())
+
+$dbg(acct.this())

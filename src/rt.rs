@@ -573,6 +573,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					return Ok(val);
 				}
 
+				if *name == Sym::SELF
+					&& let Some(inst) = &self.scope.borrow().inst
+				{
+					return Ok(Val::Obj(inst.clone()));
+				}
+
 				if let Some(inst_rf) = &self.scope.borrow().inst
 					&& let Obj::Instance(inst) = &*inst_rf.borrow()
 					&& let Some(member) = inst.member(&self.types, inst_rf.clone(), *name)

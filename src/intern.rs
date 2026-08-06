@@ -14,9 +14,10 @@ impl Sym {
 	pub const ELSE: Sym = Sym(7);
 	pub const END: Sym = Sym(8);
 	pub const RETURN: Sym = Sym(9);
-	pub const TRUE: Sym = Sym(10);
-	pub const FALSE: Sym = Sym(11);
-	pub const NIL: Sym = Sym(12);
+	pub const SELF: Sym = Sym(10);
+	pub const TRUE: Sym = Sym(11);
+	pub const FALSE: Sym = Sym(12);
+	pub const NIL: Sym = Sym(13);
 }
 
 const KEYWORDS: &[(&'static str, Sym)] = &[
@@ -30,6 +31,7 @@ const KEYWORDS: &[(&'static str, Sym)] = &[
 	("else", Sym::ELSE),
 	("end", Sym::END),
 	("return", Sym::RETURN),
+	("self", Sym::SELF),
 	("true", Sym::TRUE),
 	("false", Sym::FALSE),
 	("nil", Sym::NIL),
