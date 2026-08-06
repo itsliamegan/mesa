@@ -9,7 +9,7 @@ use std::rc::Rc;
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Lit,
-	Location, Package, Place, Return, Script, Token, When,
+	Location, Member, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
@@ -545,6 +545,26 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Place::Ident(Ident(_, sym_id)) => {
 						self.scope.borrow_mut().assign(*sym_id, val.clone());
 						Ok(val)
+					}
+					Place::Member(Member(tok, target_id, name)) => {
+						let target = self.eval_expr(chunk, *target_id)?;
+						let typ = self.type_of(&target);
+
+						if let Val::Obj(rf) = target
+							&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
+							&& (inst.fields.contains_key(name) || typ.methods.contains_key(name))
+						{
+							inst.fields.insert(*name, val.clone());
+							return Ok(val);
+						}
+
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(tok.idx);
+						Err(Signal::Error(Error::AccessNonMember(
+							loc,
+							self.syms.resolve(typ.name).to_string(),
+							self.syms.resolve(*name).to_string(),
+						)))
 					}
 				}
 			}

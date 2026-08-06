@@ -496,7 +496,11 @@ pub struct Assign(pub Token, pub Place, pub ExprId);
 #[derive(Debug)]
 pub enum Place {
 	Ident(Ident),
+	Member(Member),
 }
+
+#[derive(Debug)]
+pub struct Member(pub Token, pub ExprId, pub Sym);
 
 #[derive(Debug, Clone)]
 pub struct Ident(pub Token, pub Sym);
@@ -687,6 +691,9 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 					self.idx += 1;
 					let place = match self.chunk.get_expr(expr_id) {
 						Expr::Ident(ident) => Place::Ident(ident.clone()),
+						Expr::Access(Access(_, val_id, name)) => {
+							Place::Member(Member(tok, *val_id, *name))
+						}
 						_ => {
 							return Err(Error::UnexpectedToken(self.src.loc(tok.idx), tok));
 						}
