@@ -164,42 +164,28 @@ struct Scope {
 
 impl Scope {
 	fn lookup(&self, name: SymId) -> Option<Val> {
-		match self.locals.get(&name) {
-			Some(val) => Some(val.clone()),
-			None => match &self.inst {
-				Some(rf) => match &*rf.borrow() {
-					Obj::Instance(inst) => match inst.fields.get(&name) {
-						Some(val) => Some(val.clone()),
-						None => match &self.outer {
-							Some(outer) => outer.borrow().lookup(name),
-							None => None,
-						},
-					},
-					_ => panic!(),
-				},
-				None => match &self.outer {
-					Some(outer) => outer.borrow().lookup(name),
-					None => None,
-				},
-			},
+		if let Some(val) = self.locals.get(&name) {
+			return Some(val.clone());
 		}
+
+		if let Some(rf) = &self.inst
+			&& let Obj::Instance(inst) = &*rf.borrow()
+			&& let Some(val) = inst.fields.get(&name)
+		{
+			return Some(val.clone());
+		}
+
+		self.outer.as_ref()?.borrow().lookup(name)
 	}
 
 	fn assign(&mut self, name: SymId, val: Val) {
-		match &self.inst {
-			Some(rf) => match &mut *rf.borrow_mut() {
-				Obj::Instance(inst) => {
-					if inst.fields.contains_key(&name) {
-						inst.fields.insert(name, val);
-					} else {
-						self.locals.insert(name, val);
-					}
-				}
-				_ => panic!(),
-			},
-			None => {
-				self.locals.insert(name, val);
-			}
+		if let Some(rf) = &self.inst
+			&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
+			&& inst.fields.contains_key(&name)
+		{
+			inst.fields.insert(name, val);
+		} else {
+			self.locals.insert(name, val);
 		}
 	}
 }
