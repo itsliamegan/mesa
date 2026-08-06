@@ -1,28 +1,17 @@
-type Debit(amount)
-end
-
-type Credit(amount)
-end
-
-type Account(txns)
-	def balance()
-		txns
+type Account(amount)
+	def balance(new_amount)
+		when new_amount then
+			amount := new_amount
+		else
+			amount
+		end
 	end
 end
 
-acct := Account([
-	Credit(562.35),
-	Debit(19.62)
-])
+acct := Account(562.35)
 
 $dbg(acct)
-$dbg(acct.txns)
-$dbg(acct.balance())
-
-dict := {
-	"name": "Alice",
-	nil: true,
-}
-
-$dbg(dict["name"])
-$dbg(dict[nil])
+$dbg(acct.amount)
+$dbg(acct.balance(nil))
+acct.balance(123.45)
+$dbg(acct.balance(nil))

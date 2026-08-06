@@ -186,7 +186,21 @@ impl Scope {
 	}
 
 	fn assign(&mut self, name: SymId, val: Val) {
-		self.locals.insert(name, val);
+		match &self.inst {
+			Some(rf) => match &mut *rf.borrow_mut() {
+				Obj::Instance(inst) => {
+					if inst.fields.contains_key(&name) {
+						inst.fields.insert(name, val);
+					} else {
+						self.locals.insert(name, val);
+					}
+				}
+				_ => panic!(),
+			},
+			None => {
+				self.locals.insert(name, val);
+			}
+		}
 	}
 }
 
