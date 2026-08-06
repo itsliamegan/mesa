@@ -173,7 +173,6 @@ struct Proc {
 	params: Vec<SymId>,
 	body: Vec<ExprId>,
 	scope: Rc<RefCell<Scope>>,
-	inst: Option<Ref>,
 }
 
 #[derive(Debug)]
@@ -305,7 +304,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								params: params.to_vec(),
 								body: body.to_vec(),
 								scope: self.scope.clone(),
-								inst: None,
 							};
 							methods.insert(*name, Rc::new(RefCell::new(proc)));
 						}
@@ -329,7 +327,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					params: params.to_vec(),
 					body: body.to_vec(),
 					scope: self.scope.clone(),
-					inst: None,
 				});
 				let val = Val::Ref(Ref::new(obj));
 				self.scope.borrow_mut().assign(*name, val);
@@ -440,7 +437,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							let mut scope = Scope {
 								locals: HashMap::new(),
-								inst: proc.inst.clone(),
+								inst: proc.scope.borrow().inst.clone(),
 								outer: Some(proc.scope.clone()),
 							};
 							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
@@ -506,8 +503,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										name: proc.name,
 										params: proc.params.clone(),
 										body: proc.body.clone(),
-										scope: proc.scope.clone(),
-										inst: Some(rf.clone()),
+										scope: Rc::new(RefCell::new(Scope {
+											locals: HashMap::new(),
+											inst: Some(rf.clone()),
+											outer: Some(proc.scope.clone()),
+										}))
 									}))))
 								}
 								None => {
