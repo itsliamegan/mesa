@@ -136,6 +136,10 @@ impl TypeRegistry {
 		&self.types[id.0]
 	}
 
+	fn get_by_name(&self, name: SymId) -> Option<&Type> {
+		self.types.iter().find(|typ| typ.name == name)
+	}
+
 	fn add_type(&mut self, typ: Type) -> TypeId {
 		let id = TypeId(self.types.len());
 		self.types.push(typ);
@@ -418,7 +422,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								)));
 							}
 							let mut fields = HashMap::new();
-							for (field, val) in typ.fields.iter().zip(args.into_iter()) {
+							for (field, val) in typ.fields.iter().zip(args) {
 								fields.insert(*field, val);
 							}
 							let obj = Obj::Instance(Instance {
@@ -454,35 +458,31 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Access(Access(tok, val_id, name)) => match self.eval_expr(chunk, *val_id)? {
-				Val::Obj(inst_rf) => match &*inst_rf.borrow() {
-					Obj::Instance(inst) => match inst.fields.get(name) {
-						Some(val) => Ok(val.clone()),
-						None => {
-							let typ = self.types.get_type(inst.typ);
-							match typ.methods.get(name) {
-								Some(proc_rf) => {
-									Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
-										proc: proc_rf.clone(),
-										inst: inst_rf.clone(),
-									})))))
-								}
-								None => {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(tok.idx);
-									Err(Signal::Error(Error::AccessNonMember(
-										loc,
-										self.syms.get_by_id(typ.name).1.to_string(),
-										self.syms.get_by_id(*name).1.to_string(),
-									)))
-								}
-							}
-						}
-					},
-					_ => todo!(),
-				},
-				_ => todo!(),
-			},
+			Expr::Access(Access(tok, val_id, name)) => {
+				let val = self.eval_expr(chunk, *val_id)?;
+				let typ = self.type_of(&val);
+
+				if let Val::Obj(obj_rf) = val
+					&& let Obj::Instance(inst) = &*obj_rf.borrow()
+				{
+					if let Some(val) = inst.fields.get(name) {
+						return Ok(val.clone());
+					} else if let Some(proc_rf) = typ.methods.get(name) {
+						return Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
+							proc: proc_rf.clone(),
+							inst: obj_rf.clone(),
+						})))));
+					}
+				}
+
+				let src = self.pkg.get_src(chunk.src);
+				let loc = src.loc(tok.idx);
+				Err(Signal::Error(Error::AccessNonMember(
+					loc,
+					self.syms.get_by_id(typ.name).1.to_string(),
+					self.syms.get_by_id(*name).1.to_string(),
+				)))
+			}
 			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(items) => {
@@ -536,15 +536,30 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Ident(Ident(tok, sym_id)) => match self.scope.borrow().lookup(*sym_id) {
-				Some(val) => Ok(val),
-				None => {
-					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(tok.idx);
-					let name = self.syms.get_by_id(*sym_id);
-					Err(Signal::Error(Error::UnboundIdent(loc, name.1.clone())))
+			Expr::Ident(Ident(tok, sym_id)) => {
+				if let Some(val) = self.scope.borrow().lookup(*sym_id) {
+					return Ok(val);
 				}
-			},
+
+				if let Some(inst_rf) = &self.scope.borrow().inst
+					&& let Obj::Instance(inst) = &*inst_rf.borrow()
+				{
+					let typ = self.types.get_type(inst.typ);
+					if let Some(val) = inst.fields.get(sym_id) {
+						return Ok(val.clone());
+					} else if let Some(proc_rf) = typ.methods.get(sym_id) {
+						return Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
+							proc: proc_rf.clone(),
+							inst: inst_rf.clone(),
+						})))));
+					}
+				}
+
+				let src = self.pkg.get_src(chunk.src);
+				let loc = src.loc(tok.idx);
+				let name = self.syms.get_by_id(*sym_id);
+				Err(Signal::Error(Error::UnboundIdent(loc, name.1.clone())))
+			}
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Debug(_, val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
@@ -649,6 +664,50 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 		self.scope = saved;
 		Ok(res)
+	}
+
+	fn type_of(&self, val: &Val) -> &Type {
+		match val {
+			Val::Num(_) => self
+				.types
+				.get_by_name(self.syms.get_by_name("Num").unwrap().0)
+				.unwrap(),
+			Val::Bool(_) => self
+				.types
+				.get_by_name(self.syms.get_by_name("Bool").unwrap().0)
+				.unwrap(),
+			Val::Obj(rf) => match &*rf.borrow() {
+				Obj::Str(_) => self
+					.types
+					.get_by_name(self.syms.get_by_name("Str").unwrap().0)
+					.unwrap(),
+				Obj::List(_) => self
+					.types
+					.get_by_name(self.syms.get_by_name("List").unwrap().0)
+					.unwrap(),
+				Obj::Dict(_) => self
+					.types
+					.get_by_name(self.syms.get_by_name("Dict").unwrap().0)
+					.unwrap(),
+				Obj::Proc(_) => self
+					.types
+					.get_by_name(self.syms.get_by_name("Proc").unwrap().0)
+					.unwrap(),
+				Obj::Type(_) => self
+					.types
+					.get_by_name(self.syms.get_by_name("Type").unwrap().0)
+					.unwrap(),
+				Obj::Instance(inst) => self.types.get_type(inst.typ),
+				Obj::Method(_) => self
+					.types
+					.get_by_name(self.syms.get_by_name("Proc").unwrap().0)
+					.unwrap(),
+			},
+			Val::Nil => self
+				.types
+				.get_by_name(self.syms.get_by_name("Nil").unwrap().0)
+				.unwrap(),
+		}
 	}
 }
 

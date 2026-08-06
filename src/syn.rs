@@ -969,7 +969,7 @@ impl Interner {
 		}
 	}
 
-	fn get_by_name(&self, name: &str) -> Option<&Sym> {
+	pub fn get_by_name(&self, name: &str) -> Option<&Sym> {
 		match self.ids.get(name) {
 			Some(id) => Some(&self.syms[id.0]),
 			None => None,

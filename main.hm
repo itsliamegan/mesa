@@ -1,17 +1,12 @@
-type Account(amount)
-	def balance(new_amount)
-		when new_amount then
-			amount := new_amount
-		else
-			amount
-		end
+type Person(name)
+	def full()
+		name
+	end
+
+	def print()
+		$dbg(full())
 	end
 end
 
-acct := Account(562.35)
-
-$dbg(acct)
-$dbg(acct.amount)
-$dbg(acct.balance(nil))
-acct.balance(123.45)
-$dbg(acct.balance(nil))
+p := Person("Alice")
+p.print()
