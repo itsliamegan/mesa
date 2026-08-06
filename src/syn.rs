@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{Index, Range};
 
-use crate::intern::{Interner, SymId};
+use crate::intern::{Interner, Sym};
 
 #[derive(Debug)]
 pub enum Error {
@@ -443,10 +443,10 @@ pub enum Decl {
 }
 
 #[derive(Debug)]
-pub struct Type(pub Token, pub SymId, pub Vec<SymId>, pub Vec<DeclId>);
+pub struct Type(pub Token, pub Sym, pub Vec<Sym>, pub Vec<DeclId>);
 
 #[derive(Debug)]
-pub struct Def(pub Token, pub SymId, pub Vec<SymId>, pub Vec<ExprId>);
+pub struct Def(pub Token, pub Sym, pub Vec<Sym>, pub Vec<ExprId>);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ExprId(usize);
@@ -466,7 +466,7 @@ pub enum Expr {
 }
 
 #[derive(Debug)]
-pub struct Each(pub Token, pub SymId, pub ExprId, pub Vec<ExprId>);
+pub struct Each(pub Token, pub Sym, pub ExprId, pub Vec<ExprId>);
 
 #[derive(Debug)]
 pub struct When(
@@ -483,7 +483,7 @@ pub struct Return(pub Token, pub ExprId);
 pub struct Call(pub Token, pub ExprId, pub Vec<ExprId>);
 
 #[derive(Debug)]
-pub struct Access(pub Token, pub ExprId, pub SymId);
+pub struct Access(pub Token, pub ExprId, pub Sym);
 
 #[derive(Debug)]
 pub struct Script(pub Token, pub ExprId, pub ExprId);
@@ -497,7 +497,7 @@ pub enum Place {
 }
 
 #[derive(Debug, Clone)]
-pub struct Ident(pub Token, pub SymId);
+pub struct Ident(pub Token, pub Sym);
 
 #[derive(Debug, Clone)]
 pub enum Builtin {
@@ -603,7 +603,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		let span = self.src[ident.idx..ident.idx + ident.len]
 			.iter()
 			.collect::<String>();
-		let name = self.syms.get_or_add(&span);
+		let name = self.syms.intern(&span);
 		let mut fields = Vec::new();
 		if self.toks[self.idx].tag == TokenTag::LParen {
 			self.take(TokenTag::LParen)?;
@@ -612,7 +612,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				let span = self.src[tok.idx..tok.idx + tok.len]
 					.iter()
 					.collect::<String>();
-				let field = self.syms.get_or_add(&span);
+				let field = self.syms.intern(&span);
 				fields.push(field);
 				match self.toks[self.idx].tag {
 					TokenTag::Comma => {
@@ -642,7 +642,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		let span = self.src[ident.idx..ident.idx + ident.len]
 			.iter()
 			.collect::<String>();
-		let name = self.syms.get_or_add(&span);
+		let name = self.syms.intern(&span);
 		let mut params = Vec::new();
 		self.take(TokenTag::LParen)?;
 		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
@@ -650,7 +650,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			let span = self.src[tok.idx..tok.idx + tok.len]
 				.iter()
 				.collect::<String>();
-			let param = self.syms.get_or_add(&span);
+			let param = self.syms.intern(&span);
 			params.push(param);
 			match self.toks[self.idx].tag {
 				TokenTag::Comma => {
@@ -698,7 +698,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 					let span = self.src[ident.idx..ident.idx + ident.len]
 						.iter()
 						.collect::<String>();
-					let field = self.syms.get_or_add(&span);
+					let field = self.syms.intern(&span);
 					let expr = Expr::Access(Access(tok, val_id, field));
 					expr_id = self.chunk.add_expr(expr);
 				}
@@ -766,7 +766,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		let span = self.src[ident.idx..ident.idx + ident.len]
 			.iter()
 			.collect::<String>();
-		let item = self.syms.get_or_add(&span);
+		let item = self.syms.intern(&span);
 		self.take(TokenTag::In)?;
 		let iter = self.parse_expr()?;
 		self.take(TokenTag::Do)?;
@@ -817,7 +817,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		let span = self.src[tok.idx..tok.idx + tok.len]
 			.iter()
 			.collect::<String>();
-		let sym_id = self.syms.get_or_add(&span);
+		let sym_id = self.syms.intern(&span);
 		Ok(Expr::Ident(Ident(tok, sym_id)))
 	}
 

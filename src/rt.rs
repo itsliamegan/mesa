@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::rc::Rc;
 
-use crate::intern::{Interner, SymId};
+use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Lit,
 	Location, Package, Place, Return, Script, Token, When,
@@ -123,8 +123,8 @@ struct Dict {
 
 #[derive(Debug)]
 struct Proc {
-	name: SymId,
-	params: Vec<SymId>,
+	name: Sym,
+	params: Vec<Sym>,
 	body: Vec<ExprId>,
 	scope: Rc<RefCell<Scope>>,
 }
@@ -157,9 +157,9 @@ struct TypeId(usize);
 
 #[derive(Debug)]
 struct Type {
-	name: SymId,
-	fields: Vec<SymId>,
-	methods: HashMap<SymId, Rc<RefCell<Proc>>>,
+	name: Sym,
+	fields: Vec<Sym>,
+	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
 }
 
 struct TypeRegistry {
@@ -172,7 +172,7 @@ impl TypeRegistry {
 
 		for (_id, name) in CORE_TYPES {
 			types.push(Type {
-				name: syms.get_or_add(name),
+				name: syms.intern(name),
 				fields: Vec::new(),
 				methods: HashMap::new(),
 			});
@@ -185,7 +185,7 @@ impl TypeRegistry {
 		&self.types[id.0]
 	}
 
-	fn get_by_name(&self, name: SymId) -> Option<&Type> {
+	fn get_by_name(&self, name: Sym) -> Option<&Type> {
 		self.types.iter().find(|typ| typ.name == name)
 	}
 
@@ -199,7 +199,7 @@ impl TypeRegistry {
 #[derive(Debug)]
 struct Instance {
 	typ: TypeId,
-	fields: HashMap<SymId, Val>,
+	fields: HashMap<Sym, Val>,
 }
 
 #[derive(Debug)]
@@ -209,7 +209,7 @@ struct Method {
 }
 
 impl Instance {
-	fn member(&self, types: &TypeRegistry, obj_rf: Rc<RefCell<Obj>>, name: SymId) -> Option<Val> {
+	fn member(&self, types: &TypeRegistry, obj_rf: Rc<RefCell<Obj>>, name: Sym) -> Option<Val> {
 		let typ = types.get_type(self.typ);
 		if let Some(val) = self.fields.get(&name) {
 			Some(val.clone())
@@ -226,13 +226,13 @@ impl Instance {
 
 #[derive(Debug)]
 struct Scope {
-	locals: HashMap<SymId, Val>,
+	locals: HashMap<Sym, Val>,
 	inst: Option<Rc<RefCell<Obj>>>,
 	outer: Option<Rc<RefCell<Scope>>>,
 }
 
 impl Scope {
-	fn lookup(&self, name: SymId) -> Option<Val> {
+	fn lookup(&self, name: Sym) -> Option<Val> {
 		if let Some(val) = self.locals.get(&name) {
 			return Some(val.clone());
 		}
@@ -247,7 +247,7 @@ impl Scope {
 		self.outer.as_ref()?.borrow().lookup(name)
 	}
 
-	fn assign(&mut self, name: SymId, val: Val) {
+	fn assign(&mut self, name: Sym, val: Val) {
 		if let Some(rf) = &self.inst
 			&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
 			&& inst.fields.contains_key(&name)
@@ -495,8 +495,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let loc = src.loc(tok.idx);
 				Err(Signal::Error(Error::AccessNonMember(
 					loc,
-					self.syms.get_by_id(typ.name).1.to_string(),
-					self.syms.get_by_id(*name).1.to_string(),
+					self.syms.resolve(typ.name).to_string(),
+					self.syms.resolve(*name).to_string(),
 				)))
 			}
 			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
@@ -566,19 +566,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 				let src = self.pkg.get_src(chunk.src);
 				let loc = src.loc(tok.idx);
-				let name = self.syms.get_by_id(*name);
-				Err(Signal::Error(Error::UnboundIdent(loc, name.1.clone())))
+				let name = self.syms.resolve(*name);
+				Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
 			}
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Debug(_, val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
 					let typ = self.type_of(&val);
-					let desc = self.syms.get_by_id(self.type_of(&val).name);
-					println!(
-						"({})\t{}",
-						desc.1,
-						rt_debug_val(self.syms, &self.types, &val)
-					);
+					let name = self.syms.resolve(self.type_of(&val).name);
+					println!("({})\t{}", name, rt_debug_val(self.syms, &self.types, &val));
 					Ok(val)
 				}
 			},
@@ -723,12 +719,12 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 		Obj::Proc(proc) => rt_debug_proc(syms, types, proc),
 		Obj::Type(id) => {
 			let typ = types.get_type(*id);
-			let name = syms.get_by_id(typ.name);
+			let name = syms.resolve(typ.name);
 			let mut res = String::new();
-			res.push_str(&format!("type {}(", name.1));
+			res.push_str(&format!("type {}(", name));
 			for (i, field) in typ.fields.iter().enumerate() {
-				let field = syms.get_by_id(*field);
-				res.push_str(&field.1);
+				let field = syms.resolve(*field);
+				res.push_str(field);
 				if i + 1 != typ.fields.len() {
 					res.push_str(", ");
 				}
@@ -738,9 +734,9 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 		}
 		Obj::Instance(inst) => {
 			let typ = types.get_type(inst.typ);
-			let name = syms.get_by_id(typ.name);
+			let name = syms.resolve(typ.name);
 			let mut res = String::new();
-			res.push_str(&format!("{}(", name.1));
+			res.push_str(&format!("{}(", name));
 			for (i, (_, field)) in inst.fields.iter().enumerate() {
 				res.push_str(&rt_debug_val(syms, types, field));
 				if i + 1 != inst.fields.len() {
@@ -756,11 +752,11 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 
 fn rt_debug_proc(syms: &Interner, types: &TypeRegistry, proc: &Proc) -> String {
 	let mut res = String::new();
-	let name = syms.get_by_id(proc.name);
-	res.push_str(&format!("def {}(", name.1));
+	let name = syms.resolve(proc.name);
+	res.push_str(&format!("def {}(", name));
 	for (i, param) in proc.params.iter().enumerate() {
-		let param = syms.get_by_id(*param);
-		res.push_str(&param.1);
+		let param = syms.resolve(*param);
+		res.push_str(param);
 		if i + 1 != proc.params.len() {
 			res.push_str(", ");
 		}
