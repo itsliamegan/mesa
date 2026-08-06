@@ -185,10 +185,6 @@ impl TypeRegistry {
 		&self.types[id.0 as usize]
 	}
 
-	fn get_by_name(&self, name: Sym) -> Option<&Type> {
-		self.types.iter().find(|typ| typ.name == name)
-	}
-
 	fn add_type(&mut self, typ: Type) -> TypeId {
 		let id = TypeId(self.types.len() as u32);
 		self.types.push(typ);
