@@ -49,11 +49,11 @@ impl Package {
 	}
 
 	pub fn get_src(&self, id: SourceId) -> &Source {
-		&self.srcs[id.0]
+		&self.srcs[id.0 as usize]
 	}
 
 	pub fn add_src(&mut self, file: String, chars: Vec<char>) -> SourceId {
-		let id = SourceId(self.srcs.len());
+		let id = SourceId(self.srcs.len() as u32);
 		let src = Source { id, file, chars };
 		self.srcs.push(src);
 		id
@@ -61,7 +61,7 @@ impl Package {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct SourceId(usize);
+pub struct SourceId(u32);
 
 #[derive(Debug)]
 pub struct Source {
@@ -433,7 +433,7 @@ impl<'src> Lexer<'src> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct DeclId(usize);
+pub struct DeclId(u32);
 
 #[derive(Debug)]
 pub enum Decl {
@@ -449,7 +449,7 @@ pub struct Type(pub Token, pub Sym, pub Vec<Sym>, pub Vec<DeclId>);
 pub struct Def(pub Token, pub Sym, pub Vec<Sym>, pub Vec<ExprId>);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct ExprId(usize);
+pub struct ExprId(u32);
 
 #[derive(Debug)]
 pub enum Expr {
@@ -515,7 +515,7 @@ pub enum Lit {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct ChunkId(usize);
+pub struct ChunkId(u32);
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -536,21 +536,23 @@ impl Chunk {
 	}
 
 	pub fn get_decl(&self, decl_id: DeclId) -> &Decl {
-		&self.decls[decl_id.0]
+		&self.decls[decl_id.0 as usize]
 	}
 
 	pub fn add_decl(&mut self, decl: Decl) -> DeclId {
+		let id = DeclId(self.decls.len() as u32);
 		self.decls.push(decl);
-		DeclId(self.decls.len() - 1)
+		id
 	}
 
 	pub fn get_expr(&self, expr_id: ExprId) -> &Expr {
-		&self.exprs[expr_id.0]
+		&self.exprs[expr_id.0 as usize]
 	}
 
 	pub fn add_expr(&mut self, expr: Expr) -> ExprId {
+		let id = ExprId(self.exprs.len() as u32);
 		self.exprs.push(expr);
-		ExprId(self.exprs.len() - 1)
+		id
 	}
 
 	pub fn add_to_top(&mut self, decl_id: DeclId) {

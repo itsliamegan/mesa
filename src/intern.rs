@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct Sym(usize);
+pub struct Sym(u32);
 
 pub struct Interner {
 	syms: HashMap<&'static str, Sym>,
@@ -22,13 +22,13 @@ impl Interner {
 		}
 
 		let leaked = Box::leak(Box::from(name));
-		let sym = Sym(self.names.len());
+		let sym = Sym(self.names.len() as u32);
 		self.syms.insert(leaked, sym);
 		self.names.push(leaked);
 		sym
 	}
 
 	pub fn resolve(&self, sym: Sym) -> &str {
-		self.names[sym.0]
+		self.names[sym.0 as usize]
 	}
 }
