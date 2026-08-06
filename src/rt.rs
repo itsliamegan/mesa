@@ -128,7 +128,7 @@ enum Obj {
 	Dict(HashMap<Val, Val>),
 	Proc(Proc),
 	Type(TypeId),
-	Inst(TypeId, HashMap<SymId, Val>),
+	Inst(Inst),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,7 +138,7 @@ struct TypeId(usize);
 struct Type {
 	name: SymId,
 	fields: Vec<SymId>,
-	methods: HashMap<SymId, Ref>,
+	methods: HashMap<SymId, Rc<RefCell<Proc>>>,
 }
 
 struct Types {
@@ -162,46 +162,52 @@ impl Types {
 }
 
 #[derive(Debug)]
+struct Inst {
+	typ: TypeId,
+	fields: HashMap<SymId, Val>,
+}
+
+#[derive(Debug)]
 struct Proc {
 	name: SymId,
 	params: Vec<SymId>,
 	body: Vec<ExprId>,
 	scope: Rc<RefCell<Scope>>,
+	inst: Option<Ref>,
 }
 
 #[derive(Debug)]
 struct Scope {
-	vals: HashMap<SymId, Val>,
+	locals: HashMap<SymId, Val>,
+	inst: Option<Ref>,
 	outer: Option<Rc<RefCell<Scope>>>,
 }
 
 impl Scope {
-	fn root() -> Self {
-		Self {
-			vals: HashMap::new(),
-			outer: None,
-		}
-	}
-
-	fn within(outer: Rc<RefCell<Self>>) -> Self {
-		Self {
-			vals: HashMap::new(),
-			outer: Some(outer),
-		}
-	}
-
 	fn lookup(&self, name: SymId) -> Option<Val> {
-		match self.vals.get(&name) {
+		match self.locals.get(&name) {
 			Some(val) => Some(val.clone()),
-			None => match &self.outer {
-				Some(outer) => outer.borrow().lookup(name),
-				None => None,
+			None => match &self.inst {
+				Some(rf) => match &*rf.get() {
+					Obj::Inst(inst) => match inst.fields.get(&name) {
+						Some(val) => Some(val.clone()),
+						None => match &self.outer {
+							Some(outer) => outer.borrow().lookup(name),
+							None => None,
+						},
+					},
+					_ => panic!(),
+				},
+				None => match &self.outer {
+					Some(outer) => outer.borrow().lookup(name),
+					None => None,
+				},
 			},
 		}
 	}
 
 	fn assign(&mut self, name: SymId, val: Val) {
-		self.vals.insert(name, val);
+		self.locals.insert(name, val);
 	}
 }
 
@@ -261,11 +267,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			methods: HashMap::new(),
 		});
 
+		let scope = Scope {
+			locals: HashMap::new(),
+			inst: None,
+			outer: None,
+		};
+
 		Self {
 			syms,
 			pkg,
 			types,
-			scope: Rc::new(RefCell::new(Scope::root())),
+			scope: Rc::new(RefCell::new(scope)),
 		}
 	}
 
@@ -288,13 +300,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					match chunk.get_decl(*decl_id) {
 						Decl::Type(syn::Type(_, _, _, _)) => todo!(),
 						Decl::Def(Def(_, name, params, body)) => {
-							let proc = Obj::Proc(Proc {
+							let proc = Proc {
 								name: *name,
 								params: params.to_vec(),
 								body: body.to_vec(),
 								scope: self.scope.clone(),
-							});
-							methods.insert(*name, Ref::new(proc));
+								inst: None,
+							};
+							methods.insert(*name, Rc::new(RefCell::new(proc)));
 						}
 						Decl::Expr(_) => todo!(),
 					}
@@ -316,6 +329,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					params: params.to_vec(),
 					body: body.to_vec(),
 					scope: self.scope.clone(),
+					inst: None,
 				});
 				let val = Val::Ref(Ref::new(obj));
 				self.scope.borrow_mut().assign(*name, val);
@@ -334,7 +348,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Val::Ref(rf) => match &*rf.get() {
 					Obj::List(items) => {
 						let outer_scope = self.scope.clone();
-						let inner_scope = Scope::within(outer_scope.clone());
+						let inner_scope = Scope {
+							locals: HashMap::new(),
+							inst: outer_scope.borrow().inst.clone(),
+							outer: Some(outer_scope.clone()),
+						};
 						self.scope = Rc::new(RefCell::new(inner_scope));
 						for item in items {
 							self.scope.borrow_mut().assign(*name, item.clone());
@@ -381,10 +399,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					_ => false,
 				};
 				if cond {
-					let scope = Scope::within(self.scope.clone());
+					let scope = Scope {
+						locals: HashMap::new(),
+						inst: self.scope.borrow().inst.clone(),
+						outer: Some(self.scope.clone()),
+					};
 					self.eval_exprs(chunk, scope, then_branch)
 				} else if let Some(else_branch) = else_branch {
-					let scope = Scope::within(self.scope.clone());
+					let scope = Scope {
+						locals: HashMap::new(),
+						inst: self.scope.borrow().inst.clone(),
+						outer: Some(self.scope.clone()),
+					};
 					self.eval_exprs(chunk, scope, else_branch)
 				} else {
 					Ok(Val::Nil)
@@ -412,7 +438,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									proc.params.len(),
 								)));
 							}
-							let mut scope = Scope::within(proc.scope.clone());
+							let mut scope = Scope {
+								locals: HashMap::new(),
+								inst: proc.inst.clone(),
+								outer: Some(proc.scope.clone()),
+							};
 							for (arg, param) in args.into_iter().zip(proc.params.iter()) {
 								scope.assign(*param, arg);
 							}
@@ -437,7 +467,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							for (field, val) in typ.fields.iter().zip(args.into_iter()) {
 								fields.insert(*field, val);
 							}
-							let obj = Obj::Inst(*type_id, fields);
+							let obj = Obj::Inst(Inst {
+								typ: *type_id,
+								fields,
+							});
 							let val = Val::Ref(Ref::new(obj));
 							Ok(val)
 						}
@@ -462,12 +495,21 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Expr::Access(Access(tok, val_id, name)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Ref(rf) => match &*rf.get() {
-					Obj::Inst(type_id, fields) => match fields.get(name) {
+					Obj::Inst(inst) => match inst.fields.get(name) {
 						Some(val) => Ok(val.clone()),
 						None => {
-							let typ = self.types.get_type(*type_id);
+							let typ = self.types.get_type(inst.typ);
 							match typ.methods.get(name) {
-								Some(rf) => Ok(Val::Ref(rf.clone())),
+								Some(proc_rf) => {
+									let proc = proc_rf.borrow();
+									Ok(Val::Ref(Ref::new(Obj::Proc(Proc {
+										name: proc.name,
+										params: proc.params.clone(),
+										body: proc.body.clone(),
+										scope: proc.scope.clone(),
+										inst: Some(rf.clone()),
+									}))))
+								}
 								None => {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(tok.idx);
@@ -558,8 +600,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Obj::Dict(_) => "Dict",
 							Obj::Proc(_) => "Proc",
 							Obj::Type(_) => "Type",
-							Obj::Inst(type_id, _) => {
-								let typ = self.types.get_type(*type_id);
+							Obj::Inst(inst) => {
+								let typ = self.types.get_type(inst.typ);
 								let name = self.syms.get_by_id(typ.name);
 								name.1.as_str()
 							}
@@ -681,14 +723,14 @@ fn rt_debug(syms: &Interner, types: &Types, val: &Val) -> String {
 				res.push(')');
 				res
 			}
-			Obj::Inst(type_id, fields) => {
-				let typ = types.get_type(*type_id);
+			Obj::Inst(inst) => {
+				let typ = types.get_type(inst.typ);
 				let name = syms.get_by_id(typ.name);
 				let mut res = String::new();
 				res.push_str(&format!("{}(", name.1));
-				for (i, (_, field)) in fields.iter().enumerate() {
+				for (i, (_, field)) in inst.fields.iter().enumerate() {
 					res.push_str(&rt_debug(syms, types, field));
-					if i + 1 != fields.len() {
+					if i + 1 != inst.fields.len() {
 						res.push_str(", ");
 					}
 				}

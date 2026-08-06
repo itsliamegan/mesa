@@ -6,7 +6,7 @@ end
 
 type Account(txns)
 	def balance()
-		5
+		txns
 	end
 end
 
