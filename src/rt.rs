@@ -123,11 +123,11 @@ struct Type {
 	methods: HashMap<SymId, Rc<RefCell<Proc>>>,
 }
 
-struct Types {
+struct TypeRegistry {
 	types: Vec<Type>,
 }
 
-impl Types {
+impl TypeRegistry {
 	fn new() -> Self {
 		Self { types: Vec::new() }
 	}
@@ -193,7 +193,7 @@ impl Scope {
 pub struct Interpreter<'syms, 'pkg> {
 	syms: &'syms Interner,
 	pkg: &'pkg Package,
-	types: Types,
+	types: TypeRegistry,
 	scope: Rc<RefCell<Scope>>,
 }
 
@@ -204,7 +204,7 @@ enum Signal {
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
-		let mut types = Types::new();
+		let mut types = TypeRegistry::new();
 		types.add_type(Type {
 			name: syms.get_or_add("Num"),
 			fields: Vec::new(),
@@ -652,7 +652,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 }
 
-fn rt_debug_val(syms: &Interner, types: &Types, val: &Val) -> String {
+fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
@@ -660,7 +660,7 @@ fn rt_debug_val(syms: &Interner, types: &Types, val: &Val) -> String {
 		Val::Nil => String::from("nil"),
 	}
 }
-fn rt_debug_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
+fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	match obj {
 		Obj::Str(str) => format!("\"{}\"", str),
 		Obj::List(items) => {
@@ -723,7 +723,7 @@ fn rt_debug_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
 	}
 }
 
-fn rt_debug_proc(syms: &Interner, types: &Types, proc: &Proc) -> String {
+fn rt_debug_proc(syms: &Interner, types: &TypeRegistry, proc: &Proc) -> String {
 	let mut res = String::new();
 	let name = syms.get_by_id(proc.name);
 	res.push_str(&format!("def {}(", name.1));
