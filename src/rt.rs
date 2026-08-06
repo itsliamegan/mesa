@@ -6,9 +6,10 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::rc::Rc;
 
+use crate::intern::{Interner, SymId};
 use crate::syn::{
-	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident,
-	Interner, Lit, Location, Package, Place, Return, Script, SymId, Token, When,
+	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Lit,
+	Location, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
