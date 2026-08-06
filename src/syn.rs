@@ -208,14 +208,15 @@ impl TokenTag {
 	}
 }
 
-pub struct Lexer<'src> {
+pub struct Lexer<'syms, 'src> {
+	syms: &'syms mut Interner,
 	src: &'src Source,
 	idx: usize,
 }
 
-impl<'src> Lexer<'src> {
-	pub fn new(src: &'src Source) -> Self {
-		Self { src, idx: 0 }
+impl<'syms, 'src> Lexer<'syms, 'src> {
+	pub fn new(syms: &'syms mut Interner, src: &'src Source) -> Self {
+		Self { syms, src, idx: 0 }
 	}
 
 	pub fn lex(mut self) -> Result<Vec<Token>, Error> {
@@ -355,19 +356,20 @@ impl<'src> Lexer<'src> {
 			self.idx += 1;
 		}
 		let span = self.src[idx..self.idx].iter().collect::<String>();
-		let tag = match span.as_str() {
-			"type" => TokenTag::Type,
-			"def" => TokenTag::Def,
-			"each" => TokenTag::Each,
-			"do" => TokenTag::Do,
-			"in" => TokenTag::In,
-			"when" => TokenTag::When,
-			"then" => TokenTag::Then,
-			"else" => TokenTag::Else,
-			"end" => TokenTag::End,
-			"return" => TokenTag::Return,
-			"true" | "false" => TokenTag::Bool,
-			"nil" => TokenTag::Nil,
+		let sym = self.syms.intern(span.as_str());
+		let tag = match sym {
+			Sym::TYPE => TokenTag::Type,
+			Sym::DEF => TokenTag::Def,
+			Sym::EACH => TokenTag::Each,
+			Sym::DO => TokenTag::Do,
+			Sym::IN => TokenTag::In,
+			Sym::WHEN => TokenTag::When,
+			Sym::THEN => TokenTag::Then,
+			Sym::ELSE => TokenTag::Else,
+			Sym::END => TokenTag::End,
+			Sym::RETURN => TokenTag::Return,
+			Sym::TRUE | Sym::FALSE => TokenTag::Bool,
+			Sym::NIL => TokenTag::Nil,
 			_ => TokenTag::Ident,
 		};
 		Ok(Token {

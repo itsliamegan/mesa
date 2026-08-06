@@ -32,7 +32,7 @@ fn main() {
 	let src_id = pkg.add_src(file, chars);
 	let src = pkg.get_src(src_id);
 
-	match Lexer::new(src).lex() {
+	match Lexer::new(&mut syms, src).lex() {
 		Ok(toks) => match Parser::new(&mut syms, src, toks).parse() {
 			Ok(chunk) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
 				Ok(()) => {}
