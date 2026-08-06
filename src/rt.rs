@@ -759,9 +759,10 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let name = syms.resolve(typ.name);
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
-			for (i, (_, field)) in inst.fields.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, field));
-				if i + 1 != inst.fields.len() {
+			for (i, name) in typ.fields.iter().enumerate() {
+				let val = inst.fields.get(name).unwrap();
+				res.push_str(&rt_debug_val(syms, types, val));
+				if i + 1 != typ.fields.len() {
 					res.push_str(", ");
 				}
 			}
