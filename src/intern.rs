@@ -44,7 +44,7 @@ pub struct Interner {
 
 impl Interner {
 	pub fn new() -> Self {
-		let mut syms = HashMap::new();
+		let mut syms = HashMap::with_capacity(KEYWORDS.len());
 		let mut names = Vec::new();
 
 		for (name, sym) in KEYWORDS {
