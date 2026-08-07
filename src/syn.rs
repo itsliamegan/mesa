@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{Index, Range};
 

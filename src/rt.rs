@@ -3,13 +3,12 @@ use std::cmp::{Eq, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Assign, Block, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
-	ExprId, Ident, Lit, Location, Member, Package, Place, Return, Script, Token, When,
+	self, Access, Assign, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId,
+	Ident, Lit, Location, Member, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
@@ -90,7 +89,7 @@ impl Hash for Val {
 				Obj::Str(str) => str.chars.hash(state),
 				_ => rf.as_ptr().hash(state),
 			},
-			Self::Nil => ().hash(state),
+			Self::Nil => 0_u8.hash(state),
 		}
 	}
 }
@@ -453,7 +452,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Some(meth.inst.clone()),
 							args,
 						),
-						obj => {
+						_ => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.idx);
 							Err(Signal::Error(Error::CallNonCallable(
@@ -517,7 +516,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							None => Ok(Val::Nil),
 						}
 					}
-					obj => {
+					_ => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(tok.idx);
 						Err(Signal::Error(Error::ScriptNonScriptable(
@@ -590,7 +589,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Debug(_, val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
-					let typ = self.type_of(&val);
 					let name = self.syms.resolve(self.type_of(&val).name);
 					println!("({})\t{}", name, rt_debug_val(self.syms, &self.types, &val));
 					Ok(val)
@@ -707,7 +705,7 @@ fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
-		Val::Obj(rf) => rt_debug_obj(syms, types, &*rf.borrow()),
+		Val::Obj(rf) => rt_debug_obj(syms, types, &rf.borrow()),
 		Val::Nil => String::from("nil"),
 	}
 }
@@ -740,7 +738,7 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res.push('}');
 			res
 		}
-		Obj::Proc(proc) => rt_debug_proc(syms, types, proc),
+		Obj::Proc(proc) => rt_debug_proc(syms, proc),
 		Obj::Type(id) => {
 			let typ = types.get_type(*id);
 			let name = syms.resolve(typ.name);
@@ -771,11 +769,11 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res.push(')');
 			res
 		}
-		Obj::Method(meth) => rt_debug_proc(syms, types, &*meth.proc.borrow()),
+		Obj::Method(meth) => rt_debug_proc(syms, &meth.proc.borrow()),
 	}
 }
 
-fn rt_debug_proc(syms: &Interner, types: &TypeRegistry, proc: &Proc) -> String {
+fn rt_debug_proc(syms: &Interner, proc: &Proc) -> String {
 	let mut res = String::new();
 	let name = syms.resolve(proc.name);
 	res.push_str(&format!("def {}(", name));
