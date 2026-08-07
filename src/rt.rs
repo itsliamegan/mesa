@@ -128,31 +128,30 @@ struct Proc {
 	scope: Rc<RefCell<Scope>>,
 }
 
-macro_rules! def_core_types {
-	($( ($const_name:ident, $idx:expr, $str_name:expr) ),* $(,)?) => {
-		impl TypeId {
-			$( pub const $const_name: TypeId = TypeId($idx); )*
-		}
-
-		const CORE_TYPES: &[(TypeId, &'static str)] = &[
-			$( (TypeId::$const_name, $str_name) ),*
-		];
-	};
-}
-
-def_core_types! {
-	(NIL, 0, "Nil"),
-	(NUM, 1, "Num"),
-	(BOOL, 1, "Bool"),
-	(STR, 3, "Str"),
-	(LIST, 4, "List"),
-	(DICT, 5, "Dict"),
-	(TYPE, 6, "Type"),
-	(PROC, 7, "Proc"),
-}
-
 #[derive(Debug, Clone, Copy)]
 struct TypeId(u32);
+
+impl TypeId {
+	const NIL: TypeId = TypeId(0);
+	const NUM: TypeId = TypeId(1);
+	const BOOL: TypeId = TypeId(2);
+	const STR: TypeId = TypeId(3);
+	const LIST: TypeId = TypeId(4);
+	const DICT: TypeId = TypeId(5);
+	const PROC: TypeId = TypeId(6);
+	const TYPE: TypeId = TypeId(7);
+}
+
+const CORE_TYPES: &[(&str, TypeId)] = &[
+	("Nil", TypeId::NIL),
+	("Num", TypeId::NUM),
+	("Bool", TypeId::BOOL),
+	("Str", TypeId::STR),
+	("List", TypeId::LIST),
+	("Dict", TypeId::DICT),
+	("Proc", TypeId::PROC),
+	("Type", TypeId::TYPE),
+];
 
 #[derive(Debug)]
 struct Type {
@@ -169,7 +168,7 @@ impl TypeRegistry {
 	fn new(syms: &mut Interner) -> Self {
 		let mut types = Vec::with_capacity(CORE_TYPES.len());
 
-		for (_id, name) in CORE_TYPES {
+		for (name, _id) in CORE_TYPES {
 			types.push(Type {
 				name: syms.intern(name),
 				fields: Vec::new(),
