@@ -1,16 +1,12 @@
 #![allow(unused)]
 
-mod intern;
-mod rt;
-mod syn;
-
 use std::env;
 use std::fs;
 use std::process;
 
-use crate::intern::Interner;
-use crate::rt::Interpreter;
-use crate::syn::{Lexer, Package, Parser};
+use mesa::intern::Interner;
+use mesa::rt::Interpreter;
+use mesa::syn::{Lexer, Package, Parser};
 
 fn main() {
 	let args = env::args().collect::<Vec<_>>();
