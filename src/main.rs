@@ -19,17 +19,14 @@ fn main() {
 		process::exit(1);
 	}
 	let file = args[1].clone();
-	let chars = match fs::read_to_string(&file) {
-		Ok(str) => str.chars().collect::<Vec<_>>(),
-		Err(_) => {
-			eprintln!("error: cannot read file '{}'", file);
-			process::exit(1);
-		}
+	let Ok(text) = fs::read_to_string(&file) else {
+		eprintln!("error: cannot read file '{}'", file);
+		process::exit(1);
 	};
 
 	let mut syms = Interner::new();
 	let mut pkg = Package::new();
-	let src_id = pkg.add_src(file, chars);
+	let src_id = pkg.add_src(file, text);
 	let src = pkg.get_src(src_id);
 
 	match Lexer::new(&mut syms, src).lex() {

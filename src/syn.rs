@@ -51,9 +51,9 @@ impl Package {
 		&self.srcs[id.0 as usize]
 	}
 
-	pub fn add_src(&mut self, file: String, chars: Vec<char>) -> SourceId {
+	pub fn add_src(&mut self, file: String, text: String) -> SourceId {
 		let id = SourceId(self.srcs.len() as u32);
-		let src = Source { id, file, chars };
+		let src = Source { id, file, text };
 		self.srcs.push(src);
 		id
 	}
@@ -66,20 +66,20 @@ pub struct SourceId(u32);
 pub struct Source {
 	id: SourceId,
 	file: String,
-	chars: Vec<char>,
+	text: String,
 }
 
 impl Source {
 	pub fn len(&self) -> usize {
-		self.chars.len()
+		self.text.len()
 	}
 
 	pub fn loc(&self, idx: usize) -> Location {
 		let mut i = 0;
 		let mut lin = 1;
 		let mut col = 1;
-		while i < idx && i < self.chars.len() {
-			if self.chars[i] == '\n' {
+		while i < idx && i < self.text.as_bytes().len() {
+			if self.text.as_bytes()[i] == b'\n' {
 				lin += 1;
 				col = 1;
 			} else {
@@ -96,18 +96,18 @@ impl Source {
 }
 
 impl Index<usize> for Source {
-	type Output = char;
+	type Output = u8;
 
 	fn index(&self, idx: usize) -> &Self::Output {
-		&self.chars[idx]
+		&self.text.as_bytes()[idx]
 	}
 }
 
 impl Index<Range<usize>> for Source {
-	type Output = [char];
+	type Output = str;
 
 	fn index(&self, idx: Range<usize>) -> &Self::Output {
-		&self.chars[idx.start..idx.end]
+		&self.text[idx]
 	}
 }
 
@@ -228,7 +228,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	}
 
 	fn lex_next(&mut self) -> Result<Token, Error> {
-		while self.idx < self.src.len() && self.src[self.idx].is_whitespace() {
+		while self.idx < self.src.len() && self.src[self.idx].is_ascii_whitespace() {
 			self.idx += 1;
 		}
 		if self.idx == self.src.len() {
@@ -240,8 +240,8 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			});
 		}
 		match self.src[self.idx] {
-			':' => {
-				if self.idx + 1 < self.src.len() && self.src[self.idx + 1] == '=' {
+			b':' => {
+				if self.idx + 1 < self.src.len() && self.src[self.idx + 1] == b'=' {
 					self.idx += 2;
 					Ok(Token {
 						src: self.src.id,
@@ -259,7 +259,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					})
 				}
 			}
-			'{' => {
+			b'{' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -268,7 +268,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			'}' => {
+			b'}' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -277,7 +277,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			'[' => {
+			b'[' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -286,7 +286,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			']' => {
+			b']' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -295,7 +295,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			'(' => {
+			b'(' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -304,7 +304,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			')' => {
+			b')' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -313,7 +313,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			',' => {
+			b',' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -322,7 +322,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			'.' => {
+			b'.' => {
 				self.idx += 1;
 				Ok(Token {
 					src: self.src.id,
@@ -331,15 +331,16 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					len: 1,
 				})
 			}
-			'"' => self.lex_str(),
-			'$' => self.lex_builtin(),
-			ch => {
-				if ch.is_alphabetic() || ch == '_' {
+			b'"' => self.lex_str(),
+			b'$' => self.lex_builtin(),
+			char => {
+				if char.is_ascii_alphabetic() || char == b'_' {
 					self.lex_ident()
-				} else if ch.is_numeric() {
+				} else if char.is_ascii_digit() {
 					self.lex_num()
 				} else {
-					Err(Error::UnexpectedChar(self.src.loc(self.idx), ch))
+					let char = self.src[self.idx..self.src.len()].chars().next().unwrap();
+					Err(Error::UnexpectedChar(self.src.loc(self.idx), char))
 				}
 			}
 		}
@@ -348,14 +349,14 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_ident(&mut self) -> Result<Token, Error> {
 		let idx = self.idx;
 		while self.idx < self.src.len()
-			&& (self.src[self.idx].is_alphabetic()
-				|| self.src[self.idx].is_numeric()
-				|| self.src[self.idx] == '_')
+			&& (self.src[self.idx].is_ascii_alphabetic()
+				|| self.src[self.idx].is_ascii_digit()
+				|| self.src[self.idx] == b'_')
 		{
 			self.idx += 1;
 		}
-		let span = self.src[idx..self.idx].iter().collect::<String>();
-		let sym = self.syms.intern(span.as_str());
+		let span = &self.src[idx..self.idx];
+		let sym = self.syms.intern(span);
 		let tag = match sym {
 			Sym::TYPE => TokenTag::Type,
 			Sym::DEF => TokenTag::Def,
@@ -394,8 +395,8 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_str(&mut self) -> Result<Token, Error> {
 		let idx = self.idx;
 		self.idx += 1;
-		while self.idx < self.src.len() && self.src[self.idx] != '"' {
-			if self.src[self.idx] == '\\' && self.idx + 1 < self.src.len() {
+		while self.idx < self.src.len() && self.src[self.idx] != b'"' {
+			if self.src[self.idx] == b'\\' && self.idx + 1 < self.src.len() {
 				self.idx += 2;
 			} else {
 				self.idx += 1;
@@ -415,12 +416,12 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 
 	fn lex_num(&mut self) -> Result<Token, Error> {
 		let idx = self.idx;
-		while self.idx < self.src.len() && self.src[self.idx].is_numeric() {
+		while self.idx < self.src.len() && self.src[self.idx].is_ascii_digit() {
 			self.idx += 1;
 		}
-		if self.idx < self.src.len() && self.src[self.idx] == '.' {
+		if self.idx < self.src.len() && self.src[self.idx] == b'.' {
 			self.idx += 1;
-			while self.idx < self.src.len() && self.src[self.idx].is_numeric() {
+			while self.idx < self.src.len() && self.src[self.idx].is_ascii_digit() {
 				self.idx += 1;
 			}
 		}
@@ -620,19 +621,15 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	fn parse_type_decl(&mut self) -> Result<Decl, Error> {
 		let tok = self.take(TokenTag::Type)?;
 		let ident = self.take(TokenTag::Ident)?;
-		let span = self.src[ident.idx..ident.idx + ident.len]
-			.iter()
-			.collect::<String>();
-		let name = self.syms.intern(&span);
+		let span = &self.src[ident.idx..ident.idx + ident.len];
+		let name = self.syms.intern(span);
 		let mut fields = Vec::new();
 		if self.toks[self.idx].tag == TokenTag::LParen {
 			self.take(TokenTag::LParen)?;
 			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
 				let tok = self.take(TokenTag::Ident)?;
-				let span = self.src[tok.idx..tok.idx + tok.len]
-					.iter()
-					.collect::<String>();
-				let field = self.syms.intern(&span);
+				let span = &self.src[tok.idx..tok.idx + tok.len];
+				let field = self.syms.intern(span);
 				fields.push(field);
 				match self.toks[self.idx].tag {
 					TokenTag::Comma => {
@@ -659,18 +656,14 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	fn parse_def_decl(&mut self) -> Result<Decl, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let ident = self.take(TokenTag::Ident)?;
-		let span = self.src[ident.idx..ident.idx + ident.len]
-			.iter()
-			.collect::<String>();
-		let name = self.syms.intern(&span);
+		let span = &self.src[ident.idx..ident.idx + ident.len];
+		let name = self.syms.intern(span);
 		let mut params = Vec::new();
 		self.take(TokenTag::LParen)?;
 		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
 			let tok = self.take(TokenTag::Ident)?;
-			let span = self.src[tok.idx..tok.idx + tok.len]
-				.iter()
-				.collect::<String>();
-			let param = self.syms.intern(&span);
+			let span = &self.src[tok.idx..tok.idx + tok.len];
+			let param = self.syms.intern(span);
 			params.push(param);
 			match self.toks[self.idx].tag {
 				TokenTag::Comma => {
@@ -719,10 +712,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 					self.idx += 1;
 					let val_id = expr_id;
 					let ident = self.take(TokenTag::Ident)?;
-					let span = self.src[ident.idx..ident.idx + ident.len]
-						.iter()
-						.collect::<String>();
-					let field = self.syms.intern(&span);
+					let span = &self.src[ident.idx..ident.idx + ident.len];
+					let field = self.syms.intern(span);
 					let expr = Expr::Access(Access(tok, val_id, field));
 					expr_id = self.chunk.add_expr(expr);
 				}
@@ -787,10 +778,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 	fn parse_each_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Each)?;
 		let ident = self.take(TokenTag::Ident)?;
-		let span = self.src[ident.idx..ident.idx + ident.len]
-			.iter()
-			.collect::<String>();
-		let item = self.syms.intern(&span);
+		let span = &self.src[ident.idx..ident.idx + ident.len];
+		let item = self.syms.intern(span);
 		self.take(TokenTag::In)?;
 		let iter = self.parse_expr()?;
 		self.take(TokenTag::Do)?;
@@ -841,26 +830,25 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_ident_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Ident)?;
-		let span = self.src[tok.idx..tok.idx + tok.len]
-			.iter()
-			.collect::<String>();
-		let sym_id = self.syms.intern(&span);
+		let span = &self.src[tok.idx..tok.idx + tok.len];
+		let sym_id = self.syms.intern(span);
 		Ok(Expr::Ident(Ident(tok, sym_id)))
 	}
 
 	fn parse_builtin_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Builtin)?;
-		let span = self.src[tok.idx..tok.idx + tok.len]
-			.iter()
-			.collect::<String>();
-		match span.as_str() {
+		let span = &self.src[tok.idx..tok.idx + tok.len];
+		match span {
 			"$dbg" => {
 				self.take(TokenTag::LParen)?;
 				let val = self.parse_expr()?;
 				self.take(TokenTag::RParen)?;
 				Ok(Expr::Builtin(Builtin::Debug(tok, val)))
 			}
-			_ => Err(Error::UnknownBuiltin(self.src.loc(tok.idx), span)),
+			_ => Err(Error::UnknownBuiltin(
+				self.src.loc(tok.idx),
+				span.to_string(),
+			)),
 		}
 	}
 
@@ -868,40 +856,40 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 		let tok = self.take(TokenTag::Str)?;
 		let mut idx = tok.idx + 1;
 		let mut str = String::with_capacity(tok.len);
-		while idx < self.src.len() && idx < tok.idx + tok.len - 1 {
-			if self.src[idx] == '\\' {
+		let mut chunk_idx = idx;
+		while idx < tok.idx + tok.len - 1 {
+			if self.src[idx] == b'\\' {
+				str.push_str(&self.src[chunk_idx..idx]);
 				match self.src[idx + 1] {
-					'n' => str.push('\n'),
-					't' => str.push('\t'),
-					'"' => str.push('"'),
-					'\\' => str.push('\\'),
-					char => {
+					b'n' => str.push('\n'),
+					b't' => str.push('\t'),
+					b'"' => str.push('"'),
+					b'\\' => str.push('\\'),
+					_ => {
+						let char = self.src[idx..self.src.len()].chars().next().unwrap();
 						return Err(Error::UnsupportedStrEsc(self.src.loc(idx), char));
 					}
 				}
 				idx += 2;
+				chunk_idx = idx;
 			} else {
-				str.push(self.src[idx]);
 				idx += 1;
 			}
 		}
+		str.push_str(&self.src[chunk_idx..idx]);
 		Ok(Expr::Lit(Lit::Str(tok, str)))
 	}
 
 	fn parse_num_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Num)?;
-		let span = self.src[tok.idx..tok.idx + tok.len]
-			.iter()
-			.collect::<String>();
+		let span = &self.src[tok.idx..tok.idx + tok.len];
 		let num = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Num(tok, num)))
 	}
 
 	fn parse_bool_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Bool)?;
-		let span = self.src[tok.idx..tok.idx + tok.len]
-			.iter()
-			.collect::<String>();
+		let span = &self.src[tok.idx..tok.idx + tok.len];
 		let bool = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Bool(tok, bool)))
 	}
