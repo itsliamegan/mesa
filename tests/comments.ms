@@ -1,7 +1,7 @@
-#> (Nil)	nil
+#> nil
 
 # A comment.
-$dbg(nil) # A trailing comment.
+$print(nil) # A trailing comment.
 
 # Another comment with space.
 

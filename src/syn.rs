@@ -582,7 +582,7 @@ pub struct Ident(pub Token, pub Sym);
 
 #[derive(Debug, Clone)]
 pub enum Builtin {
-	Debug(Token, ExprId),
+	Print(Token, ExprId),
 }
 
 #[derive(Debug)]
@@ -971,11 +971,11 @@ impl<'src> Parser<'src> {
 		let tok = self.take(TokenTag::Builtin)?;
 		let span = &self.src[tok.pos..tok.end];
 		match span {
-			"$dbg" => {
+			"$print" => {
 				self.take(TokenTag::LParen)?;
 				let val = self.parse_expr()?;
 				self.take(TokenTag::RParen)?;
-				Ok(Expr::Builtin(Builtin::Debug(tok, val)))
+				Ok(Expr::Builtin(Builtin::Print(tok, val)))
 			}
 			_ => Err(Error::UnknownBuiltin(
 				self.src.loc(tok.pos),

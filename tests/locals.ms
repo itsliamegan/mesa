@@ -1,4 +1,4 @@
-#> (Str)	"Hello, world!"
+#> Hello, world!
 
 msg := "Hello, world!"
-$dbg(msg)
+$print(msg)

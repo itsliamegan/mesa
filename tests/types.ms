@@ -1,6 +1,6 @@
-#> (Distance)	Distance(45.7, "m")
+#> Distance(45.7, m)
 
 type Distance(amount, unit)
 end
 
-$dbg(Distance(45.7, "m"))
+$print(Distance(45.7, "m"))

@@ -1,4 +1,4 @@
-#> (Unit)	Unit()
+#> Unit()
 
 type Unit
 	def copy()
@@ -6,4 +6,4 @@ type Unit
 	end
 end
 
-$dbg(Unit().copy())
+$print(Unit().copy())

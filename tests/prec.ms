@@ -1,16 +1,16 @@
-#> (Num)	5
-#> (Num)	43.2
-#> (Num)	123
+#> 5
+#> 43.2
+#> 123
 
 num := 5
-$dbg(num)
+$print(num)
 
 type Distance(amount)
 end
 
 dist := Distance(10.1)
 dist.amount := 43.2
-$dbg(dist.amount)
+$print(dist.amount)
 
 type Account
 	def entries()
@@ -20,4 +20,4 @@ end
 
 acct := Account()
 amnt := acct.entries()[0]["id"]
-$dbg(amnt)
+$print(amnt)

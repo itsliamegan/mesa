@@ -459,7 +459,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let loc = src.loc(tok.pos);
 							Err(Signal::Error(Error::CallNonCallable(
 								loc,
-								rt_debug_val(self.syms, &self.types, &Val::Obj(rf.clone())),
+								rt_print_val(self.syms, &self.types, &Val::Obj(rf.clone())),
 							)))
 						}
 					},
@@ -468,7 +468,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.pos);
 						Err(Signal::Error(Error::CallNonCallable(
 							loc,
-							rt_debug_val(self.syms, &self.types, &val),
+							rt_print_val(self.syms, &self.types, &val),
 						)))
 					}
 				}
@@ -502,7 +502,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								let loc = src.loc(tok.pos);
 								return Err(Signal::Error(Error::ScriptNonIndex(
 									loc,
-									rt_debug_val(self.syms, &self.types, &val),
+									rt_print_val(self.syms, &self.types, &val),
 								)));
 							}
 						};
@@ -523,7 +523,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(tok.pos);
 						Err(Signal::Error(Error::ScriptNonScriptable(
 							loc,
-							rt_debug_val(self.syms, &self.types, &Val::Obj(rf.clone())),
+							rt_print_val(self.syms, &self.types, &Val::Obj(rf.clone())),
 						)))
 					}
 				},
@@ -532,7 +532,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let loc = src.loc(tok.pos);
 					Err(Signal::Error(Error::ScriptNonScriptable(
 						loc,
-						rt_debug_val(self.syms, &self.types, &val),
+						rt_print_val(self.syms, &self.types, &val),
 					)))
 				}
 			},
@@ -585,7 +585,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						};
 						Err(Signal::Error(Error::ArithNonNum(
 							loc,
-							rt_debug_val(self.syms, &self.types, &val),
+							rt_print_val(self.syms, &self.types, &val),
 						)))
 					}
 				}
@@ -614,10 +614,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
 			}
 			Expr::Builtin(builtin) => match builtin {
-				Builtin::Debug(_, val_id) => {
+				Builtin::Print(_, val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
-					let name = self.syms.resolve(self.type_of(&val).name);
-					println!("({})\t{}", name, rt_debug_val(self.syms, &self.types, &val));
+					println!("{}", rt_print_val(self.syms, &self.types, &val));
 					Ok(val)
 				}
 			},
@@ -728,22 +727,22 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 }
 
-fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
+fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num),
 		Val::Bool(bool) => format!("{}", bool),
-		Val::Obj(rf) => rt_debug_obj(syms, types, &rf.borrow()),
+		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
 		Val::Nil => String::from("nil"),
 	}
 }
-fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
+fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	match obj {
-		Obj::Str(str) => format!("\"{}\"", str.chars),
+		Obj::Str(str) => format!("{}", str.chars),
 		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
 			for (i, item) in list.items.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, item));
+				res.push_str(&rt_print_val(syms, types, item));
 				if i + 1 != list.items.len() {
 					res.push_str(", ");
 				}
@@ -755,9 +754,9 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let mut res = String::new();
 			res.push('{');
 			for (i, (key, val)) in dict.pairs.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, key));
+				res.push_str(&rt_print_val(syms, types, key));
 				res.push_str(": ");
-				res.push_str(&rt_debug_val(syms, types, val));
+				res.push_str(&rt_print_val(syms, types, val));
 				if i + 1 != dict.pairs.len() {
 					res.push_str(", ");
 				}
@@ -765,7 +764,7 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res.push('}');
 			res
 		}
-		Obj::Proc(proc) => rt_debug_proc(syms, proc),
+		Obj::Proc(proc) => rt_print_proc(syms, proc),
 		Obj::Type(id) => {
 			let typ = types.get_type(*id);
 			let name = syms.resolve(typ.name);
@@ -788,7 +787,7 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res.push_str(&format!("{}(", name));
 			for (i, name) in typ.fields.iter().enumerate() {
 				let val = inst.fields.get(name).unwrap();
-				res.push_str(&rt_debug_val(syms, types, val));
+				res.push_str(&rt_print_val(syms, types, val));
 				if i + 1 != typ.fields.len() {
 					res.push_str(", ");
 				}
@@ -796,11 +795,11 @@ fn rt_debug_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res.push(')');
 			res
 		}
-		Obj::Method(meth) => rt_debug_proc(syms, &meth.proc.borrow()),
+		Obj::Method(meth) => rt_print_proc(syms, &meth.proc.borrow()),
 	}
 }
 
-fn rt_debug_proc(syms: &Interner, proc: &Proc) -> String {
+fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	let mut res = String::new();
 	let name = syms.resolve(proc.name);
 	res.push_str(&format!("def {}(", name));
