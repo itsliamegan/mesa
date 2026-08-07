@@ -37,6 +37,14 @@ fn test_calls_methods() {
 	);
 }
 
+#[test]
+fn test_skips_comments() {
+	assert_eq!(
+		include_str!("comments.out"),
+		eval(include_str!("comments.in"))
+	);
+}
+
 fn eval(src: &str) -> String {
 	let suffix = rand::random::<u32>();
 	let temp_dir = env::temp_dir();

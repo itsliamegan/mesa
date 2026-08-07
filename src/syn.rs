@@ -229,9 +229,18 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	}
 
 	fn lex_next(&mut self) -> Result<Token, Error> {
-		while self.idx < self.src.len() && self.src[self.idx].is_ascii_whitespace() {
-			self.idx += 1;
+		while self.idx < self.src.len() {
+			if self.src[self.idx].is_ascii_whitespace() {
+				self.idx += 1;
+			} else if self.src[self.idx] == b'#' {
+				while self.idx < self.src.len() && self.src[self.idx] != b'\n' {
+					self.idx += 1;
+				}
+			} else {
+				break;
+			}
 		}
+
 		if self.idx == self.src.len() {
 			return Ok(Token {
 				src: self.src.id,
