@@ -221,9 +221,12 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 
 	pub fn lex(mut self) -> Result<Vec<Token>, Error> {
 		let mut toks = Vec::new();
-		while self.idx < self.src.len() {
+		loop {
 			let tok = self.lex_next()?;
 			toks.push(tok);
+			if tok.tag == TokenTag::Eof {
+				break;
+			}
 		}
 		Ok(toks)
 	}
