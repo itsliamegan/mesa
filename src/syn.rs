@@ -78,7 +78,7 @@ impl Source {
 		let mut i = 0;
 		let mut lin = 1;
 		let mut col = 1;
-		while i < idx && i < self.text.as_bytes().len() {
+		while i < idx && i < self.text.len() {
 			if self.text.as_bytes()[i] == b'\n' {
 				lin += 1;
 				col = 1;
@@ -130,7 +130,7 @@ pub struct Token {
 	pub tag: TokenTag,
 	pub sym: Option<Sym>,
 	pub idx: usize,
-	pub len: usize,
+	pub end: usize,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -247,7 +247,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				tag: TokenTag::Eof,
 				sym: None,
 				idx: self.idx,
-				len: 0,
+				end: self.idx,
 			});
 		}
 		match self.src[self.idx] {
@@ -259,7 +259,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 						tag: TokenTag::Eq,
 						sym: None,
 						idx: self.idx - 2,
-						len: 2,
+						end: self.idx,
 					})
 				} else {
 					self.idx += 1;
@@ -268,7 +268,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 						tag: TokenTag::Colon,
 						sym: None,
 						idx: self.idx - 1,
-						len: 1,
+						end: self.idx,
 					})
 				}
 			}
@@ -279,7 +279,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::LBrace,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b'}' => {
@@ -289,7 +289,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::RBrace,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b'[' => {
@@ -299,7 +299,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::LBrack,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b']' => {
@@ -309,7 +309,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::RBrack,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b'(' => {
@@ -319,7 +319,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::LParen,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b')' => {
@@ -329,7 +329,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::RParen,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b',' => {
@@ -339,7 +339,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::Comma,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b'.' => {
@@ -349,7 +349,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					tag: TokenTag::Dot,
 					sym: None,
 					idx: self.idx - 1,
-					len: 1,
+					end: self.idx,
 				})
 			}
 			b'"' => self.lex_str(),
@@ -398,7 +398,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			tag,
 			sym: Some(sym),
 			idx,
-			len: self.idx - idx,
+			end: self.idx,
 		})
 	}
 
@@ -411,7 +411,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			tag: TokenTag::Builtin,
 			sym: ident.sym,
 			idx,
-			len: ident.len + 1,
+			end: ident.end,
 		})
 	}
 
@@ -434,7 +434,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			tag: TokenTag::Str,
 			sym: None,
 			idx,
-			len: self.idx - idx,
+			end: self.idx,
 		})
 	}
 
@@ -454,7 +454,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			tag: TokenTag::Num,
 			sym: None,
 			idx,
-			len: self.idx - idx,
+			end: self.idx,
 		})
 	}
 }
@@ -847,7 +847,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_builtin_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Builtin)?;
-		let span = &self.src[tok.idx..tok.idx + tok.len];
+		let span = &self.src[tok.idx..tok.end];
 		match span {
 			"$dbg" => {
 				self.take(TokenTag::LParen)?;
@@ -865,9 +865,9 @@ impl<'src> Parser<'src> {
 	fn parse_str_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Str)?;
 		let mut idx = tok.idx + 1;
-		let mut str = String::with_capacity(tok.len);
+		let mut str = String::with_capacity(tok.end - tok.idx);
 		let mut chunk_idx = idx;
-		while idx < tok.idx + tok.len - 1 {
+		while idx < tok.end - 1 {
 			if self.src[idx] == b'\\' {
 				str.push_str(&self.src[chunk_idx..idx]);
 				match self.src[idx + 1] {
@@ -892,14 +892,14 @@ impl<'src> Parser<'src> {
 
 	fn parse_num_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Num)?;
-		let span = &self.src[tok.idx..tok.idx + tok.len];
+		let span = &self.src[tok.idx..tok.end];
 		let num = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Num(tok, num)))
 	}
 
 	fn parse_bool_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Bool)?;
-		let span = &self.src[tok.idx..tok.idx + tok.len];
+		let span = &self.src[tok.idx..tok.end];
 		let bool = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Bool(tok, bool)))
 	}
