@@ -8,8 +8,8 @@ use std::rc::Rc;
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Assign, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId, Ident, Lit,
-	Location, Member, Package, Place, Return, Script, Token, When,
+	self, Access, Assign, Block, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
+	ExprId, Ident, Lit, Location, Member, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
@@ -125,7 +125,7 @@ struct Dict {
 struct Proc {
 	name: Sym,
 	params: Vec<Sym>,
-	body: Vec<ExprId>,
+	body: BlockId,
 	scope: Rc<RefCell<Scope>>,
 }
 
@@ -304,7 +304,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let proc = Proc {
 								name: *name,
 								params: params.to_vec(),
-								body: body.to_vec(),
+								body: *body,
 								scope: self.scope.clone(),
 							};
 							methods.insert(*name, Rc::new(RefCell::new(proc)));
@@ -327,7 +327,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let obj = Obj::Proc(Proc {
 					name: *name,
 					params: params.to_vec(),
-					body: body.to_vec(),
+					body: *body,
 					scope: self.scope.clone(),
 				});
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
@@ -343,7 +343,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
-			Expr::Each(Each(tok, name, iter, body)) => match self.eval_expr(chunk, *iter)? {
+			Expr::Each(Each(tok, name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						let outer_scope = self.scope.clone();
@@ -353,9 +353,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							outer: Some(outer_scope.clone()),
 						};
 						self.scope = Rc::new(RefCell::new(inner_scope));
+						let body = chunk.get_block(*body_id);
 						for item in &list.items {
 							self.scope.borrow_mut().assign(*name, item.clone());
-							for expr_id in body {
+							for expr_id in &body.0 {
 								match self.eval_expr(chunk, *expr_id) {
 									Ok(_) => {}
 									Err(Signal::Return(val)) => {
@@ -403,9 +404,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					outer: Some(self.scope.clone()),
 				}));
 				if cond {
-					self.eval_exprs(chunk, scope, then_branch)
+					self.eval_block(chunk, scope, *then_branch)
 				} else if let Some(else_branch) = else_branch {
-					self.eval_exprs(chunk, scope, else_branch)
+					self.eval_block(chunk, scope, *else_branch)
 				} else {
 					Ok(Val::Nil)
 				}
@@ -648,18 +649,24 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
 			scope.assign(*param, arg);
 		}
-		match self.eval_exprs(chunk, Rc::new(RefCell::new(scope)), &proc.body) {
+		match self.eval_block(chunk, Rc::new(RefCell::new(scope)), proc.body) {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
 			Err(err) => Err(err),
 		}
 	}
 
-	fn eval_exprs(&mut self, chunk: &Chunk, scope: Rc<RefCell<Scope>>, body: &[ExprId]) -> Result<Val, Signal> {
+	fn eval_block(
+		&mut self,
+		chunk: &Chunk,
+		scope: Rc<RefCell<Scope>>,
+		block_id: BlockId,
+	) -> Result<Val, Signal> {
+		let block = chunk.get_block(block_id);
 		let saved = self.scope.clone();
 		self.scope = scope;
 		let mut res = Val::Nil;
-		for expr_id in body {
+		for expr_id in &block.0 {
 			match self.eval_expr(chunk, *expr_id) {
 				Ok(val) => {
 					res = val;

@@ -448,7 +448,7 @@ pub enum Decl {
 pub struct Type(pub Token, pub Sym, pub Vec<Sym>, pub Vec<DeclId>);
 
 #[derive(Debug)]
-pub struct Def(pub Token, pub Sym, pub Vec<Sym>, pub Vec<ExprId>);
+pub struct Def(pub Token, pub Sym, pub Vec<Sym>, pub BlockId);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ExprId(u32);
@@ -468,15 +468,10 @@ pub enum Expr {
 }
 
 #[derive(Debug)]
-pub struct Each(pub Token, pub Sym, pub ExprId, pub Vec<ExprId>);
+pub struct Each(pub Token, pub Sym, pub ExprId, pub BlockId);
 
 #[derive(Debug)]
-pub struct When(
-	pub Token,
-	pub ExprId,
-	pub Vec<ExprId>,
-	pub Option<Vec<ExprId>>,
-);
+pub struct When(pub Token, pub ExprId, pub BlockId, pub Option<BlockId>);
 
 #[derive(Debug)]
 pub struct Return(pub Token, pub ExprId);
@@ -520,6 +515,12 @@ pub enum Lit {
 	Nil(Token),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct BlockId(u32);
+
+#[derive(Debug)]
+pub struct Block(pub Vec<ExprId>);
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ChunkId(u32);
 
@@ -529,15 +530,17 @@ pub struct Chunk {
 	pub top: Vec<DeclId>,
 	decls: Vec<Decl>,
 	exprs: Vec<Expr>,
+	blocks: Vec<Block>,
 }
 
 impl Chunk {
 	pub fn new(src: SourceId) -> Self {
 		Self {
 			src,
+			top: Vec::new(),
 			decls: Vec::new(),
 			exprs: Vec::new(),
-			top: Vec::new(),
+			blocks: Vec::new(),
 		}
 	}
 
@@ -558,6 +561,16 @@ impl Chunk {
 	pub fn add_expr(&mut self, expr: Expr) -> ExprId {
 		let id = ExprId(self.exprs.len() as u32);
 		self.exprs.push(expr);
+		id
+	}
+
+	pub fn get_block(&self, block_id: BlockId) -> &Block {
+		&self.blocks[block_id.0 as usize]
+	}
+
+	pub fn add_block(&mut self, block: Block) -> BlockId {
+		let id = BlockId(self.blocks.len() as u32);
+		self.blocks.push(block);
 		id
 	}
 
@@ -678,7 +691,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok(Decl::Def(Def(tok, name, params, body)))
+		let block = self.chunk.add_block(Block(body));
+		Ok(Decl::Def(Def(tok, name, params, block)))
 	}
 
 	fn parse_expr(&mut self) -> Result<ExprId, Error> {
@@ -787,7 +801,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok(Expr::Each(Each(tok, item, iter, body)))
+		let block = self.chunk.add_block(Block(body));
+		Ok(Expr::Each(Each(tok, item, iter, block)))
 	}
 
 	fn parse_return_expr(&mut self) -> Result<Expr, Error> {
@@ -808,6 +823,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 			let expr_id = self.parse_expr()?;
 			then_branch.push(expr_id);
 		}
+		let then_branch = self.chunk.add_block(Block(then_branch));
 		let else_branch = if self.toks[self.idx].tag == TokenTag::Else {
 			self.take(TokenTag::Else)?;
 			let mut else_branch = Vec::new();
@@ -815,6 +831,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				let expr_id = self.parse_expr()?;
 				else_branch.push(expr_id);
 			}
+			let else_branch = self.chunk.add_block(Block(else_branch));
 			Some(else_branch)
 		} else {
 			None
