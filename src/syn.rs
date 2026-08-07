@@ -608,6 +608,27 @@ impl Chunk {
 	}
 }
 
+#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
+struct Precedence(u8);
+
+impl Precedence {
+	const NONE: Precedence = Precedence(0);
+	const ASSIGN: Precedence = Precedence(1);
+	const CALL: Precedence = Precedence(2);
+	const ACCESS: Precedence = Precedence(2);
+	const SCRIPT: Precedence = Precedence(2);
+
+	fn of(tag: TokenTag) -> Self {
+		match tag {
+			TokenTag::Eq => Precedence::ASSIGN,
+			TokenTag::LParen => Precedence::CALL,
+			TokenTag::Dot => Precedence::ACCESS,
+			TokenTag::LBrack => Precedence::SCRIPT,
+			_ => Precedence::NONE,
+		}
+	}
+}
+
 pub struct Parser<'src> {
 	src: &'src Source,
 	toks: Vec<Token>,
@@ -707,69 +728,72 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_expr(&mut self) -> Result<ExprId, Error> {
-		let expr = self.parse_expr_unit()?;
+		self.parse_expr_prec(Precedence::NONE)
+	}
+
+	fn parse_expr_prec(&mut self, min_prec: Precedence) -> Result<ExprId, Error> {
+		let mut expr = self.parse_expr_unit()?;
 		let mut expr_id = self.chunk.add_expr(expr);
 		loop {
 			let tok = self.toks[self.pos];
-			match tok.tag {
-				TokenTag::Eq => {
+			if Precedence::of(tok.tag) < min_prec {
+				break;
+			}
+			expr = match self.toks[self.pos].tag {
+				TokenTag::Eq => self.parse_assign_expr(expr_id)?,
+				TokenTag::LParen => self.parse_call_expr(expr_id)?,
+				TokenTag::Dot => self.parse_access_expr(expr_id)?,
+				TokenTag::LBrack => self.parse_script_expr(expr_id)?,
+				_ => break,
+			};
+			expr_id = self.chunk.add_expr(expr);
+		}
+		Ok(expr_id)
+	}
+
+	fn parse_access_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Dot)?;
+		let field = self.take(TokenTag::Ident)?.sym.unwrap();
+		Ok(Expr::Access(Access(tok, val_id, field)))
+	}
+
+	fn parse_script_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::LBrack)?;
+		let key_id = self.parse_expr()?;
+		self.take(TokenTag::RBrack)?;
+		Ok(Expr::Script(Script(tok, val_id, key_id)))
+	}
+
+	fn parse_call_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::LParen)?;
+		let mut args = Vec::new();
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen {
+			let arg = self.parse_expr()?;
+			args.push(arg);
+			match self.toks[self.pos].tag {
+				TokenTag::Comma => {
 					self.pos += 1;
-					let place = match self.chunk.get_expr(expr_id) {
-						Expr::Ident(ident) => Place::Ident(ident.clone()),
-						Expr::Access(Access(_, val_id, name)) => {
-							Place::Member(Member(tok, *val_id, *name))
-						}
-						_ => {
-							return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
-						}
-					};
-					let val_expr_id = self.parse_expr()?;
-					let expr = Expr::Assign(Assign(tok, place, val_expr_id));
-					expr_id = self.chunk.add_expr(expr);
 				}
-				TokenTag::Dot => {
-					self.pos += 1;
-					let val_id = expr_id;
-					let field = self.take(TokenTag::Ident)?.sym.unwrap();
-					let expr = Expr::Access(Access(tok, val_id, field));
-					expr_id = self.chunk.add_expr(expr);
-				}
-				TokenTag::LBrack => {
-					self.pos += 1;
-					let val_id = expr_id;
-					let key_id = self.parse_expr()?;
-					self.take(TokenTag::RBrack)?;
-					let expr = Expr::Script(Script(tok, val_id, key_id));
-					expr_id = self.chunk.add_expr(expr);
-				}
-				TokenTag::LParen => {
-					let mut args = Vec::new();
-					self.take(TokenTag::LParen)?;
-					while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen
-					{
-						let arg = self.parse_expr()?;
-						args.push(arg);
-						match self.toks[self.pos].tag {
-							TokenTag::Comma => {
-								self.pos += 1;
-							}
-							TokenTag::RParen => {}
-							_ => {
-								let tok = self.toks[self.pos];
-								return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
-							}
-						}
-					}
-					self.take(TokenTag::RParen)?;
-					let expr = Expr::Call(Call(tok, expr_id, args));
-					expr_id = self.chunk.add_expr(expr);
-				}
+				TokenTag::RParen => {}
 				_ => {
-					break;
+					let tok = self.toks[self.pos];
+					return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
 				}
 			}
 		}
-		Ok(expr_id)
+		self.take(TokenTag::RParen)?;
+		Ok(Expr::Call(Call(tok, val_id, args)))
+	}
+
+	fn parse_assign_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+		let tok = self.take(TokenTag::Eq)?;
+		let place = match self.chunk.get_expr(val_id) {
+			Expr::Ident(ident) => Place::Ident(ident.clone()),
+			Expr::Access(Access(_, val_id, name)) => Place::Member(Member(tok, *val_id, *name)),
+			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok)),
+		};
+		let val_expr_id = self.parse_expr_prec(Precedence::ASSIGN)?;
+		Ok(Expr::Assign(Assign(tok, place, val_expr_id)))
 	}
 
 	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {

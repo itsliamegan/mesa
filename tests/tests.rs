@@ -39,6 +39,11 @@ fn test_skips_comments() {
 	assert_eval(include_str!("comments.ms"));
 }
 
+#[test]
+fn test_honors_precedence() {
+	assert_eval(include_str!("prec.ms"));
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {
