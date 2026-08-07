@@ -373,7 +373,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					obj => {
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.idx);
+						let loc = src.loc(tok.pos);
 						Err(Signal::Error(Error::IterNonIterable(
 							loc,
 							format!("{:?}", obj),
@@ -382,7 +382,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				},
 				val => {
 					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(tok.idx);
+					let loc = src.loc(tok.pos);
 					Err(Signal::Error(Error::IterNonIterable(
 						loc,
 						format!("{:?}", val),
@@ -426,7 +426,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let typ = self.types.get_type(*type_id);
 							if args.len() != typ.fields.len() {
 								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.idx);
+								let loc = src.loc(tok.pos);
 								return Err(Signal::Error(Error::WrongArgCount(
 									loc,
 									args.len(),
@@ -453,7 +453,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						),
 						_ => {
 							let src = self.pkg.get_src(chunk.src);
-							let loc = src.loc(tok.idx);
+							let loc = src.loc(tok.pos);
 							Err(Signal::Error(Error::CallNonCallable(
 								loc,
 								rt_debug_val(self.syms, &self.types, &Val::Obj(rf.clone())),
@@ -462,7 +462,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					},
 					val => {
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.idx);
+						let loc = src.loc(tok.pos);
 						Err(Signal::Error(Error::CallNonCallable(
 							loc,
 							rt_debug_val(self.syms, &self.types, &val),
@@ -482,7 +482,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 
 				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(tok.idx);
+				let loc = src.loc(tok.pos);
 				Err(Signal::Error(Error::AccessNonMember(
 					loc,
 					self.syms.resolve(typ.name).to_string(),
@@ -496,7 +496,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Val::Num(num) if num >= 0.0 => num.trunc() as usize,
 							val => {
 								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.idx);
+								let loc = src.loc(tok.pos);
 								return Err(Signal::Error(Error::ScriptNonIndex(
 									loc,
 									rt_debug_val(self.syms, &self.types, &val),
@@ -517,7 +517,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					_ => {
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.idx);
+						let loc = src.loc(tok.pos);
 						Err(Signal::Error(Error::ScriptNonScriptable(
 							loc,
 							rt_debug_val(self.syms, &self.types, &Val::Obj(rf.clone())),
@@ -526,7 +526,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				},
 				val => {
 					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(tok.idx);
+					let loc = src.loc(tok.pos);
 					Err(Signal::Error(Error::ScriptNonScriptable(
 						loc,
 						rt_debug_val(self.syms, &self.types, &val),
@@ -553,7 +553,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.idx);
+						let loc = src.loc(tok.pos);
 						Err(Signal::Error(Error::AccessNonMember(
 							loc,
 							self.syms.resolve(typ.name).to_string(),
@@ -581,7 +581,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 
 				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(tok.idx);
+				let loc = src.loc(tok.pos);
 				let name = self.syms.resolve(*name);
 				Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
 			}
@@ -631,7 +631,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	) -> Result<Val, Signal> {
 		if args.len() != proc.params.len() {
 			let src = self.pkg.get_src(chunk.src);
-			let loc = src.loc(tok.idx);
+			let loc = src.loc(tok.pos);
 			return Err(Signal::Error(Error::WrongArgCount(
 				loc,
 				args.len(),

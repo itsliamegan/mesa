@@ -74,11 +74,11 @@ impl Source {
 		self.text.len()
 	}
 
-	pub fn loc(&self, idx: usize) -> Location {
+	pub fn loc(&self, pos: usize) -> Location {
 		let mut i = 0;
 		let mut lin = 1;
 		let mut col = 1;
-		while i < idx && i < self.text.len() {
+		while i < pos && i < self.text.len() {
 			if self.text.as_bytes()[i] == b'\n' {
 				lin += 1;
 				col = 1;
@@ -129,7 +129,7 @@ pub struct Token {
 	pub src: SourceId,
 	pub tag: TokenTag,
 	pub sym: Option<Sym>,
-	pub idx: usize,
+	pub pos: usize,
 	pub end: usize,
 }
 
@@ -211,12 +211,12 @@ impl TokenTag {
 pub struct Lexer<'syms, 'src> {
 	syms: &'syms mut Interner,
 	src: &'src Source,
-	idx: usize,
+	pos: usize,
 }
 
 impl<'syms, 'src> Lexer<'syms, 'src> {
 	pub fn new(syms: &'syms mut Interner, src: &'src Source) -> Self {
-		Self { syms, src, idx: 0 }
+		Self { syms, src, pos: 0 }
 	}
 
 	pub fn lex(mut self) -> Result<Vec<Token>, Error> {
@@ -232,127 +232,128 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	}
 
 	fn lex_next(&mut self) -> Result<Token, Error> {
-		while self.idx < self.src.len() {
-			if self.src[self.idx].is_ascii_whitespace() {
-				self.idx += 1;
-			} else if self.src[self.idx] == b'#' {
-				while self.idx < self.src.len() && self.src[self.idx] != b'\n' {
-					self.idx += 1;
+		while self.pos < self.src.len() {
+			if self.src[self.pos].is_ascii_whitespace() {
+				self.pos += 1;
+			} else if self.src[self.pos] == b'#' {
+				while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
+					self.pos += 1;
 				}
 			} else {
 				break;
 			}
 		}
 
-		if self.idx == self.src.len() {
+		if self.pos == self.src.len() {
 			return Ok(Token {
 				src: self.src.id,
 				tag: TokenTag::Eof,
 				sym: None,
-				idx: self.idx,
-				end: self.idx,
+				pos: self.pos,
+				end: self.pos,
 			});
 		}
-		match self.src[self.idx] {
+
+		match self.src[self.pos] {
 			b':' => {
-				if self.idx + 1 < self.src.len() && self.src[self.idx + 1] == b'=' {
-					self.idx += 2;
+				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+					self.pos += 2;
 					Ok(Token {
 						src: self.src.id,
 						tag: TokenTag::Eq,
 						sym: None,
-						idx: self.idx - 2,
-						end: self.idx,
+						pos: self.pos - 2,
+						end: self.pos,
 					})
 				} else {
-					self.idx += 1;
+					self.pos += 1;
 					Ok(Token {
 						src: self.src.id,
 						tag: TokenTag::Colon,
 						sym: None,
-						idx: self.idx - 1,
-						end: self.idx,
+						pos: self.pos - 1,
+						end: self.pos,
 					})
 				}
 			}
 			b'{' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::LBrace,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b'}' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RBrace,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b'[' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::LBrack,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b']' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RBrack,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b'(' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::LParen,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b')' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RParen,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b',' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::Comma,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b'.' => {
-				self.idx += 1;
+				self.pos += 1;
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::Dot,
 					sym: None,
-					idx: self.idx - 1,
-					end: self.idx,
+					pos: self.pos - 1,
+					end: self.pos,
 				})
 			}
 			b'"' => self.lex_str(),
@@ -363,23 +364,23 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				} else if char.is_ascii_digit() {
 					self.lex_num()
 				} else {
-					let char = self.src[self.idx..self.src.len()].chars().next().unwrap();
-					Err(Error::UnexpectedChar(self.src.loc(self.idx), char))
+					let char = self.src[self.pos..self.src.len()].chars().next().unwrap();
+					Err(Error::UnexpectedChar(self.src.loc(self.pos), char))
 				}
 			}
 		}
 	}
 
 	fn lex_ident(&mut self) -> Result<Token, Error> {
-		let idx = self.idx;
-		while self.idx < self.src.len()
-			&& (self.src[self.idx].is_ascii_alphabetic()
-				|| self.src[self.idx].is_ascii_digit()
-				|| self.src[self.idx] == b'_')
+		let pos = self.pos;
+		while self.pos < self.src.len()
+			&& (self.src[self.pos].is_ascii_alphabetic()
+				|| self.src[self.pos].is_ascii_digit()
+				|| self.src[self.pos] == b'_')
 		{
-			self.idx += 1;
+			self.pos += 1;
 		}
-		let span = &self.src[idx..self.idx];
+		let span = &self.src[pos..self.pos];
 		let sym = self.syms.intern(span);
 		let tag = match sym {
 			Sym::TYPE => TokenTag::Type,
@@ -400,64 +401,64 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			src: self.src.id,
 			tag,
 			sym: Some(sym),
-			idx,
-			end: self.idx,
+			pos,
+			end: self.pos,
 		})
 	}
 
 	fn lex_builtin(&mut self) -> Result<Token, Error> {
-		let idx = self.idx;
-		self.idx += 1;
+		let pos = self.pos;
+		self.pos += 1;
 		let ident = self.lex_ident()?;
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Builtin,
 			sym: ident.sym,
-			idx,
+			pos,
 			end: ident.end,
 		})
 	}
 
 	fn lex_str(&mut self) -> Result<Token, Error> {
-		let idx = self.idx;
-		self.idx += 1;
-		while self.idx < self.src.len() && self.src[self.idx] != b'"' {
-			if self.src[self.idx] == b'\\' && self.idx + 1 < self.src.len() {
-				self.idx += 2;
+		let pos = self.pos;
+		self.pos += 1;
+		while self.pos < self.src.len() && self.src[self.pos] != b'"' {
+			if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
+				self.pos += 2;
 			} else {
-				self.idx += 1;
+				self.pos += 1;
 			}
 		}
-		if self.idx == self.src.len() {
-			return Err(Error::UnterminatedStrLit(self.src.loc(idx)));
+		if self.pos == self.src.len() {
+			return Err(Error::UnterminatedStrLit(self.src.loc(pos)));
 		}
-		self.idx += 1;
+		self.pos += 1;
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Str,
 			sym: None,
-			idx,
-			end: self.idx,
+			pos,
+			end: self.pos,
 		})
 	}
 
 	fn lex_num(&mut self) -> Result<Token, Error> {
-		let idx = self.idx;
-		while self.idx < self.src.len() && self.src[self.idx].is_ascii_digit() {
-			self.idx += 1;
+		let pos = self.pos;
+		while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
+			self.pos += 1;
 		}
-		if self.idx < self.src.len() && self.src[self.idx] == b'.' {
-			self.idx += 1;
-			while self.idx < self.src.len() && self.src[self.idx].is_ascii_digit() {
-				self.idx += 1;
+		if self.pos < self.src.len() && self.src[self.pos] == b'.' {
+			self.pos += 1;
+			while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
+				self.pos += 1;
 			}
 		}
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Num,
 			sym: None,
-			idx,
-			end: self.idx,
+			pos,
+			end: self.pos,
 		})
 	}
 }
@@ -610,7 +611,7 @@ impl Chunk {
 pub struct Parser<'src> {
 	src: &'src Source,
 	toks: Vec<Token>,
-	idx: usize,
+	pos: usize,
 	chunk: Chunk,
 }
 
@@ -619,13 +620,13 @@ impl<'src> Parser<'src> {
 		Self {
 			src,
 			toks,
-			idx: 0,
+			pos: 0,
 			chunk: Chunk::new(src.id),
 		}
 	}
 
 	pub fn parse(mut self) -> Result<Chunk, Error> {
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::Eof {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::Eof {
 			let decl_id = self.parse_decl()?;
 			self.chunk.add_to_top(decl_id);
 		}
@@ -633,7 +634,7 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_decl(&mut self) -> Result<DeclId, Error> {
-		let decl = match self.toks[self.idx].tag {
+		let decl = match self.toks[self.pos].tag {
 			TokenTag::Type => self.parse_type_decl()?,
 			TokenTag::Def => self.parse_def_decl()?,
 			_ => {
@@ -648,26 +649,26 @@ impl<'src> Parser<'src> {
 		let tok = self.take(TokenTag::Type)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut fields = Vec::new();
-		if self.toks[self.idx].tag == TokenTag::LParen {
+		if self.toks[self.pos].tag == TokenTag::LParen {
 			self.take(TokenTag::LParen)?;
-			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
+			while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen {
 				let field = self.take(TokenTag::Ident)?.sym.unwrap();
 				fields.push(field);
-				match self.toks[self.idx].tag {
+				match self.toks[self.pos].tag {
 					TokenTag::Comma => {
-						self.idx += 1;
+						self.pos += 1;
 					}
 					TokenTag::RParen => {}
 					_ => {
-						let tok = &self.toks[self.idx];
-						return Err(Error::UnexpectedToken(self.src.loc(tok.idx), *tok));
+						let tok = &self.toks[self.pos];
+						return Err(Error::UnexpectedToken(self.src.loc(tok.pos), *tok));
 					}
 				}
 			}
 			self.take(TokenTag::RParen)?;
 		}
 		let mut items = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
 			let item_id = self.parse_decl()?;
 			items.push(item_id);
 		}
@@ -680,23 +681,23 @@ impl<'src> Parser<'src> {
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut params = Vec::new();
 		self.take(TokenTag::LParen)?;
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen {
 			let param = self.take(TokenTag::Ident)?.sym.unwrap();
 			params.push(param);
-			match self.toks[self.idx].tag {
+			match self.toks[self.pos].tag {
 				TokenTag::Comma => {
-					self.idx += 1;
+					self.pos += 1;
 				}
 				TokenTag::RParen => {}
 				_ => {
-					let tok = &self.toks[self.idx];
-					return Err(Error::UnexpectedToken(self.src.loc(tok.idx), *tok));
+					let tok = &self.toks[self.pos];
+					return Err(Error::UnexpectedToken(self.src.loc(tok.pos), *tok));
 				}
 			}
 		}
 		self.take(TokenTag::RParen)?;
 		let mut body = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
 			let expr_id = self.parse_expr()?;
 			body.push(expr_id);
 		}
@@ -709,17 +710,17 @@ impl<'src> Parser<'src> {
 		let expr = self.parse_expr_unit()?;
 		let mut expr_id = self.chunk.add_expr(expr);
 		loop {
-			let tok = self.toks[self.idx];
+			let tok = self.toks[self.pos];
 			match tok.tag {
 				TokenTag::Eq => {
-					self.idx += 1;
+					self.pos += 1;
 					let place = match self.chunk.get_expr(expr_id) {
 						Expr::Ident(ident) => Place::Ident(ident.clone()),
 						Expr::Access(Access(_, val_id, name)) => {
 							Place::Member(Member(tok, *val_id, *name))
 						}
 						_ => {
-							return Err(Error::UnexpectedToken(self.src.loc(tok.idx), tok));
+							return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
 						}
 					};
 					let val_expr_id = self.parse_expr()?;
@@ -727,14 +728,14 @@ impl<'src> Parser<'src> {
 					expr_id = self.chunk.add_expr(expr);
 				}
 				TokenTag::Dot => {
-					self.idx += 1;
+					self.pos += 1;
 					let val_id = expr_id;
 					let field = self.take(TokenTag::Ident)?.sym.unwrap();
 					let expr = Expr::Access(Access(tok, val_id, field));
 					expr_id = self.chunk.add_expr(expr);
 				}
 				TokenTag::LBrack => {
-					self.idx += 1;
+					self.pos += 1;
 					let val_id = expr_id;
 					let key_id = self.parse_expr()?;
 					self.take(TokenTag::RBrack)?;
@@ -744,18 +745,18 @@ impl<'src> Parser<'src> {
 				TokenTag::LParen => {
 					let mut args = Vec::new();
 					self.take(TokenTag::LParen)?;
-					while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen
+					while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen
 					{
 						let arg = self.parse_expr()?;
 						args.push(arg);
-						match self.toks[self.idx].tag {
+						match self.toks[self.pos].tag {
 							TokenTag::Comma => {
-								self.idx += 1;
+								self.pos += 1;
 							}
 							TokenTag::RParen => {}
 							_ => {
-								let tok = self.toks[self.idx];
-								return Err(Error::UnexpectedToken(self.src.loc(tok.idx), tok));
+								let tok = self.toks[self.pos];
+								return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
 							}
 						}
 					}
@@ -772,7 +773,7 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {
-		match self.toks[self.idx].tag {
+		match self.toks[self.pos].tag {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Return => self.parse_return_expr(),
@@ -785,8 +786,8 @@ impl<'src> Parser<'src> {
 			TokenTag::LBrace => self.parse_dict_lit_expr(),
 			TokenTag::Nil => self.parse_nil_lit_expr(),
 			_ => {
-				let tok = &self.toks[self.idx];
-				Err(Error::UnexpectedToken(self.src.loc(tok.idx), *tok))
+				let tok = &self.toks[self.pos];
+				Err(Error::UnexpectedToken(self.src.loc(tok.pos), *tok))
 			}
 		}
 	}
@@ -798,7 +799,7 @@ impl<'src> Parser<'src> {
 		let iter = self.parse_expr()?;
 		self.take(TokenTag::Do)?;
 		let mut body = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
 			let expr_id = self.parse_expr()?;
 			body.push(expr_id);
 		}
@@ -818,18 +819,18 @@ impl<'src> Parser<'src> {
 		let cond = self.parse_expr()?;
 		self.take(TokenTag::Then)?;
 		let mut then_branch = Vec::new();
-		while self.idx < self.toks.len()
-			&& self.toks[self.idx].tag != TokenTag::End
-			&& self.toks[self.idx].tag != TokenTag::Else
+		while self.pos < self.toks.len()
+			&& self.toks[self.pos].tag != TokenTag::End
+			&& self.toks[self.pos].tag != TokenTag::Else
 		{
 			let expr_id = self.parse_expr()?;
 			then_branch.push(expr_id);
 		}
 		let then_branch = self.chunk.add_block(Block(then_branch));
-		let else_branch = if self.toks[self.idx].tag == TokenTag::Else {
+		let else_branch = if self.toks[self.pos].tag == TokenTag::Else {
 			self.take(TokenTag::Else)?;
 			let mut else_branch = Vec::new();
-			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::End {
+			while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
 				let expr_id = self.parse_expr()?;
 				else_branch.push(expr_id);
 			}
@@ -850,7 +851,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_builtin_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Builtin)?;
-		let span = &self.src[tok.idx..tok.end];
+		let span = &self.src[tok.pos..tok.end];
 		match span {
 			"$dbg" => {
 				self.take(TokenTag::LParen)?;
@@ -859,7 +860,7 @@ impl<'src> Parser<'src> {
 				Ok(Expr::Builtin(Builtin::Debug(tok, val)))
 			}
 			_ => Err(Error::UnknownBuiltin(
-				self.src.loc(tok.idx),
+				self.src.loc(tok.pos),
 				span.to_string(),
 			)),
 		}
@@ -867,42 +868,42 @@ impl<'src> Parser<'src> {
 
 	fn parse_str_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Str)?;
-		let mut idx = tok.idx + 1;
-		let mut str = String::with_capacity(tok.end - tok.idx);
-		let mut chunk_idx = idx;
-		while idx < tok.end - 1 {
-			if self.src[idx] == b'\\' {
-				str.push_str(&self.src[chunk_idx..idx]);
-				match self.src[idx + 1] {
+		let mut pos = tok.pos + 1;
+		let mut str = String::with_capacity(tok.end - tok.pos);
+		let mut chunk_idx = pos;
+		while pos < tok.end - 1 {
+			if self.src[pos] == b'\\' {
+				str.push_str(&self.src[chunk_idx..pos]);
+				match self.src[pos + 1] {
 					b'n' => str.push('\n'),
 					b't' => str.push('\t'),
 					b'"' => str.push('"'),
 					b'\\' => str.push('\\'),
 					_ => {
-						let char = self.src[idx..self.src.len()].chars().next().unwrap();
-						return Err(Error::UnsupportedStrEsc(self.src.loc(idx), char));
+						let char = self.src[pos..self.src.len()].chars().next().unwrap();
+						return Err(Error::UnsupportedStrEsc(self.src.loc(pos), char));
 					}
 				}
-				idx += 2;
-				chunk_idx = idx;
+				pos += 2;
+				chunk_idx = pos;
 			} else {
-				idx += 1;
+				pos += 1;
 			}
 		}
-		str.push_str(&self.src[chunk_idx..idx]);
+		str.push_str(&self.src[chunk_idx..pos]);
 		Ok(Expr::Lit(Lit::Str(tok, str)))
 	}
 
 	fn parse_num_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Num)?;
-		let span = &self.src[tok.idx..tok.end];
+		let span = &self.src[tok.pos..tok.end];
 		let num = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Num(tok, num)))
 	}
 
 	fn parse_bool_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Bool)?;
-		let span = &self.src[tok.idx..tok.end];
+		let span = &self.src[tok.pos..tok.end];
 		let bool = span.parse().unwrap();
 		Ok(Expr::Lit(Lit::Bool(tok, bool)))
 	}
@@ -910,17 +911,17 @@ impl<'src> Parser<'src> {
 	fn parse_list_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::LBrack)?;
 		let mut items = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RBrack {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RBrack {
 			let item = self.parse_expr()?;
 			items.push(item);
-			match self.toks[self.idx].tag {
+			match self.toks[self.pos].tag {
 				TokenTag::Comma => {
-					self.idx += 1;
+					self.pos += 1;
 				}
 				TokenTag::RBrack => {}
 				_ => {
-					let tok = self.toks[self.idx];
-					return Err(Error::UnexpectedToken(self.src.loc(tok.idx), tok));
+					let tok = self.toks[self.pos];
+					return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
 				}
 			}
 		}
@@ -931,19 +932,19 @@ impl<'src> Parser<'src> {
 	fn parse_dict_lit_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::LBrace)?;
 		let mut pairs = Vec::new();
-		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RBrace {
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RBrace {
 			let key = self.parse_expr()?;
 			self.take(TokenTag::Colon)?;
 			let val = self.parse_expr()?;
 			pairs.push((key, val));
-			match self.toks[self.idx].tag {
+			match self.toks[self.pos].tag {
 				TokenTag::Comma => {
-					self.idx += 1;
+					self.pos += 1;
 				}
 				TokenTag::RBrace => {}
 				_ => {
-					let tok = self.toks[self.idx];
-					return Err(Error::UnexpectedToken(self.src.loc(tok.idx), tok));
+					let tok = self.toks[self.pos];
+					return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
 				}
 			}
 		}
@@ -957,12 +958,12 @@ impl<'src> Parser<'src> {
 	}
 
 	fn take(&mut self, tag: TokenTag) -> Result<Token, Error> {
-		let tok = &self.toks[self.idx];
+		let tok = &self.toks[self.pos];
 		if tok.tag == tag {
-			self.idx += 1;
+			self.pos += 1;
 			Ok(*tok)
 		} else {
-			Err(Error::UnexpectedToken(self.src.loc(tok.idx), *tok))
+			Err(Error::UnexpectedToken(self.src.loc(tok.pos), *tok))
 		}
 	}
 }
