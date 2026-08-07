@@ -157,6 +157,11 @@ pub enum TokenTag {
 
 	Eq,
 
+	Plus,
+	Minus,
+	Star,
+	Slash,
+
 	LBrace,
 	RBrace,
 	LBrack,
@@ -193,6 +198,11 @@ impl TokenTag {
 			TokenTag::Nil => "NIL",
 
 			TokenTag::Eq => "EQ",
+
+			TokenTag::Plus => "PLUS",
+			TokenTag::Minus => "MINUS",
+			TokenTag::Star => "STAR",
+			TokenTag::Slash => "SLASH",
 
 			TokenTag::LBrace => "LBRACE",
 			TokenTag::RBrace => "RBRACE",
@@ -275,6 +285,46 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 						end: self.pos,
 					})
 				}
+			}
+			b'+' => {
+				self.pos += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Plus,
+					sym: None,
+					pos: self.pos - 1,
+					end: self.pos,
+				})
+			}
+			b'-' => {
+				self.pos += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Minus,
+					sym: None,
+					pos: self.pos - 1,
+					end: self.pos,
+				})
+			}
+			b'*' => {
+				self.pos += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Star,
+					sym: None,
+					pos: self.pos - 1,
+					end: self.pos,
+				})
+			}
+			b'/' => {
+				self.pos += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Slash,
+					sym: None,
+					pos: self.pos - 1,
+					end: self.pos,
+				})
 			}
 			b'{' => {
 				self.pos += 1;
@@ -491,6 +541,7 @@ pub enum Expr {
 	Access(Access),
 	Script(Script),
 	Assign(Assign),
+	Binary(Binary),
 	Ident(Ident),
 	Builtin(Builtin),
 	Lit(Lit),
@@ -532,6 +583,17 @@ pub struct Ident(pub Token, pub Sym);
 #[derive(Debug, Clone)]
 pub enum Builtin {
 	Debug(Token, ExprId),
+}
+
+#[derive(Debug)]
+pub struct Binary(pub Token, pub BinaryOp, pub ExprId, pub ExprId);
+
+#[derive(Debug)]
+pub enum BinaryOp {
+	Add,
+	Sub,
+	Mul,
+	Div,
 }
 
 #[derive(Debug)]
@@ -614,13 +676,21 @@ struct Precedence(u8);
 impl Precedence {
 	const NONE: Precedence = Precedence(0);
 	const ASSIGN: Precedence = Precedence(1);
-	const CALL: Precedence = Precedence(2);
-	const ACCESS: Precedence = Precedence(2);
-	const SCRIPT: Precedence = Precedence(2);
+	const ADD: Precedence = Precedence(2);
+	const SUB: Precedence = Precedence(2);
+	const MUL: Precedence = Precedence(3);
+	const DIV: Precedence = Precedence(3);
+	const CALL: Precedence = Precedence(4);
+	const ACCESS: Precedence = Precedence(4);
+	const SCRIPT: Precedence = Precedence(4);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
 			TokenTag::Eq => Precedence::ASSIGN,
+			TokenTag::Plus => Precedence::ADD,
+			TokenTag::Minus => Precedence::SUB,
+			TokenTag::Star => Precedence::MUL,
+			TokenTag::Slash => Precedence::DIV,
 			TokenTag::LParen => Precedence::CALL,
 			TokenTag::Dot => Precedence::ACCESS,
 			TokenTag::LBrack => Precedence::SCRIPT,
@@ -736,11 +806,23 @@ impl<'src> Parser<'src> {
 		let mut expr_id = self.chunk.add_expr(expr);
 		loop {
 			let tok = self.toks[self.pos];
-			if Precedence::of(tok.tag) < min_prec {
+			if Precedence::of(tok.tag) <= min_prec {
 				break;
 			}
 			expr = match self.toks[self.pos].tag {
 				TokenTag::Eq => self.parse_assign_expr(expr_id)?,
+				TokenTag::Plus => {
+					self.parse_binary_expr(expr_id, BinaryOp::Add, Precedence::ADD)?
+				}
+				TokenTag::Minus => {
+					self.parse_binary_expr(expr_id, BinaryOp::Sub, Precedence::SUB)?
+				}
+				TokenTag::Star => {
+					self.parse_binary_expr(expr_id, BinaryOp::Mul, Precedence::MUL)?
+				}
+				TokenTag::Slash => {
+					self.parse_binary_expr(expr_id, BinaryOp::Div, Precedence::DIV)?
+				}
 				TokenTag::LParen => self.parse_call_expr(expr_id)?,
 				TokenTag::Dot => self.parse_access_expr(expr_id)?,
 				TokenTag::LBrack => self.parse_script_expr(expr_id)?,
@@ -792,8 +874,20 @@ impl<'src> Parser<'src> {
 			Expr::Access(Access(_, val_id, name)) => Place::Member(Member(tok, *val_id, *name)),
 			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok)),
 		};
-		let val_expr_id = self.parse_expr_prec(Precedence::ASSIGN)?;
+		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
 		Ok(Expr::Assign(Assign(tok, place, val_expr_id)))
+	}
+
+	fn parse_binary_expr(
+		&mut self,
+		val_id: ExprId,
+		op: BinaryOp,
+		prec: Precedence,
+	) -> Result<Expr, Error> {
+		let tok = self.toks[self.pos];
+		self.pos += 1;
+		let rhs = self.parse_expr_prec(prec)?;
+		Ok(Expr::Binary(Binary(tok, op, val_id, rhs)))
 	}
 
 	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {

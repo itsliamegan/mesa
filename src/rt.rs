@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Assign, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr, ExprId,
-	Ident, Lit, Location, Member, Package, Place, Return, Script, Token, When,
+	self, Access, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each,
+	Expr, ExprId, Ident, Lit, Location, Member, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
@@ -19,6 +19,7 @@ pub enum Error {
 	AccessNonMember(Location, String, String),
 	ScriptNonScriptable(Location, String),
 	ScriptNonIndex(Location, String),
+	ArithNonNum(Location, String),
 	UnboundIdent(Location, String),
 }
 
@@ -31,6 +32,7 @@ impl Error {
 			Self::AccessNonMember(loc, _, _) => loc,
 			Self::ScriptNonScriptable(loc, _) => loc,
 			Self::ScriptNonIndex(loc, _) => loc,
+			Self::ArithNonNum(loc, _) => loc,
 			Self::UnboundIdent(loc, _) => loc,
 		}
 	}
@@ -50,6 +52,7 @@ impl Display for Error {
 			}
 			Self::ScriptNonScriptable(_, val) => write!(f, "script of non-scriptable {}", val),
 			Self::ScriptNonIndex(_, val) => write!(f, "script with non-index {}", val),
+			Self::ArithNonNum(_, val) => write!(f, "arithmetic on non-number {}", val),
 			Self::UnboundIdent(_, ident) => write!(f, "unbound ident '{}'", ident),
 		}
 	}
@@ -558,6 +561,31 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							loc,
 							self.syms.resolve(typ.name).to_string(),
 							self.syms.resolve(*name).to_string(),
+						)))
+					}
+				}
+			}
+			Expr::Binary(Binary(tok, op, lhs_id, rhs_id)) => {
+				let lhs = self.eval_expr(chunk, *lhs_id)?;
+				let rhs = self.eval_expr(chunk, *rhs_id)?;
+				match (lhs, rhs) {
+					(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(match op {
+						BinaryOp::Add => lhs + rhs,
+						BinaryOp::Sub => lhs - rhs,
+						BinaryOp::Mul => lhs * rhs,
+						BinaryOp::Div => lhs / rhs,
+					})),
+					(lhs, rhs) => {
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(tok.pos);
+						let val = match (&lhs, &rhs) {
+							(Val::Num(_), _) => rhs,
+							(_, Val::Num(_)) => lhs,
+							_ => lhs,
+						};
+						Err(Signal::Error(Error::ArithNonNum(
+							loc,
+							rt_debug_val(self.syms, &self.types, &val),
 						)))
 					}
 				}

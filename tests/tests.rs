@@ -44,6 +44,11 @@ fn test_honors_precedence() {
 	assert_eval(include_str!("prec.ms"));
 }
 
+#[test]
+fn test_performs_arithmetic() {
+	assert_eval(include_str!("arith.ms"));
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {
