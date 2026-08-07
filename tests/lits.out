@@ -1,6 +1,0 @@
-(Str)	"Hello, world!"
-(Num)	5.23
-(Bool)	true
-(List)	[1, 7]
-(Dict)	{"id": 774}
-(Nil)	nil

@@ -1,3 +1,5 @@
+#> (Unit)	Unit()
+
 type Unit
 	def copy()
 		self

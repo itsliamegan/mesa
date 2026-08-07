@@ -1,6 +1,0 @@
-$dbg("Hello, world!")
-$dbg(5.23)
-$dbg(true)
-$dbg([1, 7])
-$dbg({"id": 774})
-$dbg(nil)

@@ -6,50 +6,55 @@ use rand;
 
 #[test]
 fn test_parses_literals() {
-	assert_eq!(include_str!("lits.out"), eval(include_str!("lits.in")));
+	assert_eval(include_str!("lits.ms"));
 }
 
 #[test]
 fn test_assigns_locals() {
-	assert_eq!(include_str!("locals.out"), eval(include_str!("locals.in")));
+	assert_eval(include_str!("locals.ms"));
 }
 
 #[test]
 fn test_calls_procs() {
-	assert_eq!(include_str!("procs.out"), eval(include_str!("procs.in")));
+	assert_eval(include_str!("procs.ms"));
 }
 
 #[test]
 fn test_instantiates_types() {
-	assert_eq!(include_str!("types.out"), eval(include_str!("types.in")));
+	assert_eval(include_str!("types.ms"));
 }
 
 #[test]
 fn test_accesses_fields() {
-	assert_eq!(include_str!("fields.out"), eval(include_str!("fields.in")));
+	assert_eval(include_str!("fields.ms"));
 }
 
 #[test]
 fn test_calls_methods() {
-	assert_eq!(
-		include_str!("methods.out"),
-		eval(include_str!("methods.in"))
-	);
+	assert_eval(include_str!("methods.ms"));
 }
 
 #[test]
 fn test_skips_comments() {
-	assert_eq!(
-		include_str!("comments.out"),
-		eval(include_str!("comments.in"))
-	);
+	assert_eval(include_str!("comments.ms"));
 }
 
-fn eval(src: &str) -> String {
+fn assert_eval(input: &str) {
+	let mut output = String::new();
+	for line in input.lines() {
+		if let Some((_, text)) = line.split_once("#> ") {
+			output.push_str(text);
+			output.push('\n');
+		}
+	}
+	assert_eq!(output, eval(input));
+}
+
+fn eval(input: &str) -> String {
 	let suffix = rand::random::<u32>();
 	let temp_dir = env::temp_dir();
 	let temp_file = temp_dir.join(format!("main.{:x}.ms", suffix));
-	fs::write(&temp_file, src).unwrap();
+	fs::write(&temp_file, input).unwrap();
 
 	let (stdout, stderr) = (|| {
 		let bin = env!("CARGO_BIN_EXE_mesa");

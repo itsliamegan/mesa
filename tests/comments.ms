@@ -1,3 +1,5 @@
+#> (Nil)	nil
+
 # A comment.
 $dbg(nil) # A trailing comment.
 
