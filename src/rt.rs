@@ -397,19 +397,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Val::Obj(_) => true,
 					_ => false,
 				};
+				let scope = Rc::new(RefCell::new(Scope {
+					locals: HashMap::new(),
+					inst: self.scope.borrow().inst.clone(),
+					outer: Some(self.scope.clone()),
+				}));
 				if cond {
-					let scope = Scope {
-						locals: HashMap::new(),
-						inst: self.scope.borrow().inst.clone(),
-						outer: Some(self.scope.clone()),
-					};
 					self.eval_exprs(chunk, scope, then_branch)
 				} else if let Some(else_branch) = else_branch {
-					let scope = Scope {
-						locals: HashMap::new(),
-						inst: self.scope.borrow().inst.clone(),
-						outer: Some(self.scope.clone()),
-					};
 					self.eval_exprs(chunk, scope, else_branch)
 				} else {
 					Ok(Val::Nil)
@@ -653,16 +648,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
 			scope.assign(*param, arg);
 		}
-		match self.eval_exprs(chunk, scope, &proc.body) {
+		match self.eval_exprs(chunk, Rc::new(RefCell::new(scope)), &proc.body) {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
 			Err(err) => Err(err),
 		}
 	}
 
-	fn eval_exprs(&mut self, chunk: &Chunk, scope: Scope, body: &[ExprId]) -> Result<Val, Signal> {
+	fn eval_exprs(&mut self, chunk: &Chunk, scope: Rc<RefCell<Scope>>, body: &[ExprId]) -> Result<Val, Signal> {
 		let saved = self.scope.clone();
-		self.scope = Rc::new(RefCell::new(scope));
+		self.scope = scope;
 		let mut res = Val::Nil;
 		for expr_id in body {
 			match self.eval_expr(chunk, *expr_id) {
