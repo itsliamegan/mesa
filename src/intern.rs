@@ -20,7 +20,7 @@ impl Sym {
 	pub const NIL: Sym = Sym(13);
 }
 
-const KEYWORDS: &[(&'static str, Sym)] = &[
+const KEYWORDS: &[(&str, Sym)] = &[
 	("type", Sym::TYPE),
 	("def", Sym::DEF),
 	("each", Sym::EACH),
