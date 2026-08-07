@@ -15,7 +15,7 @@ use crate::syn::{Lexer, Package, Parser};
 fn main() {
 	let args = env::args().collect::<Vec<_>>();
 	if args.len() != 2 {
-		eprintln!("usage: hrm <file>");
+		eprintln!("usage: mesa <file>");
 		process::exit(1);
 	}
 	let file = args[1].clone();
