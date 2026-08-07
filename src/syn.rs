@@ -524,10 +524,10 @@ pub enum Decl {
 }
 
 #[derive(Debug)]
-pub struct Type(pub Token, pub Sym, pub Vec<Sym>, pub Vec<DeclId>);
+pub struct Type(pub Sym, pub Vec<Sym>, pub Vec<DeclId>);
 
 #[derive(Debug)]
-pub struct Def(pub Token, pub Sym, pub Vec<Sym>, pub BlockId);
+pub struct Def(pub Sym, pub Vec<Sym>, pub BlockId);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ExprId(u32);
@@ -548,45 +548,45 @@ pub enum Expr {
 }
 
 #[derive(Debug)]
-pub struct Each(pub Token, pub Sym, pub ExprId, pub BlockId);
+pub struct Each(pub Sym, pub ExprId, pub BlockId);
 
 #[derive(Debug)]
-pub struct When(pub Token, pub ExprId, pub BlockId, pub Option<BlockId>);
+pub struct When(pub ExprId, pub BlockId, pub Option<BlockId>);
 
 #[derive(Debug)]
-pub struct Return(pub Token, pub ExprId);
+pub struct Return(pub ExprId);
 
 #[derive(Debug)]
-pub struct Call(pub Token, pub ExprId, pub Vec<ExprId>);
+pub struct Call(pub ExprId, pub Vec<ExprId>);
 
 #[derive(Debug)]
-pub struct Access(pub Token, pub ExprId, pub Sym);
+pub struct Access(pub ExprId, pub Sym);
 
 #[derive(Debug)]
-pub struct Script(pub Token, pub ExprId, pub ExprId);
+pub struct Script(pub ExprId, pub ExprId);
 
 #[derive(Debug)]
-pub struct Assign(pub Token, pub Place, pub ExprId);
+pub struct Assign(pub Place, pub ExprId);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Place {
 	Ident(Ident),
 	Member(Member),
 }
 
-#[derive(Debug)]
-pub struct Member(pub Token, pub ExprId, pub Sym);
+#[derive(Debug, Clone)]
+pub struct Member(pub ExprId, pub Sym);
 
 #[derive(Debug, Clone)]
-pub struct Ident(pub Token, pub Sym);
+pub struct Ident(pub Sym);
 
 #[derive(Debug, Clone)]
 pub enum Builtin {
-	Print(Token, ExprId),
+	Print(ExprId),
 }
 
 #[derive(Debug)]
-pub struct Binary(pub Token, pub BinaryOp, pub ExprId, pub ExprId);
+pub struct Binary(pub BinaryOp, pub ExprId, pub ExprId);
 
 #[derive(Debug)]
 pub enum BinaryOp {
@@ -598,12 +598,12 @@ pub enum BinaryOp {
 
 #[derive(Debug)]
 pub enum Lit {
-	Str(Token, String),
-	Num(Token, f64),
-	Bool(Token, bool),
-	List(Token, Vec<ExprId>),
-	Dict(Token, Vec<(ExprId, ExprId)>),
-	Nil(Token),
+	Str(String),
+	Num(f64),
+	Bool(bool),
+	List(Vec<ExprId>),
+	Dict(Vec<(ExprId, ExprId)>),
+	Nil,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -620,7 +620,9 @@ pub struct Chunk {
 	pub src: SourceId,
 	pub top: Vec<DeclId>,
 	decls: Vec<Decl>,
+	decl_toks: Vec<Token>,
 	exprs: Vec<Expr>,
+	expr_toks: Vec<Token>,
 	blocks: Vec<Block>,
 }
 
@@ -630,7 +632,9 @@ impl Chunk {
 			src,
 			top: Vec::new(),
 			decls: Vec::new(),
+			decl_toks: Vec::new(),
 			exprs: Vec::new(),
+			expr_toks: Vec::new(),
 			blocks: Vec::new(),
 		}
 	}
@@ -639,9 +643,14 @@ impl Chunk {
 		&self.decls[decl_id.0 as usize]
 	}
 
-	pub fn add_decl(&mut self, decl: Decl) -> DeclId {
+	pub fn get_decl_tok(&self, decl_id: DeclId) -> Token {
+		self.decl_toks[decl_id.0 as usize]
+	}
+
+	pub fn add_decl(&mut self, tok: Token, decl: Decl) -> DeclId {
 		let id = DeclId(self.decls.len() as u32);
 		self.decls.push(decl);
+		self.decl_toks.push(tok);
 		id
 	}
 
@@ -649,9 +658,14 @@ impl Chunk {
 		&self.exprs[expr_id.0 as usize]
 	}
 
-	pub fn add_expr(&mut self, expr: Expr) -> ExprId {
+	pub fn get_expr_tok(&self, expr_id: ExprId) -> Token {
+		self.expr_toks[expr_id.0 as usize]
+	}
+
+	pub fn add_expr(&mut self, tok: Token, expr: Expr) -> ExprId {
 		let id = ExprId(self.exprs.len() as u32);
 		self.exprs.push(expr);
+		self.expr_toks.push(tok);
 		id
 	}
 
@@ -725,18 +739,20 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_decl(&mut self) -> Result<DeclId, Error> {
-		let decl = match self.toks[self.pos].tag {
-			TokenTag::Type => self.parse_type_decl()?,
-			TokenTag::Def => self.parse_def_decl()?,
+		match self.toks[self.pos].tag {
+			TokenTag::Type => self.parse_type_decl(),
+			TokenTag::Def => self.parse_def_decl(),
 			_ => {
 				let expr_id = self.parse_expr()?;
-				Decl::Expr(expr_id)
+				let tok = self.chunk.get_expr_tok(expr_id);
+				let decl = Decl::Expr(expr_id);
+				let decl_id = self.chunk.add_decl(tok, decl);
+				Ok(decl_id)
 			}
-		};
-		Ok(self.chunk.add_decl(decl))
+		}
 	}
 
-	fn parse_type_decl(&mut self) -> Result<Decl, Error> {
+	fn parse_type_decl(&mut self) -> Result<DeclId, Error> {
 		let tok = self.take(TokenTag::Type)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut fields = Vec::new();
@@ -764,10 +780,12 @@ impl<'src> Parser<'src> {
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok(Decl::Type(Type(tok, name, fields, items)))
+		let decl = Decl::Type(Type(name, fields, items));
+		let decl_id = self.chunk.add_decl(tok, decl);
+		Ok(decl_id)
 	}
 
-	fn parse_def_decl(&mut self) -> Result<Decl, Error> {
+	fn parse_def_decl(&mut self) -> Result<DeclId, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut params = Vec::new();
@@ -794,7 +812,9 @@ impl<'src> Parser<'src> {
 		}
 		self.take(TokenTag::End)?;
 		let block = self.chunk.add_block(Block(body));
-		Ok(Decl::Def(Def(tok, name, params, block)))
+		let decl = Decl::Def(Def(name, params, block));
+		let decl_id = self.chunk.add_decl(tok, decl);
+		Ok(decl_id)
 	}
 
 	fn parse_expr(&mut self) -> Result<ExprId, Error> {
@@ -802,14 +822,9 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_expr_prec(&mut self, min_prec: Precedence) -> Result<ExprId, Error> {
-		let mut expr = self.parse_expr_unit()?;
-		let mut expr_id = self.chunk.add_expr(expr);
-		loop {
-			let tok = self.toks[self.pos];
-			if Precedence::of(tok.tag) <= min_prec {
-				break;
-			}
-			expr = match self.toks[self.pos].tag {
+		let mut expr_id = self.parse_expr_unit()?;
+		while Precedence::of(self.toks[self.pos].tag) > min_prec {
+			expr_id = match self.toks[self.pos].tag {
 				TokenTag::Eq => self.parse_assign_expr(expr_id)?,
 				TokenTag::Plus => {
 					self.parse_binary_expr(expr_id, BinaryOp::Add, Precedence::ADD)?
@@ -828,25 +843,28 @@ impl<'src> Parser<'src> {
 				TokenTag::LBrack => self.parse_script_expr(expr_id)?,
 				_ => break,
 			};
-			expr_id = self.chunk.add_expr(expr);
 		}
 		Ok(expr_id)
 	}
 
-	fn parse_access_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+	fn parse_access_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Dot)?;
 		let field = self.take(TokenTag::Ident)?.sym.unwrap();
-		Ok(Expr::Access(Access(tok, val_id, field)))
+		let expr = Expr::Access(Access(val_id, field));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_script_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+	fn parse_script_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::LBrack)?;
 		let key_id = self.parse_expr()?;
 		self.take(TokenTag::RBrack)?;
-		Ok(Expr::Script(Script(tok, val_id, key_id)))
+		let expr = Expr::Script(Script(val_id, key_id));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_call_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+	fn parse_call_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::LParen)?;
 		let mut args = Vec::new();
 		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen {
@@ -864,18 +882,22 @@ impl<'src> Parser<'src> {
 			}
 		}
 		self.take(TokenTag::RParen)?;
-		Ok(Expr::Call(Call(tok, val_id, args)))
+		let expr = Expr::Call(Call(val_id, args));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_assign_expr(&mut self, val_id: ExprId) -> Result<Expr, Error> {
+	fn parse_assign_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Eq)?;
 		let place = match self.chunk.get_expr(val_id) {
 			Expr::Ident(ident) => Place::Ident(ident.clone()),
-			Expr::Access(Access(_, val_id, name)) => Place::Member(Member(tok, *val_id, *name)),
+			Expr::Access(Access(target_id, name)) => Place::Member(Member(*target_id, *name)),
 			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok)),
 		};
 		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
-		Ok(Expr::Assign(Assign(tok, place, val_expr_id)))
+		let expr = Expr::Assign(Assign(place, val_expr_id));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
 	fn parse_binary_expr(
@@ -883,14 +905,16 @@ impl<'src> Parser<'src> {
 		val_id: ExprId,
 		op: BinaryOp,
 		prec: Precedence,
-	) -> Result<Expr, Error> {
+	) -> Result<ExprId, Error> {
 		let tok = self.toks[self.pos];
 		self.pos += 1;
 		let rhs = self.parse_expr_prec(prec)?;
-		Ok(Expr::Binary(Binary(tok, op, val_id, rhs)))
+		let expr = Expr::Binary(Binary(op, val_id, rhs));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_expr_unit(&mut self) -> Result<Expr, Error> {
+	fn parse_expr_unit(&mut self) -> Result<ExprId, Error> {
 		match self.toks[self.pos].tag {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
@@ -910,7 +934,7 @@ impl<'src> Parser<'src> {
 		}
 	}
 
-	fn parse_each_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_each_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Each)?;
 		let item = self.take(TokenTag::Ident)?.sym.unwrap();
 		self.take(TokenTag::In)?;
@@ -923,16 +947,20 @@ impl<'src> Parser<'src> {
 		}
 		self.take(TokenTag::End)?;
 		let block = self.chunk.add_block(Block(body));
-		Ok(Expr::Each(Each(tok, item, iter, block)))
+		let expr = Expr::Each(Each(item, iter, block));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_return_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_return_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Return)?;
-		let expr_id = self.parse_expr()?;
-		Ok(Expr::Return(Return(tok, expr_id)))
+		let val_expr_id = self.parse_expr()?;
+		let expr = Expr::Return(Return(val_expr_id));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_when_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_when_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::When)?;
 		let cond = self.parse_expr()?;
 		self.take(TokenTag::Then)?;
@@ -958,16 +986,20 @@ impl<'src> Parser<'src> {
 			None
 		};
 		self.take(TokenTag::End)?;
-		Ok(Expr::When(When(tok, cond, then_branch, else_branch)))
+		let expr = Expr::When(When(cond, then_branch, else_branch));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_ident_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_ident_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Ident)?;
 		let sym = tok.sym.unwrap();
-		Ok(Expr::Ident(Ident(tok, sym)))
+		let expr = Expr::Ident(Ident(sym));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_builtin_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_builtin_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Builtin)?;
 		let span = &self.src[tok.pos..tok.end];
 		match span {
@@ -975,7 +1007,9 @@ impl<'src> Parser<'src> {
 				self.take(TokenTag::LParen)?;
 				let val = self.parse_expr()?;
 				self.take(TokenTag::RParen)?;
-				Ok(Expr::Builtin(Builtin::Print(tok, val)))
+				let expr = Expr::Builtin(Builtin::Print(val));
+				let expr_id = self.chunk.add_expr(tok, expr);
+				Ok(expr_id)
 			}
 			_ => Err(Error::UnknownBuiltin(
 				self.src.loc(tok.pos),
@@ -984,14 +1018,14 @@ impl<'src> Parser<'src> {
 		}
 	}
 
-	fn parse_str_lit_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_str_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Str)?;
 		let mut pos = tok.pos + 1;
 		let mut str = String::with_capacity(tok.end - tok.pos);
-		let mut chunk_idx = pos;
+		let mut chunk_pos = pos;
 		while pos < tok.end - 1 {
 			if self.src[pos] == b'\\' {
-				str.push_str(&self.src[chunk_idx..pos]);
+				str.push_str(&self.src[chunk_pos..pos]);
 				match self.src[pos + 1] {
 					b'n' => str.push('\n'),
 					b't' => str.push('\t'),
@@ -1003,30 +1037,36 @@ impl<'src> Parser<'src> {
 					}
 				}
 				pos += 2;
-				chunk_idx = pos;
+				chunk_pos = pos;
 			} else {
 				pos += 1;
 			}
 		}
-		str.push_str(&self.src[chunk_idx..pos]);
-		Ok(Expr::Lit(Lit::Str(tok, str)))
+		str.push_str(&self.src[chunk_pos..pos]);
+		let expr = Expr::Lit(Lit::Str(str));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_num_lit_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_num_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Num)?;
 		let span = &self.src[tok.pos..tok.end];
 		let num = span.parse().unwrap();
-		Ok(Expr::Lit(Lit::Num(tok, num)))
+		let expr = Expr::Lit(Lit::Num(num));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_bool_lit_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_bool_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Bool)?;
 		let span = &self.src[tok.pos..tok.end];
 		let bool = span.parse().unwrap();
-		Ok(Expr::Lit(Lit::Bool(tok, bool)))
+		let expr = Expr::Lit(Lit::Bool(bool));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_list_lit_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_list_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::LBrack)?;
 		let mut items = Vec::new();
 		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RBrack {
@@ -1044,10 +1084,12 @@ impl<'src> Parser<'src> {
 			}
 		}
 		self.take(TokenTag::RBrack)?;
-		Ok(Expr::Lit(Lit::List(tok, items)))
+		let expr = Expr::Lit(Lit::List(items));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_dict_lit_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_dict_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::LBrace)?;
 		let mut pairs = Vec::new();
 		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RBrace {
@@ -1067,12 +1109,16 @@ impl<'src> Parser<'src> {
 			}
 		}
 		self.take(TokenTag::RBrace)?;
-		Ok(Expr::Lit(Lit::Dict(tok, pairs)))
+		let expr = Expr::Lit(Lit::Dict(pairs));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
-	fn parse_nil_lit_expr(&mut self) -> Result<Expr, Error> {
+	fn parse_nil_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Nil)?;
-		Ok(Expr::Lit(Lit::Nil(tok)))
+		let expr = Expr::Lit(Lit::Nil);
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
 	}
 
 	fn take(&mut self, tag: TokenTag) -> Result<Token, Error> {

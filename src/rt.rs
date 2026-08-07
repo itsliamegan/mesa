@@ -296,12 +296,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_decl(&mut self, chunk: &Chunk, decl_id: DeclId) -> Result<(), Signal> {
 		match chunk.get_decl(decl_id) {
-			Decl::Type(syn::Type(_, name, fields, items)) => {
+			Decl::Type(syn::Type(name, fields, items)) => {
 				let mut methods = HashMap::new();
 				for decl_id in items {
 					match chunk.get_decl(*decl_id) {
-						Decl::Type(syn::Type(_, _, _, _)) => todo!(),
-						Decl::Def(Def(_, name, params, body)) => {
+						Decl::Type(syn::Type(_, _, _)) => todo!(),
+						Decl::Def(Def(name, params, body)) => {
 							let proc = Proc {
 								name: *name,
 								params: params.to_vec(),
@@ -324,7 +324,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				self.scope.borrow_mut().assign(*name, val);
 				Ok(())
 			}
-			Decl::Def(Def(_, name, params, body)) => {
+			Decl::Def(Def(name, params, body)) => {
 				let obj = Obj::Proc(Proc {
 					name: *name,
 					params: params.to_vec(),
@@ -344,7 +344,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
-			Expr::Each(Each(tok, name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
+			Expr::Each(Each(name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						let outer_scope = self.scope.clone();
@@ -376,7 +376,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					obj => {
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.pos);
+						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 						Err(Signal::Error(Error::IterNonIterable(
 							loc,
 							format!("{:?}", obj),
@@ -385,14 +385,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				},
 				val => {
 					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(tok.pos);
+					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					Err(Signal::Error(Error::IterNonIterable(
 						loc,
 						format!("{:?}", val),
 					)))
 				}
 			},
-			Expr::When(When(_, cond, then_branch, else_branch)) => {
+			Expr::When(When(cond, then_branch, else_branch)) => {
 				let cond = match self.eval_expr(chunk, *cond)? {
 					Val::Bool(true) => true,
 					Val::Num(num) if num > 0.0 => true,
@@ -412,11 +412,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Ok(Val::Nil)
 				}
 			}
-			Expr::Return(Return(_, val_expr_id)) => {
+			Expr::Return(Return(val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				Err(Signal::Return(val))
 			}
-			Expr::Call(Call(tok, val_id, arg_ids)) => {
+			Expr::Call(Call(val_id, arg_ids)) => {
+				let tok = chunk.get_expr_tok(expr_id);
 				let mut args = Vec::with_capacity(arg_ids.len());
 				for arg_id in arg_ids {
 					let arg = self.eval_expr(chunk, *arg_id)?;
@@ -424,7 +425,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				match self.eval_expr(chunk, *val_id)? {
 					Val::Obj(rf) => match &*rf.borrow() {
-						Obj::Proc(proc) => self.eval_proc_call(chunk, tok, proc, None, args),
+						Obj::Proc(proc) => self.eval_proc_call(chunk, &tok, proc, None, args),
 						Obj::Type(type_id) => {
 							let typ = self.types.get_type(*type_id);
 							if args.len() != typ.fields.len() {
@@ -449,7 +450,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 						Obj::Method(meth) => self.eval_proc_call(
 							chunk,
-							tok,
+							&tok,
 							&meth.proc.borrow(),
 							Some(meth.inst.clone()),
 							args,
@@ -473,7 +474,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Access(Access(tok, val_id, name)) => {
+			Expr::Access(Access(val_id, name)) => {
 				let val = self.eval_expr(chunk, *val_id)?;
 				let typ = self.type_of(&val);
 
@@ -485,21 +486,21 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 
 				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(tok.pos);
+				let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 				Err(Signal::Error(Error::AccessNonMember(
 					loc,
 					self.syms.resolve(typ.name).to_string(),
 					self.syms.resolve(*name).to_string(),
 				)))
 			}
-			Expr::Script(Script(tok, val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
+			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						let idx = match self.eval_expr(chunk, *key_id)? {
 							Val::Num(num) if num >= 0.0 => num.trunc() as usize,
 							val => {
 								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.pos);
+								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 								return Err(Signal::Error(Error::ScriptNonIndex(
 									loc,
 									rt_print_val(self.syms, &self.types, &val),
@@ -520,7 +521,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					_ => {
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.pos);
+						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 						Err(Signal::Error(Error::ScriptNonScriptable(
 							loc,
 							rt_print_val(self.syms, &self.types, &Val::Obj(rf.clone())),
@@ -529,21 +530,21 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				},
 				val => {
 					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(tok.pos);
+					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					Err(Signal::Error(Error::ScriptNonScriptable(
 						loc,
 						rt_print_val(self.syms, &self.types, &val),
 					)))
 				}
 			},
-			Expr::Assign(Assign(_, place, val_expr_id)) => {
+			Expr::Assign(Assign(place, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
-					Place::Ident(Ident(_, sym)) => {
+					Place::Ident(Ident(sym)) => {
 						self.scope.borrow_mut().assign(*sym, val.clone());
 						Ok(val)
 					}
-					Place::Member(Member(tok, target_id, name)) => {
+					Place::Member(Member(target_id, name)) => {
 						let target = self.eval_expr(chunk, *target_id)?;
 						let typ = self.type_of(&target);
 
@@ -556,7 +557,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.pos);
+						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 						Err(Signal::Error(Error::AccessNonMember(
 							loc,
 							self.syms.resolve(typ.name).to_string(),
@@ -565,7 +566,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Binary(Binary(tok, op, lhs_id, rhs_id)) => {
+			Expr::Binary(Binary(op, lhs_id, rhs_id)) => {
 				let lhs = self.eval_expr(chunk, *lhs_id)?;
 				let rhs = self.eval_expr(chunk, *rhs_id)?;
 				match (lhs, rhs) {
@@ -577,7 +578,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					})),
 					(lhs, rhs) => {
 						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.pos);
+						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 						let val = match (&lhs, &rhs) {
 							(Val::Num(_), _) => rhs,
 							(_, Val::Num(_)) => lhs,
@@ -590,7 +591,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Ident(Ident(tok, name)) => {
+			Expr::Ident(Ident(name)) => {
 				if let Some(val) = self.scope.borrow().lookup(*name) {
 					return Ok(val);
 				}
@@ -609,24 +610,24 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 
 				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(tok.pos);
+				let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 				let name = self.syms.resolve(*name);
 				Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
 			}
 			Expr::Builtin(builtin) => match builtin {
-				Builtin::Print(_, val_id) => {
+				Builtin::Print(val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
 					println!("{}", rt_print_val(self.syms, &self.types, &val));
 					Ok(val)
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
-				Lit::Str(_, str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
+				Lit::Str(str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
 					chars: Box::from(str.as_str()),
 				})))),
-				Lit::Num(_, num) => Val::Num(*num),
-				Lit::Bool(_, bool) => Val::Bool(*bool),
-				Lit::List(_, item_ids) => {
+				Lit::Num(num) => Val::Num(*num),
+				Lit::Bool(bool) => Val::Bool(*bool),
+				Lit::List(item_ids) => {
 					let mut items = Vec::with_capacity(item_ids.len());
 					for item_id in item_ids {
 						let item = self.eval_expr(chunk, *item_id)?;
@@ -634,7 +635,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					Val::Obj(Rc::new(RefCell::new(Obj::List(List { items }))))
 				}
-				Lit::Dict(_, pair_ids) => {
+				Lit::Dict(pair_ids) => {
 					let mut pairs = HashMap::with_capacity(pair_ids.len());
 					for (key_id, val_id) in pair_ids {
 						let key = self.eval_expr(chunk, *key_id)?;
@@ -643,7 +644,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict { pairs }))))
 				}
-				Lit::Nil(_) => Val::Nil,
+				Lit::Nil => Val::Nil,
 			}),
 		}
 	}
