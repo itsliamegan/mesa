@@ -1,0 +1,5 @@
+def id(val)
+	val
+end
+
+$dbg(id(id))
