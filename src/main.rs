@@ -30,7 +30,7 @@ fn main() {
 	let src = pkg.get_src(src_id);
 
 	match Lexer::new(&mut syms, src).lex() {
-		Ok(toks) => match Parser::new(&mut syms, src, toks).parse() {
+		Ok(toks) => match Parser::new(src, toks).parse() {
 			Ok(chunk) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
 				Ok(()) => {}
 				Err(err) => eprintln!("{}", err),

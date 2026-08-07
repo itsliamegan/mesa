@@ -128,6 +128,7 @@ impl Display for Location {
 pub struct Token {
 	pub src: SourceId,
 	pub tag: TokenTag,
+	pub sym: Option<Sym>,
 	pub idx: usize,
 	pub len: usize,
 }
@@ -235,6 +236,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			return Ok(Token {
 				src: self.src.id,
 				tag: TokenTag::Eof,
+				sym: None,
 				idx: self.idx,
 				len: 0,
 			});
@@ -246,6 +248,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					Ok(Token {
 						src: self.src.id,
 						tag: TokenTag::Eq,
+						sym: None,
 						idx: self.idx - 2,
 						len: 2,
 					})
@@ -254,6 +257,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					Ok(Token {
 						src: self.src.id,
 						tag: TokenTag::Colon,
+						sym: None,
 						idx: self.idx - 1,
 						len: 1,
 					})
@@ -264,6 +268,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::LBrace,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -273,6 +278,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RBrace,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -282,6 +288,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::LBrack,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -291,6 +298,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RBrack,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -300,6 +308,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::LParen,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -309,6 +318,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::RParen,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -318,6 +328,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::Comma,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -327,6 +338,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::Dot,
+					sym: None,
 					idx: self.idx - 1,
 					len: 1,
 				})
@@ -375,6 +387,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		Ok(Token {
 			src: self.src.id,
 			tag,
+			sym: Some(sym),
 			idx,
 			len: self.idx - idx,
 		})
@@ -383,12 +396,13 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_builtin(&mut self) -> Result<Token, Error> {
 		let idx = self.idx;
 		self.idx += 1;
-		let len = self.lex_ident()?.len + 1;
+		let ident = self.lex_ident()?;
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Builtin,
+			sym: ident.sym,
 			idx,
-			len,
+			len: ident.len + 1,
 		})
 	}
 
@@ -409,6 +423,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Str,
+			sym: None,
 			idx,
 			len: self.idx - idx,
 		})
@@ -428,6 +443,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Num,
+			sym: None,
 			idx,
 			len: self.idx - idx,
 		})
@@ -579,18 +595,16 @@ impl Chunk {
 	}
 }
 
-pub struct Parser<'syms, 'src> {
-	syms: &'syms mut Interner,
+pub struct Parser<'src> {
 	src: &'src Source,
 	toks: Vec<Token>,
 	idx: usize,
 	chunk: Chunk,
 }
 
-impl<'syms, 'src> Parser<'syms, 'src> {
-	pub fn new(syms: &'syms mut Interner, src: &'src Source, toks: Vec<Token>) -> Self {
+impl<'src> Parser<'src> {
+	pub fn new(src: &'src Source, toks: Vec<Token>) -> Self {
 		Self {
-			syms,
 			src,
 			toks,
 			idx: 0,
@@ -620,16 +634,12 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_type_decl(&mut self) -> Result<Decl, Error> {
 		let tok = self.take(TokenTag::Type)?;
-		let ident = self.take(TokenTag::Ident)?;
-		let span = &self.src[ident.idx..ident.idx + ident.len];
-		let name = self.syms.intern(span);
+		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut fields = Vec::new();
 		if self.toks[self.idx].tag == TokenTag::LParen {
 			self.take(TokenTag::LParen)?;
 			while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
-				let tok = self.take(TokenTag::Ident)?;
-				let span = &self.src[tok.idx..tok.idx + tok.len];
-				let field = self.syms.intern(span);
+				let field = self.take(TokenTag::Ident)?.sym.unwrap();
 				fields.push(field);
 				match self.toks[self.idx].tag {
 					TokenTag::Comma => {
@@ -655,15 +665,11 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_def_decl(&mut self) -> Result<Decl, Error> {
 		let tok = self.take(TokenTag::Def)?;
-		let ident = self.take(TokenTag::Ident)?;
-		let span = &self.src[ident.idx..ident.idx + ident.len];
-		let name = self.syms.intern(span);
+		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut params = Vec::new();
 		self.take(TokenTag::LParen)?;
 		while self.idx < self.toks.len() && self.toks[self.idx].tag != TokenTag::RParen {
-			let tok = self.take(TokenTag::Ident)?;
-			let span = &self.src[tok.idx..tok.idx + tok.len];
-			let param = self.syms.intern(span);
+			let param = self.take(TokenTag::Ident)?.sym.unwrap();
 			params.push(param);
 			match self.toks[self.idx].tag {
 				TokenTag::Comma => {
@@ -711,9 +717,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 				TokenTag::Dot => {
 					self.idx += 1;
 					let val_id = expr_id;
-					let ident = self.take(TokenTag::Ident)?;
-					let span = &self.src[ident.idx..ident.idx + ident.len];
-					let field = self.syms.intern(span);
+					let field = self.take(TokenTag::Ident)?.sym.unwrap();
 					let expr = Expr::Access(Access(tok, val_id, field));
 					expr_id = self.chunk.add_expr(expr);
 				}
@@ -777,9 +781,7 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_each_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Each)?;
-		let ident = self.take(TokenTag::Ident)?;
-		let span = &self.src[ident.idx..ident.idx + ident.len];
-		let item = self.syms.intern(span);
+		let item = self.take(TokenTag::Ident)?.sym.unwrap();
 		self.take(TokenTag::In)?;
 		let iter = self.parse_expr()?;
 		self.take(TokenTag::Do)?;
@@ -830,9 +832,8 @@ impl<'syms, 'src> Parser<'syms, 'src> {
 
 	fn parse_ident_expr(&mut self) -> Result<Expr, Error> {
 		let tok = self.take(TokenTag::Ident)?;
-		let span = &self.src[tok.idx..tok.idx + tok.len];
-		let sym_id = self.syms.intern(span);
-		Ok(Expr::Ident(Ident(tok, sym_id)))
+		let sym = tok.sym.unwrap();
+		Ok(Expr::Ident(Ident(tok, sym)))
 	}
 
 	fn parse_builtin_expr(&mut self) -> Result<Expr, Error> {

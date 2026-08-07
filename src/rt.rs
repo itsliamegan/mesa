@@ -536,8 +536,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Assign(Assign(_, place, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
-					Place::Ident(Ident(_, sym_id)) => {
-						self.scope.borrow_mut().assign(*sym_id, val.clone());
+					Place::Ident(Ident(_, sym)) => {
+						self.scope.borrow_mut().assign(*sym, val.clone());
 						Ok(val)
 					}
 					Place::Member(Member(tok, target_id, name)) => {
