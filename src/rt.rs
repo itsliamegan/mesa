@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Access, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each,
-	Expr, ExprId, Ident, Lit, Location, Member, Package, Place, Return, Script, Token, When,
+	Expr, ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
@@ -200,31 +200,61 @@ struct Instance {
 }
 
 #[derive(Debug)]
+struct Member {
+	name: Sym,
+	inst: Rc<RefCell<Obj>>,
+}
+
+#[derive(Debug)]
 struct Method {
 	proc: Rc<RefCell<Proc>>,
 	inst: Rc<RefCell<Obj>>,
 }
 
 impl Instance {
-	fn member(&self, types: &TypeRegistry, obj_rf: Rc<RefCell<Obj>>, name: Sym) -> Option<Val> {
-		let typ = types.get_type(self.typ);
-		if let Some(val) = self.fields.get(&name) {
-			Some(val.clone())
-		} else if let Some(proc_rf) = typ.methods.get(&name) {
-			Some(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
-				proc: proc_rf.clone(),
-				inst: obj_rf,
-			})))))
-		} else {
-			None
+	fn member(obj: Rc<RefCell<Obj>>, name: Sym, types: &TypeRegistry) -> Option<Member> {
+		if let Obj::Instance(inst) = &*obj.borrow() {
+			let typ = types.get_type(inst.typ);
+			if inst.fields.contains_key(&name) || typ.methods.contains_key(&name) {
+				return Some(Member {
+					name,
+					inst: obj.clone(),
+				});
+			}
 		}
+		None
+	}
+}
+
+impl Member {
+	fn get(&self, types: &TypeRegistry) -> Val {
+		let Obj::Instance(inst) = &*self.inst.borrow() else {
+			panic!();
+		};
+		let typ = types.get_type(inst.typ);
+		if let Some(val) = inst.fields.get(&self.name) {
+			val.clone()
+		} else if let Some(proc_rf) = typ.methods.get(&self.name) {
+			Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
+				proc: proc_rf.clone(),
+				inst: self.inst.clone(),
+			}))))
+		} else {
+			panic!();
+		}
+	}
+
+	fn set(&self, val: Val) {
+		let Obj::Instance(inst) = &mut *self.inst.borrow_mut() else {
+			panic!();
+		};
+		inst.fields.insert(self.name, val);
 	}
 }
 
 #[derive(Debug)]
 struct Scope {
 	locals: HashMap<Sym, Val>,
-	inst: Option<Rc<RefCell<Obj>>>,
 	outer: Option<Rc<RefCell<Scope>>>,
 }
 
@@ -244,48 +274,6 @@ impl Local {
 }
 
 impl Scope {
-	fn lookup(scope: &Rc<RefCell<Scope>>, name: Sym) -> Option<Val> {
-		if let Some(rf) = &scope.borrow().inst
-			&& let Obj::Instance(inst) = &*rf.borrow()
-			&& let Some(val) = inst.fields.get(&name)
-		{
-			return Some(val.clone());
-		}
-
-		if let Some(local) = Scope::local(scope, name) {
-			Some(local.get())
-		} else {
-			None
-		}
-	}
-
-	fn declare(&mut self, name: Sym, val: Val) {
-		if let Some(rf) = &self.inst
-			&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
-			&& inst.fields.contains_key(&name)
-		{
-			inst.fields.insert(name, val);
-		} else {
-			self.locals.insert(name, val);
-		}
-	}
-
-	fn assign(scope: &Rc<RefCell<Scope>>, name: Sym, val: Val) {
-		if let Some(rf) = &scope.borrow().inst
-			&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
-			&& inst.fields.contains_key(&name)
-		{
-			inst.fields.insert(name, val);
-			return;
-		}
-
-		if let Some(local) = Scope::local(scope, name) {
-			local.set(val);
-		} else {
-			scope.borrow_mut().locals.insert(name, val);
-		}
-	}
-
 	fn local(scope: &Rc<RefCell<Scope>>, name: Sym) -> Option<Local> {
 		if scope.borrow().locals.contains_key(&name) {
 			Some(Local {
@@ -305,6 +293,7 @@ pub struct Interpreter<'syms, 'pkg> {
 	pkg: &'pkg Package,
 	types: TypeRegistry,
 	scope: Rc<RefCell<Scope>>,
+	inst: Option<Rc<RefCell<Obj>>>,
 }
 
 enum Signal {
@@ -321,9 +310,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			types,
 			scope: Rc::new(RefCell::new(Scope {
 				locals: HashMap::new(),
-				inst: None,
 				outer: None,
 			})),
+			inst: None,
 		}
 	}
 
@@ -365,7 +354,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let id = self.types.add_type(typ);
 				let obj = Obj::Type(id);
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
-				self.scope.borrow_mut().declare(*name, val);
+				self.scope.borrow_mut().locals.insert(*name, val);
 				Ok(())
 			}
 			Decl::Def(Def(name, params, body)) => {
@@ -376,7 +365,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					scope: self.scope.clone(),
 				});
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
-				self.scope.borrow_mut().declare(*name, val);
+				self.scope.borrow_mut().locals.insert(*name, val);
 				Ok(())
 			}
 			Decl::Expr(expr_id) => {
@@ -394,13 +383,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let outer_scope = self.scope.clone();
 						let inner_scope = Scope {
 							locals: HashMap::new(),
-							inst: outer_scope.borrow().inst.clone(),
 							outer: Some(outer_scope.clone()),
 						};
 						self.scope = Rc::new(RefCell::new(inner_scope));
 						let body = chunk.get_block(*body_id);
 						for item in &list.items {
-							self.scope.borrow_mut().declare(*name, item.clone());
+							self.scope.borrow_mut().locals.insert(*name, item.clone());
 							for expr_id in &body.0 {
 								match self.eval_expr(chunk, *expr_id) {
 									Ok(_) => {}
@@ -445,7 +433,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				};
 				let scope = Rc::new(RefCell::new(Scope {
 					locals: HashMap::new(),
-					inst: self.scope.borrow().inst.clone(),
 					outer: Some(self.scope.clone()),
 				}));
 				if cond {
@@ -523,19 +510,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let typ = self.type_of(&val);
 
 				if let Val::Obj(obj_rf) = val
-					&& let Obj::Instance(inst) = &*obj_rf.borrow()
-					&& let Some(member) = inst.member(&self.types, obj_rf.clone(), *name)
+					&& let Some(member) = Instance::member(obj_rf.clone(), *name, &self.types)
 				{
-					return Ok(member);
+					Ok(member.get(&self.types))
+				} else {
+					let src = self.pkg.get_src(chunk.src);
+					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					Err(Signal::Error(Error::AccessNonMember(
+						loc,
+						self.syms.resolve(typ.name).to_string(),
+						self.syms.resolve(*name).to_string(),
+					)))
 				}
-
-				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-				Err(Signal::Error(Error::AccessNonMember(
-					loc,
-					self.syms.resolve(typ.name).to_string(),
-					self.syms.resolve(*name).to_string(),
-				)))
 			}
 			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
@@ -585,21 +571,28 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
 					Place::Ident(Ident(sym)) => {
-						Scope::assign(&self.scope, *sym, val.clone());
+						if let Some(rf) = &self.inst
+							&& let Some(member) = Instance::member(rf.clone(), *sym, &self.types)
+						{
+							member.set(val.clone());
+						} else if let Some(local) = Scope::local(&self.scope, *sym) {
+							local.set(val.clone());
+						} else {
+							self.scope.borrow_mut().locals.insert(*sym, val.clone());
+						}
 						Ok(val)
 					}
-					Place::Member(Member(target_id, name)) => {
+					Place::Member(syn::Member(target_id, name)) => {
 						let target = self.eval_expr(chunk, *target_id)?;
-						let typ = self.type_of(&target);
 
-						if let Val::Obj(rf) = target
-							&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
-							&& (inst.fields.contains_key(name) || typ.methods.contains_key(name))
+						if let Val::Obj(rf) = &target
+							&& let Some(member) = Instance::member(rf.clone(), *name, &self.types)
 						{
-							inst.fields.insert(*name, val.clone());
+							member.set(val.clone());
 							return Ok(val);
 						}
 
+						let typ = self.type_of(&target);
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 						Err(Signal::Error(Error::AccessNonMember(
@@ -637,19 +630,21 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Expr::Ident(Ident(name)) => {
 				if *name == Sym::SELF
-					&& let Some(inst) = &self.scope.borrow().inst
+					&& let Some(inst) = &self.inst
 				{
-					return Ok(Val::Obj(inst.clone()));
+					Ok(Val::Obj(inst.clone()))
+				} else if let Some(local) = Scope::local(&self.scope, *name) {
+					Ok(local.get())
+				} else if let Some(rf) = &self.inst
+					&& let Some(member) = Instance::member(rf.clone(), *name, &self.types)
+				{
+					Ok(member.get(&self.types))
+				} else {
+					let src = self.pkg.get_src(chunk.src);
+					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let name = self.syms.resolve(*name);
+					Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
 				}
-
-				if let Some(val) = Scope::lookup(&self.scope, *name) {
-					return Ok(val);
-				}
-
-				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-				let name = self.syms.resolve(*name);
-				Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
 			}
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Print(val_id) => {
@@ -705,13 +700,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 		let mut scope = Scope {
 			locals: HashMap::new(),
-			inst,
 			outer: Some(proc.scope.clone()),
 		};
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-			scope.declare(*param, arg);
+			scope.locals.insert(*param, arg);
 		}
-		match self.eval_block(chunk, Rc::new(RefCell::new(scope)), proc.body) {
+		let saved_inst = self.inst.clone();
+		self.inst = inst;
+		let result = self.eval_block(chunk, Rc::new(RefCell::new(scope)), proc.body);
+		self.inst = saved_inst;
+		match result {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
 			Err(err) => Err(err),
