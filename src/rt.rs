@@ -17,6 +17,7 @@ pub enum Error {
 	CallNonCallable(Location, String),
 	IterNonIterable(Location, String),
 	AccessNonMember(Location, String, String),
+	AssignReadOnlyMember(Location, String, String),
 	ScriptNonScriptable(Location, String),
 	ScriptNonIndex(Location, String),
 	ArithNonNum(Location, String),
@@ -30,6 +31,7 @@ impl Error {
 			Self::CallNonCallable(loc, _) => loc,
 			Self::IterNonIterable(loc, _) => loc,
 			Self::AccessNonMember(loc, _, _) => loc,
+			Self::AssignReadOnlyMember(loc, _, _) => loc,
 			Self::ScriptNonScriptable(loc, _) => loc,
 			Self::ScriptNonIndex(loc, _) => loc,
 			Self::ArithNonNum(loc, _) => loc,
@@ -49,6 +51,9 @@ impl Display for Error {
 			Self::IterNonIterable(_, val) => write!(f, "iter of non-iterable {}", val),
 			Self::AccessNonMember(_, typ, name) => {
 				write!(f, "no such member '{}' on type '{}'", name, typ)
+			}
+			Self::AssignReadOnlyMember(_, typ, name) => {
+				write!(f, "member '{}' on type '{}' is read-only", name, typ)
 			}
 			Self::ScriptNonScriptable(_, val) => write!(f, "script of non-scriptable {}", val),
 			Self::ScriptNonIndex(_, val) => write!(f, "script with non-index {}", val),
@@ -93,6 +98,44 @@ enum Val {
 	Nil(Nil),
 }
 
+impl Val {
+	fn type_id(&self) -> TypeId {
+		match self {
+			Val::Num(_) => TypeId::Native(NativeTypeId::NUM),
+			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
+			Val::Obj(rf) => rf.borrow().type_id(),
+			Self::Nil(_) => TypeId::Native(NativeTypeId::NIL),
+		}
+	}
+
+	fn member(&self, name: Sym, types: &TypeRegistry) -> Option<Member> {
+		match self.type_id() {
+			TypeId::User(type_id) => {
+				let Val::Obj(obj) = self else {
+					panic!();
+				};
+				let Obj::Instance(inst) = &*obj.borrow() else {
+					panic!();
+				};
+				let typ = types.get_user_type(type_id);
+				if inst.fields.contains_key(&name) || typ.methods.contains_key(&name) {
+					Some(Member::User(obj.clone(), name))
+				} else {
+					None
+				}
+			}
+			TypeId::Native(type_id) => {
+				let typ = types.get_native_type(type_id);
+				if typ.fields.contains_key(&name) {
+					Some(Member::Native(self.clone(), name))
+				} else {
+					None
+				}
+			}
+		}
+	}
+}
+
 impl PartialEq for Val {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
@@ -133,6 +176,20 @@ enum Obj {
 	Type(TypeId),
 	Instance(Instance),
 	Method(Method),
+}
+
+impl Obj {
+	fn type_id(&self) -> TypeId {
+		match self {
+			Self::Str(_) => TypeId::Native(NativeTypeId::STR),
+			Self::List(_) => TypeId::Native(NativeTypeId::LIST),
+			Self::Dict(_) => TypeId::Native(NativeTypeId::DICT),
+			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
+			Self::Type(_) => TypeId::Native(NativeTypeId::TYPE),
+			Self::Instance(inst) => TypeId::User(inst.typ),
+			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -190,20 +247,31 @@ enum TypeId {
 struct NativeTypeId(u32);
 
 #[derive(Debug)]
+struct NativeField {
+	get: fn(&Val) -> Val,
+}
+
+#[derive(Debug)]
 struct NativeType {
 	name: Sym,
 	new: Option<fn() -> Val>,
+	fields: HashMap<Sym, NativeField>,
 }
 
-const CORE_TYPES: &[(&str, NativeTypeId, Option<fn() -> Val>)] = &[
-	("Nil", NativeTypeId::NIL, Some(Nil::new)),
-	("Num", NativeTypeId::NUM, Some(Num::new)),
-	("Bool", NativeTypeId::BOOL, Some(Bool::new)),
-	("Str", NativeTypeId::STR, Some(Str::new)),
-	("List", NativeTypeId::LIST, Some(List::new)),
-	("Dict", NativeTypeId::DICT, Some(Dict::new)),
-	("Proc", NativeTypeId::PROC, None),
-	("Type", NativeTypeId::TYPE, None),
+const CORE_TYPES: &[(
+	&str,
+	NativeTypeId,
+	Option<fn() -> Val>,
+	&[(&str, fn(&Val) -> Val)],
+)] = &[
+	("Nil", NativeTypeId::NIL, Some(Nil::new), &[]),
+	("Num", NativeTypeId::NUM, Some(Num::new), &[]),
+	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[]),
+	("Str", NativeTypeId::STR, Some(Str::new), &[]),
+	("List", NativeTypeId::LIST, Some(List::new), &[]),
+	("Dict", NativeTypeId::DICT, Some(Dict::new), &[]),
+	("Proc", NativeTypeId::PROC, None, &[]),
+	("Type", NativeTypeId::TYPE, None, &[]),
 ];
 
 impl NativeTypeId {
@@ -236,10 +304,15 @@ impl TypeRegistry {
 	fn new(syms: &mut Interner) -> Self {
 		let mut native = Vec::with_capacity(CORE_TYPES.len());
 
-		for (name, _id, new) in CORE_TYPES {
+		for (name, _id, new, field_pairs) in CORE_TYPES {
+			let mut fields = HashMap::with_capacity(field_pairs.len());
+			for (name, get) in *field_pairs {
+				fields.insert(syms.intern(name), NativeField { get: *get });
+			}
 			native.push(NativeType {
 				name: syms.intern(name),
 				new: *new,
+				fields,
 			});
 		}
 
@@ -271,9 +344,9 @@ struct Instance {
 }
 
 #[derive(Debug)]
-struct Member {
-	name: Sym,
-	inst: Rc<RefCell<Obj>>,
+enum Member {
+	User(Rc<RefCell<Obj>>, Sym),
+	Native(Val, Sym),
 }
 
 #[derive(Debug)]
@@ -282,44 +355,47 @@ struct Method {
 	inst: Rc<RefCell<Obj>>,
 }
 
-impl Instance {
-	fn member(obj: Rc<RefCell<Obj>>, name: Sym, types: &TypeRegistry) -> Option<Member> {
-		if let Obj::Instance(inst) = &*obj.borrow() {
-			let typ = types.get_user_type(inst.typ);
-			if inst.fields.contains_key(&name) || typ.methods.contains_key(&name) {
-				return Some(Member {
-					name,
-					inst: obj.clone(),
-				});
-			}
-		}
-		None
-	}
-}
-
 impl Member {
 	fn get(&self, types: &TypeRegistry) -> Val {
-		let Obj::Instance(inst) = &*self.inst.borrow() else {
-			unreachable!();
-		};
-		let typ = types.get_user_type(inst.typ);
-		if let Some(val) = inst.fields.get(&self.name) {
-			val.clone()
-		} else if let Some(proc_rf) = typ.methods.get(&self.name) {
-			Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
-				proc: proc_rf.clone(),
-				inst: self.inst.clone(),
-			}))))
-		} else {
-			unreachable!();
+		match self {
+			Member::User(inst_rf, name) => {
+				let Obj::Instance(inst) = &*inst_rf.borrow() else {
+					panic!()
+				};
+				let typ = types.get_user_type(inst.typ);
+				if let Some(val) = inst.fields.get(name) {
+					val.clone()
+				} else if let Some(proc_rf) = typ.methods.get(name) {
+					Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
+						proc: proc_rf.clone(),
+						inst: inst_rf.clone(),
+					}))))
+				} else {
+					panic!();
+				}
+			}
+			Member::Native(val, name) => {
+				let TypeId::Native(type_id) = val.type_id() else {
+					panic!();
+				};
+				let typ = types.get_native_type(type_id);
+				let field = typ.fields.get(name).unwrap();
+				(field.get)(val)
+			}
 		}
 	}
 
-	fn set(&self, val: Val) {
-		let Obj::Instance(inst) = &mut *self.inst.borrow_mut() else {
-			unreachable!();
-		};
-		inst.fields.insert(self.name, val);
+	fn set(&self, val: Val) -> Result<(), ()> {
+		match self {
+			Member::User(inst, name) => {
+				let Obj::Instance(inst) = &mut *inst.borrow_mut() else {
+					panic!()
+				};
+				inst.fields.insert(*name, val);
+				Ok(())
+			}
+			Member::Native(_, _) => Err(()),
+		}
 	}
 }
 
@@ -610,14 +686,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Expr::Access(Access(val_id, name)) => {
 				let val = self.eval_expr(chunk, *val_id)?;
-				let type_id = self.type_id_of(&val);
 
-				if let Val::Obj(obj_rf) = val
-					&& let Some(member) = Instance::member(obj_rf.clone(), *name, &self.types)
-				{
+				if let Some(member) = val.member(*name, &self.types) {
 					Ok(member.get(&self.types))
 				} else {
-					let type_name = match type_id {
+					let type_name = match val.type_id() {
 						TypeId::Native(id) => self.types.get_native_type(id).name,
 						TypeId::User(id) => self.types.get_user_type(id).name,
 					};
@@ -679,9 +752,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				match place {
 					Place::Ident(Ident(sym)) => {
 						if let Some(rf) = &self.inst
-							&& let Some(member) = Instance::member(rf.clone(), *sym, &self.types)
+							&& let Some(member) = Val::Obj(rf.clone()).member(*sym, &self.types)
 						{
-							member.set(val.clone());
+							member.set(val.clone()).unwrap();
 						} else if let Some(local) = Scope::local(&self.scope, *sym) {
 							local.set(val.clone());
 						} else {
@@ -692,13 +765,23 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Place::Member(syn::Member(target_id, name)) => {
 						let target = self.eval_expr(chunk, *target_id)?;
 
-						if let Val::Obj(rf) = &target
-							&& let Some(member) = Instance::member(rf.clone(), *name, &self.types)
-						{
-							member.set(val.clone());
+						if let Some(member) = target.member(*name, &self.types) {
+							if let Err(()) = member.set(val.clone()) {
+								let type_name = match target.type_id() {
+									TypeId::Native(id) => self.types.get_native_type(id).name,
+									TypeId::User(id) => self.types.get_user_type(id).name,
+								};
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								return Err(Signal::Error(Error::AssignReadOnlyMember(
+									loc,
+									self.syms.resolve(type_name).to_string(),
+									self.syms.resolve(*name).to_string(),
+								)));
+							}
 							Ok(val)
 						} else {
-							let type_name = match self.type_id_of(&target) {
+							let type_name = match target.type_id() {
 								TypeId::Native(id) => self.types.get_native_type(id).name,
 								TypeId::User(id) => self.types.get_user_type(id).name,
 							};
@@ -746,7 +829,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				} else if let Some(local) = Scope::local(&self.scope, *name) {
 					Ok(local.get())
 				} else if let Some(rf) = &self.inst
-					&& let Some(member) = Instance::member(rf.clone(), *name, &self.types)
+					&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
 				{
 					Ok(member.get(&self.types))
 				} else {
@@ -853,23 +936,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 		self.scope = saved;
 		Ok(res)
-	}
-
-	fn type_id_of(&self, val: &Val) -> TypeId {
-		match val {
-			Val::Nil(_) => TypeId::Native(NativeTypeId::NIL),
-			Val::Num(_) => TypeId::Native(NativeTypeId::NUM),
-			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
-			Val::Obj(rf) => match &*rf.borrow() {
-				Obj::Str(_) => TypeId::Native(NativeTypeId::STR),
-				Obj::List(_) => TypeId::Native(NativeTypeId::LIST),
-				Obj::Dict(_) => TypeId::Native(NativeTypeId::DICT),
-				Obj::Proc(_) => TypeId::Native(NativeTypeId::PROC),
-				Obj::Type(_) => TypeId::Native(NativeTypeId::TYPE),
-				Obj::Instance(inst) => TypeId::User(inst.typ),
-				Obj::Method(_) => TypeId::Native(NativeTypeId::PROC),
-			},
-		}
 	}
 }
 
