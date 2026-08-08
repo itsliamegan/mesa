@@ -49,6 +49,11 @@ fn test_performs_arithmetic() {
 	assert_eval(include_str!("arith.ms"));
 }
 
+#[test]
+fn test_walks_scope() {
+	assert_eval(include_str!("scope.ms"));
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {

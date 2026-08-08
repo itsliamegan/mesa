@@ -228,23 +228,38 @@ struct Scope {
 	outer: Option<Rc<RefCell<Scope>>>,
 }
 
-impl Scope {
-	fn lookup(&self, name: Sym) -> Option<Val> {
-		if let Some(val) = self.locals.get(&name) {
-			return Some(val.clone());
-		}
+struct Local {
+	name: Sym,
+	scope: Rc<RefCell<Scope>>,
+}
 
-		if let Some(rf) = &self.inst
+impl Local {
+	fn get(&self) -> Val {
+		self.scope.borrow().locals.get(&self.name).cloned().unwrap()
+	}
+
+	fn set(&self, val: Val) {
+		self.scope.borrow_mut().locals.insert(self.name, val);
+	}
+}
+
+impl Scope {
+	fn lookup(scope: &Rc<RefCell<Scope>>, name: Sym) -> Option<Val> {
+		if let Some(rf) = &scope.borrow().inst
 			&& let Obj::Instance(inst) = &*rf.borrow()
 			&& let Some(val) = inst.fields.get(&name)
 		{
 			return Some(val.clone());
 		}
 
-		self.outer.as_ref()?.borrow().lookup(name)
+		if let Some(local) = Scope::local(scope, name) {
+			Some(local.get())
+		} else {
+			None
+		}
 	}
 
-	fn assign(&mut self, name: Sym, val: Val) {
+	fn declare(&mut self, name: Sym, val: Val) {
 		if let Some(rf) = &self.inst
 			&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
 			&& inst.fields.contains_key(&name)
@@ -252,6 +267,35 @@ impl Scope {
 			inst.fields.insert(name, val);
 		} else {
 			self.locals.insert(name, val);
+		}
+	}
+
+	fn assign(scope: &Rc<RefCell<Scope>>, name: Sym, val: Val) {
+		if let Some(rf) = &scope.borrow().inst
+			&& let Obj::Instance(inst) = &mut *rf.borrow_mut()
+			&& inst.fields.contains_key(&name)
+		{
+			inst.fields.insert(name, val);
+			return;
+		}
+
+		if let Some(local) = Scope::local(scope, name) {
+			local.set(val);
+		} else {
+			scope.borrow_mut().locals.insert(name, val);
+		}
+	}
+
+	fn local(scope: &Rc<RefCell<Scope>>, name: Sym) -> Option<Local> {
+		if scope.borrow().locals.contains_key(&name) {
+			Some(Local {
+				name,
+				scope: scope.clone(),
+			})
+		} else if let Some(outer) = &scope.borrow().outer {
+			Scope::local(outer, name)
+		} else {
+			None
 		}
 	}
 }
@@ -321,7 +365,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let id = self.types.add_type(typ);
 				let obj = Obj::Type(id);
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
-				self.scope.borrow_mut().assign(*name, val);
+				self.scope.borrow_mut().declare(*name, val);
 				Ok(())
 			}
 			Decl::Def(Def(name, params, body)) => {
@@ -332,7 +376,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					scope: self.scope.clone(),
 				});
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
-				self.scope.borrow_mut().assign(*name, val);
+				self.scope.borrow_mut().declare(*name, val);
 				Ok(())
 			}
 			Decl::Expr(expr_id) => {
@@ -356,7 +400,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						self.scope = Rc::new(RefCell::new(inner_scope));
 						let body = chunk.get_block(*body_id);
 						for item in &list.items {
-							self.scope.borrow_mut().assign(*name, item.clone());
+							self.scope.borrow_mut().declare(*name, item.clone());
 							for expr_id in &body.0 {
 								match self.eval_expr(chunk, *expr_id) {
 									Ok(_) => {}
@@ -541,7 +585,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
 					Place::Ident(Ident(sym)) => {
-						self.scope.borrow_mut().assign(*sym, val.clone());
+						Scope::assign(&self.scope, *sym, val.clone());
 						Ok(val)
 					}
 					Place::Member(Member(target_id, name)) => {
@@ -592,21 +636,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 			Expr::Ident(Ident(name)) => {
-				if let Some(val) = self.scope.borrow().lookup(*name) {
-					return Ok(val);
-				}
-
 				if *name == Sym::SELF
 					&& let Some(inst) = &self.scope.borrow().inst
 				{
 					return Ok(Val::Obj(inst.clone()));
 				}
 
-				if let Some(inst_rf) = &self.scope.borrow().inst
-					&& let Obj::Instance(inst) = &*inst_rf.borrow()
-					&& let Some(member) = inst.member(&self.types, inst_rf.clone(), *name)
-				{
-					return Ok(member);
+				if let Some(val) = Scope::lookup(&self.scope, *name) {
+					return Ok(val);
 				}
 
 				let src = self.pkg.get_src(chunk.src);
@@ -672,7 +709,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			outer: Some(proc.scope.clone()),
 		};
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-			scope.assign(*param, arg);
+			scope.declare(*param, arg);
 		}
 		match self.eval_block(chunk, Rc::new(RefCell::new(scope)), proc.body) {
 			Ok(val) => Ok(val),
