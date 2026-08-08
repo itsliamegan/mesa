@@ -50,6 +50,21 @@ fn test_performs_arithmetic() {
 }
 
 #[test]
+fn test_iterates() {
+	assert_eval(include_str!("each.ms"));
+}
+
+#[test]
+fn test_branches() {
+	assert_eval(include_str!("when.ms"));
+}
+
+#[test]
+fn test_escapes_strings() {
+	assert_eval(include_str!("escapes.ms"));
+}
+
+#[test]
 fn test_walks_scope() {
 	assert_eval(include_str!("scope.ms"));
 }
