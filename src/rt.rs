@@ -58,24 +58,51 @@ impl Display for Error {
 	}
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Num(f64);
+
+impl Num {
+	fn new() -> Val {
+		Val::Num(Num(0.0))
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Bool(bool);
+
+impl Bool {
+	fn new() -> Val {
+		Val::Bool(Bool(false))
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Nil;
+
+impl Nil {
+	fn new() -> Val {
+		Val::Nil(Nil)
+	}
+}
+
 #[derive(Debug, Clone)]
 enum Val {
-	Num(f64),
-	Bool(bool),
+	Num(Num),
+	Bool(Bool),
 	Obj(Rc<RefCell<Obj>>),
-	Nil,
+	Nil(Nil),
 }
 
 impl PartialEq for Val {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
-			(Self::Num(num), Self::Num(other_num)) => num == other_num,
-			(Self::Bool(bool), Self::Bool(other_bool)) => bool == other_bool,
+			(Self::Num(num), Self::Num(other_num)) => num.0 == other_num.0,
+			(Self::Bool(bool), Self::Bool(other_bool)) => bool.0 == other_bool.0,
 			(Self::Obj(rf), Self::Obj(other_rf)) => match (&*rf.borrow(), &*other_rf.borrow()) {
 				(Obj::Str(str), Obj::Str(other_str)) => str.chars == other_str.chars,
 				_ => rf.as_ptr() == other_rf.as_ptr(),
 			},
-			(Self::Nil, Self::Nil) => true,
+			(Self::Nil(_), Self::Nil(_)) => true,
 			_ => false,
 		}
 	}
@@ -86,13 +113,13 @@ impl Eq for Val {}
 impl Hash for Val {
 	fn hash<H: Hasher>(&self, state: &mut H) {
 		match self {
-			Self::Num(num) => num.to_bits().hash(state),
-			Self::Bool(bool) => bool.hash(state),
+			Self::Num(num) => num.0.to_bits().hash(state),
+			Self::Bool(bool) => bool.0.hash(state),
 			Self::Obj(rf) => match &*rf.borrow() {
 				Obj::Str(str) => str.chars.hash(state),
 				_ => rf.as_ptr().hash(state),
 			},
-			Self::Nil => 0_u8.hash(state),
+			Self::Nil(_) => 0_u8.hash(state),
 		}
 	}
 }
@@ -169,9 +196,9 @@ struct NativeType {
 }
 
 const CORE_TYPES: &[(&str, NativeTypeId, Option<fn() -> Val>)] = &[
-	("Nil", NativeTypeId::NIL, Some(|| Val::Nil)),
-	("Num", NativeTypeId::NUM, Some(|| Val::Num(0.0))),
-	("Bool", NativeTypeId::BOOL, Some(|| Val::Bool(false))),
+	("Nil", NativeTypeId::NIL, Some(Nil::new)),
+	("Num", NativeTypeId::NUM, Some(Num::new)),
+	("Bool", NativeTypeId::BOOL, Some(Bool::new)),
 	("Str", NativeTypeId::STR, Some(Str::new)),
 	("List", NativeTypeId::LIST, Some(List::new)),
 	("Dict", NativeTypeId::DICT, Some(Dict::new)),
@@ -448,7 +475,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 						}
 						self.scope = outer_scope;
-						Ok(Val::Nil)
+						Ok(Val::Nil(Nil))
 					}
 					obj => {
 						let src = self.pkg.get_src(chunk.src);
@@ -470,8 +497,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			},
 			Expr::When(When(cond, then_branch, else_branch)) => {
 				let cond = match self.eval_expr(chunk, *cond)? {
-					Val::Bool(true) => true,
-					Val::Num(num) if num > 0.0 => true,
+					Val::Bool(Bool(true)) => true,
+					Val::Num(num) if num.0 > 0.0 => true,
 					Val::Obj(_) => true,
 					_ => false,
 				};
@@ -484,7 +511,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				} else if let Some(else_branch) = else_branch {
 					self.eval_block(chunk, scope, *else_branch)
 				} else {
-					Ok(Val::Nil)
+					Ok(Val::Nil(Nil))
 				}
 			}
 			Expr::Return(Return(val_expr_id)) => {
@@ -533,7 +560,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										} else {
 											let src = self.pkg.get_src(chunk.src);
 											let loc = src.loc(tok.pos);
-											Err(Signal::Error(Error::WrongArgCount(loc, args.len(), 0)))
+											Err(Signal::Error(Error::WrongArgCount(
+												loc,
+												args.len(),
+												0,
+											)))
 										}
 									}
 									None => {
@@ -603,7 +634,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						let idx = match self.eval_expr(chunk, *key_id)? {
-							Val::Num(num) if num >= 0.0 => num.trunc() as usize,
+							Val::Num(num) if num.0 >= 0.0 => num.0.trunc() as usize,
 							val => {
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -615,14 +646,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						};
 						match list.items.get(idx) {
 							Some(val) => Ok(val.clone()),
-							None => Ok(Val::Nil),
+							None => Ok(Val::Nil(Nil)),
 						}
 					}
 					Obj::Dict(dict) => {
 						let key = self.eval_expr(chunk, *key_id)?;
 						match dict.pairs.get(&key) {
 							Some(val) => Ok(val.clone()),
-							None => Ok(Val::Nil),
+							None => Ok(Val::Nil(Nil)),
 						}
 					}
 					_ => {
@@ -686,12 +717,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let lhs = self.eval_expr(chunk, *lhs_id)?;
 				let rhs = self.eval_expr(chunk, *rhs_id)?;
 				match (lhs, rhs) {
-					(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(match op {
-						BinaryOp::Add => lhs + rhs,
-						BinaryOp::Sub => lhs - rhs,
-						BinaryOp::Mul => lhs * rhs,
-						BinaryOp::Div => lhs / rhs,
-					})),
+					(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
+						BinaryOp::Add => lhs.0 + rhs.0,
+						BinaryOp::Sub => lhs.0 - rhs.0,
+						BinaryOp::Mul => lhs.0 * rhs.0,
+						BinaryOp::Div => lhs.0 / rhs.0,
+					}))),
 					(lhs, rhs) => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -736,8 +767,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Lit::Str(str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
 					chars: Box::from(str.as_str()),
 				})))),
-				Lit::Num(num) => Val::Num(*num),
-				Lit::Bool(bool) => Val::Bool(*bool),
+				Lit::Num(num) => Val::Num(Num(*num)),
+				Lit::Bool(bool) => Val::Bool(Bool(*bool)),
 				Lit::List(item_ids) => {
 					let mut items = Vec::with_capacity(item_ids.len());
 					for item_id in item_ids {
@@ -755,7 +786,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict { pairs }))))
 				}
-				Lit::Nil => Val::Nil,
+				Lit::Nil => Val::Nil(Nil),
 			}),
 		}
 	}
@@ -804,7 +835,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let block = chunk.get_block(block_id);
 		let saved = self.scope.clone();
 		self.scope = scope;
-		let mut res = Val::Nil;
+		let mut res = Val::Nil(Nil);
 		for expr_id in &block.0 {
 			match self.eval_expr(chunk, *expr_id) {
 				Ok(val) => {
@@ -826,7 +857,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn type_id_of(&self, val: &Val) -> TypeId {
 		match val {
-			Val::Nil => TypeId::Native(NativeTypeId::NIL),
+			Val::Nil(_) => TypeId::Native(NativeTypeId::NIL),
 			Val::Num(_) => TypeId::Native(NativeTypeId::NUM),
 			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
 			Val::Obj(rf) => match &*rf.borrow() {
@@ -844,10 +875,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
-		Val::Num(num) => format!("{}", num),
-		Val::Bool(bool) => format!("{}", bool),
+		Val::Num(num) => format!("{}", num.0),
+		Val::Bool(bool) => format!("{}", bool.0),
 		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
-		Val::Nil => String::from("nil"),
+		Val::Nil(_) => String::from("nil"),
 	}
 }
 fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
