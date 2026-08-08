@@ -113,14 +113,36 @@ struct Str {
 	chars: Box<str>,
 }
 
+impl Str {
+	fn new() -> Val {
+		Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
+			chars: Box::from(""),
+		}))))
+	}
+}
+
 #[derive(Debug)]
 struct List {
 	items: Vec<Val>,
 }
 
+impl List {
+	fn new() -> Val {
+		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
+	}
+}
+
 #[derive(Debug)]
 struct Dict {
 	pairs: HashMap<Val, Val>,
+}
+
+impl Dict {
+	fn new() -> Val {
+		Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict {
+			pairs: HashMap::new(),
+		}))))
+	}
 }
 
 #[derive(Debug)]
@@ -132,70 +154,92 @@ struct Proc {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TypeId(u32);
-
-impl TypeId {
-	const NIL: TypeId = TypeId(0);
-	const NUM: TypeId = TypeId(1);
-	const BOOL: TypeId = TypeId(2);
-	const STR: TypeId = TypeId(3);
-	const LIST: TypeId = TypeId(4);
-	const DICT: TypeId = TypeId(5);
-	const PROC: TypeId = TypeId(6);
-	const TYPE: TypeId = TypeId(7);
+enum TypeId {
+	Native(NativeTypeId),
+	User(UserTypeId),
 }
 
-const CORE_TYPES: &[(&str, TypeId)] = &[
-	("Nil", TypeId::NIL),
-	("Num", TypeId::NUM),
-	("Bool", TypeId::BOOL),
-	("Str", TypeId::STR),
-	("List", TypeId::LIST),
-	("Dict", TypeId::DICT),
-	("Proc", TypeId::PROC),
-	("Type", TypeId::TYPE),
-];
+#[derive(Debug, Clone, Copy)]
+struct NativeTypeId(u32);
 
 #[derive(Debug)]
-struct Type {
+struct NativeType {
+	name: Sym,
+	new: Option<fn() -> Val>,
+}
+
+const CORE_TYPES: &[(&str, NativeTypeId, Option<fn() -> Val>)] = &[
+	("Nil", NativeTypeId::NIL, Some(|| Val::Nil)),
+	("Num", NativeTypeId::NUM, Some(|| Val::Num(0.0))),
+	("Bool", NativeTypeId::BOOL, Some(|| Val::Bool(false))),
+	("Str", NativeTypeId::STR, Some(Str::new)),
+	("List", NativeTypeId::LIST, Some(List::new)),
+	("Dict", NativeTypeId::DICT, Some(Dict::new)),
+	("Proc", NativeTypeId::PROC, None),
+	("Type", NativeTypeId::TYPE, None),
+];
+
+impl NativeTypeId {
+	const NIL: NativeTypeId = NativeTypeId(0);
+	const NUM: NativeTypeId = NativeTypeId(1);
+	const BOOL: NativeTypeId = NativeTypeId(2);
+	const STR: NativeTypeId = NativeTypeId(3);
+	const LIST: NativeTypeId = NativeTypeId(4);
+	const DICT: NativeTypeId = NativeTypeId(5);
+	const PROC: NativeTypeId = NativeTypeId(6);
+	const TYPE: NativeTypeId = NativeTypeId(7);
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UserTypeId(u32);
+
+#[derive(Debug)]
+struct UserType {
 	name: Sym,
 	fields: Vec<Sym>,
 	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
 }
 
 struct TypeRegistry {
-	types: Vec<Type>,
+	native: Vec<NativeType>,
+	user: Vec<UserType>,
 }
 
 impl TypeRegistry {
 	fn new(syms: &mut Interner) -> Self {
-		let mut types = Vec::with_capacity(CORE_TYPES.len());
+		let mut native = Vec::with_capacity(CORE_TYPES.len());
 
-		for (name, _id) in CORE_TYPES {
-			types.push(Type {
+		for (name, _id, new) in CORE_TYPES {
+			native.push(NativeType {
 				name: syms.intern(name),
-				fields: Vec::new(),
-				methods: HashMap::new(),
+				new: *new,
 			});
 		}
 
-		Self { types }
+		Self {
+			native,
+			user: Vec::new(),
+		}
 	}
 
-	fn get_type(&self, id: TypeId) -> &Type {
-		&self.types[id.0 as usize]
+	fn get_native_type(&self, id: NativeTypeId) -> &NativeType {
+		&self.native[id.0 as usize]
 	}
 
-	fn add_type(&mut self, typ: Type) -> TypeId {
-		let id = TypeId(self.types.len() as u32);
-		self.types.push(typ);
+	fn get_user_type(&self, id: UserTypeId) -> &UserType {
+		&self.user[id.0 as usize]
+	}
+
+	fn add_user_type(&mut self, typ: UserType) -> UserTypeId {
+		let id = UserTypeId(self.user.len() as u32);
+		self.user.push(typ);
 		id
 	}
 }
 
 #[derive(Debug)]
 struct Instance {
-	typ: TypeId,
+	typ: UserTypeId,
 	fields: HashMap<Sym, Val>,
 }
 
@@ -214,7 +258,7 @@ struct Method {
 impl Instance {
 	fn member(obj: Rc<RefCell<Obj>>, name: Sym, types: &TypeRegistry) -> Option<Member> {
 		if let Obj::Instance(inst) = &*obj.borrow() {
-			let typ = types.get_type(inst.typ);
+			let typ = types.get_user_type(inst.typ);
 			if inst.fields.contains_key(&name) || typ.methods.contains_key(&name) {
 				return Some(Member {
 					name,
@@ -229,9 +273,9 @@ impl Instance {
 impl Member {
 	fn get(&self, types: &TypeRegistry) -> Val {
 		let Obj::Instance(inst) = &*self.inst.borrow() else {
-			panic!();
+			unreachable!();
 		};
-		let typ = types.get_type(inst.typ);
+		let typ = types.get_user_type(inst.typ);
 		if let Some(val) = inst.fields.get(&self.name) {
 			val.clone()
 		} else if let Some(proc_rf) = typ.methods.get(&self.name) {
@@ -240,13 +284,13 @@ impl Member {
 				inst: self.inst.clone(),
 			}))))
 		} else {
-			panic!();
+			unreachable!();
 		}
 	}
 
 	fn set(&self, val: Val) {
 		let Obj::Instance(inst) = &mut *self.inst.borrow_mut() else {
-			panic!();
+			unreachable!();
 		};
 		inst.fields.insert(self.name, val);
 	}
@@ -346,13 +390,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Decl::Expr(_) => todo!(),
 					}
 				}
-				let typ = Type {
+				let typ = UserType {
 					name: *name,
 					fields: fields.to_vec(),
 					methods,
 				};
-				let id = self.types.add_type(typ);
-				let obj = Obj::Type(id);
+				let id = self.types.add_user_type(typ);
+				let obj = Obj::Type(TypeId::User(id));
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
 				self.scope.borrow_mut().locals.insert(*name, val);
 				Ok(())
@@ -457,28 +501,56 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				match self.eval_expr(chunk, *val_id)? {
 					Val::Obj(rf) => match &*rf.borrow() {
 						Obj::Proc(proc) => self.eval_proc_call(chunk, &tok, proc, None, args),
-						Obj::Type(type_id) => {
-							let typ = self.types.get_type(*type_id);
-							if args.len() != typ.fields.len() {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(tok.pos);
-								return Err(Signal::Error(Error::WrongArgCount(
-									loc,
-									args.len(),
-									typ.fields.len(),
-								)));
+						Obj::Type(type_id) => match type_id {
+							TypeId::User(type_id) => {
+								let typ = self.types.get_user_type(*type_id);
+								if args.len() != typ.fields.len() {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(tok.pos);
+									return Err(Signal::Error(Error::WrongArgCount(
+										loc,
+										args.len(),
+										typ.fields.len(),
+									)));
+								}
+								let mut fields = HashMap::new();
+								for (field, val) in typ.fields.iter().zip(args) {
+									fields.insert(*field, val);
+								}
+								let obj = Obj::Instance(Instance {
+									typ: *type_id,
+									fields,
+								});
+								let val = Val::Obj(Rc::new(RefCell::new(obj)));
+								Ok(val)
 							}
-							let mut fields = HashMap::new();
-							for (field, val) in typ.fields.iter().zip(args) {
-								fields.insert(*field, val);
+							TypeId::Native(type_id) => {
+								let typ = self.types.get_native_type(*type_id);
+								match typ.new {
+									Some(new) => {
+										if args.is_empty() {
+											Ok(new())
+										} else {
+											let src = self.pkg.get_src(chunk.src);
+											let loc = src.loc(tok.pos);
+											Err(Signal::Error(Error::WrongArgCount(loc, args.len(), 0)))
+										}
+									}
+									None => {
+										let src = self.pkg.get_src(chunk.src);
+										let loc = src.loc(tok.pos);
+										Err(Signal::Error(Error::CallNonCallable(
+											loc,
+											rt_print_val(
+												self.syms,
+												&self.types,
+												&Val::Obj(rf.clone()),
+											),
+										)))
+									}
+								}
 							}
-							let obj = Obj::Instance(Instance {
-								typ: *type_id,
-								fields,
-							});
-							let val = Val::Obj(Rc::new(RefCell::new(obj)));
-							Ok(val)
-						}
+						},
 						Obj::Method(meth) => self.eval_proc_call(
 							chunk,
 							&tok,
@@ -507,18 +579,22 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}
 			Expr::Access(Access(val_id, name)) => {
 				let val = self.eval_expr(chunk, *val_id)?;
-				let typ = self.type_of(&val);
+				let type_id = self.type_id_of(&val);
 
 				if let Val::Obj(obj_rf) = val
 					&& let Some(member) = Instance::member(obj_rf.clone(), *name, &self.types)
 				{
 					Ok(member.get(&self.types))
 				} else {
+					let type_name = match type_id {
+						TypeId::Native(id) => self.types.get_native_type(id).name,
+						TypeId::User(id) => self.types.get_user_type(id).name,
+					};
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					Err(Signal::Error(Error::AccessNonMember(
 						loc,
-						self.syms.resolve(typ.name).to_string(),
+						self.syms.resolve(type_name).to_string(),
 						self.syms.resolve(*name).to_string(),
 					)))
 				}
@@ -589,17 +665,20 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							&& let Some(member) = Instance::member(rf.clone(), *name, &self.types)
 						{
 							member.set(val.clone());
-							return Ok(val);
+							Ok(val)
+						} else {
+							let type_name = match self.type_id_of(&target) {
+								TypeId::Native(id) => self.types.get_native_type(id).name,
+								TypeId::User(id) => self.types.get_user_type(id).name,
+							};
+							let src = self.pkg.get_src(chunk.src);
+							let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+							Err(Signal::Error(Error::AccessNonMember(
+								loc,
+								self.syms.resolve(type_name).to_string(),
+								self.syms.resolve(*name).to_string(),
+							)))
 						}
-
-						let typ = self.type_of(&target);
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-						Err(Signal::Error(Error::AccessNonMember(
-							loc,
-							self.syms.resolve(typ.name).to_string(),
-							self.syms.resolve(*name).to_string(),
-						)))
 					}
 				}
 			}
@@ -745,19 +824,19 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		Ok(res)
 	}
 
-	fn type_of(&self, val: &Val) -> &Type {
+	fn type_id_of(&self, val: &Val) -> TypeId {
 		match val {
-			Val::Nil => self.types.get_type(TypeId::NIL),
-			Val::Num(_) => self.types.get_type(TypeId::NUM),
-			Val::Bool(_) => self.types.get_type(TypeId::BOOL),
+			Val::Nil => TypeId::Native(NativeTypeId::NIL),
+			Val::Num(_) => TypeId::Native(NativeTypeId::NUM),
+			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
 			Val::Obj(rf) => match &*rf.borrow() {
-				Obj::Str(_) => self.types.get_type(TypeId::STR),
-				Obj::List(_) => self.types.get_type(TypeId::LIST),
-				Obj::Dict(_) => self.types.get_type(TypeId::DICT),
-				Obj::Proc(_) => self.types.get_type(TypeId::PROC),
-				Obj::Type(_) => self.types.get_type(TypeId::TYPE),
-				Obj::Instance(inst) => self.types.get_type(inst.typ),
-				Obj::Method(_) => self.types.get_type(TypeId::PROC),
+				Obj::Str(_) => TypeId::Native(NativeTypeId::STR),
+				Obj::List(_) => TypeId::Native(NativeTypeId::LIST),
+				Obj::Dict(_) => TypeId::Native(NativeTypeId::DICT),
+				Obj::Proc(_) => TypeId::Native(NativeTypeId::PROC),
+				Obj::Type(_) => TypeId::Native(NativeTypeId::TYPE),
+				Obj::Instance(inst) => TypeId::User(inst.typ),
+				Obj::Method(_) => TypeId::Native(NativeTypeId::PROC),
 			},
 		}
 	}
@@ -801,23 +880,30 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res
 		}
 		Obj::Proc(proc) => rt_print_proc(syms, proc),
-		Obj::Type(id) => {
-			let typ = types.get_type(*id);
-			let name = syms.resolve(typ.name);
-			let mut res = String::new();
-			res.push_str(&format!("type {}(", name));
-			for (i, field) in typ.fields.iter().enumerate() {
-				let field = syms.resolve(*field);
-				res.push_str(field);
-				if i + 1 != typ.fields.len() {
-					res.push_str(", ");
+		Obj::Type(type_id) => match type_id {
+			TypeId::User(type_id) => {
+				let typ = types.get_user_type(*type_id);
+				let name = syms.resolve(typ.name);
+				let mut res = String::new();
+				res.push_str(&format!("type {}(", name));
+				for (i, field) in typ.fields.iter().enumerate() {
+					let field = syms.resolve(*field);
+					res.push_str(field);
+					if i + 1 != typ.fields.len() {
+						res.push_str(", ");
+					}
 				}
+				res.push(')');
+				res
 			}
-			res.push(')');
-			res
-		}
+			TypeId::Native(type_id) => {
+				let typ = types.get_native_type(*type_id);
+				let name = syms.resolve(typ.name);
+				format!("type {}", name)
+			}
+		},
 		Obj::Instance(inst) => {
-			let typ = types.get_type(inst.typ);
+			let typ = types.get_user_type(inst.typ);
 			let name = syms.resolve(typ.name);
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
