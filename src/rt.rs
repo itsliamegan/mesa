@@ -20,6 +20,7 @@ pub enum Error {
 	AssignReadOnlyMember(Location, String, String),
 	ScriptNonScriptable(Location, String),
 	ScriptNonIndex(Location, String),
+	ScriptIndexOutOfBounds(Location, usize),
 	ArithNonNum(Location, String),
 	UnboundIdent(Location, String),
 }
@@ -34,6 +35,7 @@ impl Error {
 			Self::AssignReadOnlyMember(loc, _, _) => loc,
 			Self::ScriptNonScriptable(loc, _) => loc,
 			Self::ScriptNonIndex(loc, _) => loc,
+			Self::ScriptIndexOutOfBounds(loc, _) => loc,
 			Self::ArithNonNum(loc, _) => loc,
 			Self::UnboundIdent(loc, _) => loc,
 		}
@@ -57,6 +59,9 @@ impl Display for Error {
 			}
 			Self::ScriptNonScriptable(_, val) => write!(f, "script of non-scriptable {}", val),
 			Self::ScriptNonIndex(_, val) => write!(f, "script with non-index {}", val),
+			Self::ScriptIndexOutOfBounds(_, idx) => {
+				write!(f, "script index {} out of bounds", idx)
+			}
 			Self::ArithNonNum(_, val) => write!(f, "arithmetic on non-number {}", val),
 			Self::UnboundIdent(_, ident) => write!(f, "unbound ident '{}'", ident),
 		}
@@ -869,6 +874,55 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							)))
 						}
 					}
+					Place::Script(syn::Script(target_id, key_id)) => {
+						let target = self.eval_expr(chunk, *target_id)?;
+						match &target {
+							Val::Obj(rf) => match &mut *rf.borrow_mut() {
+								Obj::List(list) => {
+									let idx = match self.eval_expr(chunk, *key_id)? {
+										Val::Num(num) if num.0 >= 0.0 => num.0.trunc() as usize,
+										val => {
+											let src = self.pkg.get_src(chunk.src);
+											let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+											return Err(Signal::Error(Error::ScriptNonIndex(
+												loc,
+												rt_print_val(self.syms, &self.types, &val),
+											)));
+										}
+									};
+									if idx < list.items.len() {
+										list.items[idx] = val.clone();
+										Ok(val)
+									} else {
+										let src = self.pkg.get_src(chunk.src);
+										let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+										Err(Signal::Error(Error::ScriptIndexOutOfBounds(loc, idx)))
+									}
+								}
+								Obj::Dict(dict) => {
+									let key = self.eval_expr(chunk, *key_id)?;
+									dict.pairs.insert(key, val.clone());
+									Ok(val)
+								}
+								_ => {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									Err(Signal::Error(Error::ScriptNonScriptable(
+										loc,
+										rt_print_val(self.syms, &self.types, &target),
+									)))
+								}
+							},
+							_ => {
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								Err(Signal::Error(Error::ScriptNonScriptable(
+									loc,
+									rt_print_val(self.syms, &self.types, &target),
+								)))
+							}
+						}
+					}
 				}
 			}
 			Expr::Binary(Binary(op, lhs_id, rhs_id)) => {
@@ -1022,6 +1076,7 @@ fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 		Val::Nil(_) => String::from("nil"),
 	}
 }
+
 fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	match obj {
 		Obj::Str(str) => format!("{}", str.chars),

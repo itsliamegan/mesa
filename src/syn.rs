@@ -562,7 +562,7 @@ pub struct Call(pub ExprId, pub Vec<ExprId>);
 #[derive(Debug, Clone)]
 pub struct Member(pub ExprId, pub Sym);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script(pub ExprId, pub ExprId);
 
 #[derive(Debug)]
@@ -572,6 +572,7 @@ pub struct Assign(pub Place, pub ExprId);
 pub enum Place {
 	Ident(Ident),
 	Member(Member),
+	Script(Script),
 }
 
 #[derive(Debug, Clone)]
@@ -889,6 +890,7 @@ impl<'src> Parser<'src> {
 		let place = match self.chunk.get_expr(val_id) {
 			Expr::Ident(ident) => Place::Ident(ident.clone()),
 			Expr::Member(member) => Place::Member(member.clone()),
+			Expr::Script(script) => Place::Script(script.clone()),
 			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok)),
 		};
 		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
