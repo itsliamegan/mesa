@@ -601,57 +601,25 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Each(Each(name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
-						let outer_scope = self.scope.clone();
-						let inner_scope = Scope {
+						let scope = Rc::new(RefCell::new(Scope {
 							locals: HashMap::new(),
-							outer: Some(outer_scope.clone()),
-						};
-						self.scope = Rc::new(RefCell::new(inner_scope));
-						let body = chunk.get_block(*body_id);
+							outer: Some(self.scope.clone()),
+						}));
 						for item in &list.items {
-							self.scope.borrow_mut().locals.insert(*name, item.clone());
-							for expr_id in &body.0 {
-								match self.eval_expr(chunk, *expr_id) {
-									Ok(_) => {}
-									Err(Signal::Return(val)) => {
-										self.scope = outer_scope;
-										return Err(Signal::Return(val));
-									}
-									Err(Signal::Error(err)) => {
-										self.scope = outer_scope;
-										return Err(Signal::Error(err));
-									}
-								}
-							}
+							scope.borrow_mut().locals.insert(*name, item.clone());
+							self.eval_block(chunk, scope.clone(), *body_id)?;
 						}
-						self.scope = outer_scope;
 						Ok(Val::Nil(Nil))
 					}
 					Obj::Dict(dict) => {
-						let outer_scope = self.scope.clone();
-						let inner_scope = Scope {
+						let scope = Rc::new(RefCell::new(Scope {
 							locals: HashMap::new(),
-							outer: Some(outer_scope.clone()),
-						};
-						self.scope = Rc::new(RefCell::new(inner_scope));
-						let body = chunk.get_block(*body_id);
+							outer: Some(self.scope.clone()),
+						}));
 						for key in dict.pairs.keys() {
-							self.scope.borrow_mut().locals.insert(*name, key.clone());
-							for expr_id in &body.0 {
-								match self.eval_expr(chunk, *expr_id) {
-									Ok(_) => {}
-									Err(Signal::Return(val)) => {
-										self.scope = outer_scope;
-										return Err(Signal::Return(val));
-									}
-									Err(Signal::Error(err)) => {
-										self.scope = outer_scope;
-										return Err(Signal::Error(err));
-									}
-								}
-							}
+							scope.borrow_mut().locals.insert(*name, key.clone());
+							self.eval_block(chunk, scope.clone(), *body_id)?;
 						}
-						self.scope = outer_scope;
 						Ok(Val::Nil(Nil))
 					}
 					obj => {
