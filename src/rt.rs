@@ -116,6 +116,15 @@ impl Val {
 		}
 	}
 
+	fn is_truthy(&self) -> bool {
+		match self {
+			Val::Num(num) => num.0 != 0.0,
+			Val::Bool(bool) => bool.0,
+			Val::Obj(_) => true,
+			Val::Nil(_) => false,
+		}
+	}
+
 	fn member(&self, name: Sym, types: &TypeRegistry) -> Option<Member> {
 		match self.type_id() {
 			TypeId::User(type_id) => {
@@ -644,12 +653,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			},
 			Expr::When(When(cond, then_branch, else_branch)) => {
-				let cond = match self.eval_expr(chunk, *cond)? {
-					Val::Bool(Bool(true)) => true,
-					Val::Num(num) if num.0 > 0.0 => true,
-					Val::Obj(_) => true,
-					_ => false,
-				};
+				let cond = self.eval_expr(chunk, *cond)?.is_truthy();
 				let scope = Rc::new(RefCell::new(Scope {
 					locals: HashMap::new(),
 					outer: Some(self.scope.clone()),
@@ -937,62 +941,92 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Binary(Binary(op, lhs_id, rhs_id)) => {
-				let lhs = self.eval_expr(chunk, *lhs_id)?;
-				let rhs = self.eval_expr(chunk, *rhs_id)?;
-				match op {
-					BinaryOp::Eq => Ok(Val::Bool(Bool(lhs == rhs))),
-					BinaryOp::NotEq => Ok(Val::Bool(Bool(lhs != rhs))),
-					BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
-						match (lhs, rhs) {
-							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Bool(Bool(match op {
-								BinaryOp::Lt => lhs.0 < rhs.0,
-								BinaryOp::Gt => lhs.0 > rhs.0,
-								BinaryOp::LtEq => lhs.0 <= rhs.0,
-								BinaryOp::GtEq => lhs.0 >= rhs.0,
-								_ => panic!(),
-							}))),
-							(lhs, rhs) => {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-								let val = match (&lhs, &rhs) {
-									(Val::Num(_), _) => rhs,
-									(_, Val::Num(_)) => lhs,
-									_ => lhs,
-								};
-								Err(Signal::Error(Error::CompareNonNum(
-									loc,
-									rt_print_val(self.syms, &self.types, &val),
-								)))
-							}
-						}
-					}
-					BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-						match (lhs, rhs) {
-							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
-								BinaryOp::Add => lhs.0 + rhs.0,
-								BinaryOp::Sub => lhs.0 - rhs.0,
-								BinaryOp::Mul => lhs.0 * rhs.0,
-								BinaryOp::Div => lhs.0 / rhs.0,
-								_ => panic!(),
-							}))),
-							(lhs, rhs) => {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-								let val = match (&lhs, &rhs) {
-									(Val::Num(_), _) => rhs,
-									(_, Val::Num(_)) => lhs,
-									_ => lhs,
-								};
-								Err(Signal::Error(Error::ArithNonNum(
-									loc,
-									rt_print_val(self.syms, &self.types, &val),
-								)))
-							}
-						}
+			Expr::Binary(Binary(op, lhs_id, rhs_id)) => match op {
+				BinaryOp::Or => {
+					let lhs = self.eval_expr(chunk, *lhs_id)?;
+					if lhs.is_truthy() {
+						Ok(Val::Bool(Bool(true)))
+					} else {
+						let rhs = self.eval_expr(chunk, *rhs_id)?;
+						Ok(Val::Bool(Bool(rhs.is_truthy())))
 					}
 				}
-			}
+				BinaryOp::And => {
+					let lhs = self.eval_expr(chunk, *lhs_id)?;
+					if !lhs.is_truthy() {
+						Ok(Val::Bool(Bool(false)))
+					} else {
+						let rhs = self.eval_expr(chunk, *rhs_id)?;
+						Ok(Val::Bool(Bool(rhs.is_truthy())))
+					}
+				}
+				BinaryOp::Eq
+				| BinaryOp::NotEq
+				| BinaryOp::Lt
+				| BinaryOp::Gt
+				| BinaryOp::LtEq
+				| BinaryOp::GtEq
+				| BinaryOp::Add
+				| BinaryOp::Sub
+				| BinaryOp::Mul
+				| BinaryOp::Div => {
+					let lhs = self.eval_expr(chunk, *lhs_id)?;
+					let rhs = self.eval_expr(chunk, *rhs_id)?;
+					match op {
+						BinaryOp::Eq => Ok(Val::Bool(Bool(lhs == rhs))),
+						BinaryOp::NotEq => Ok(Val::Bool(Bool(lhs != rhs))),
+						BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
+							match (lhs, rhs) {
+								(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Bool(Bool(match op {
+									BinaryOp::Lt => lhs.0 < rhs.0,
+									BinaryOp::Gt => lhs.0 > rhs.0,
+									BinaryOp::LtEq => lhs.0 <= rhs.0,
+									BinaryOp::GtEq => lhs.0 >= rhs.0,
+									_ => panic!(),
+								}))),
+								(lhs, rhs) => {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let val = match (&lhs, &rhs) {
+										(Val::Num(_), _) => rhs,
+										(_, Val::Num(_)) => lhs,
+										_ => lhs,
+									};
+									Err(Signal::Error(Error::CompareNonNum(
+										loc,
+										rt_print_val(self.syms, &self.types, &val),
+									)))
+								}
+							}
+						}
+						BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+							match (lhs, rhs) {
+								(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
+									BinaryOp::Add => lhs.0 + rhs.0,
+									BinaryOp::Sub => lhs.0 - rhs.0,
+									BinaryOp::Mul => lhs.0 * rhs.0,
+									BinaryOp::Div => lhs.0 / rhs.0,
+									_ => panic!(),
+								}))),
+								(lhs, rhs) => {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let val = match (&lhs, &rhs) {
+										(Val::Num(_), _) => rhs,
+										(_, Val::Num(_)) => lhs,
+										_ => lhs,
+									};
+									Err(Signal::Error(Error::ArithNonNum(
+										loc,
+										rt_print_val(self.syms, &self.types, &val),
+									)))
+								}
+							}
+						}
+						BinaryOp::Or | BinaryOp::And => panic!(),
+					}
+				}
+			},
 			Expr::Ident(Ident(name)) => {
 				if *name == Sym::SELF
 					&& let Some(inst) = &self.inst

@@ -157,6 +157,9 @@ pub enum TokenTag {
 
 	Eq,
 
+	Or,
+	And,
+
 	EqEq,
 	NotEq,
 
@@ -197,6 +200,8 @@ impl TokenTag {
 			TokenTag::Else => "ELSE",
 			TokenTag::End => "END",
 			TokenTag::Return => "RETURN",
+			TokenTag::Or => "OR",
+			TokenTag::And => "AND",
 
 			TokenTag::Ident => "IDENT",
 			TokenTag::Builtin => "BUILTIN",
@@ -529,6 +534,8 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			Sym::ELSE => TokenTag::Else,
 			Sym::END => TokenTag::End,
 			Sym::RETURN => TokenTag::Return,
+			Sym::AND => TokenTag::And,
+			Sym::OR => TokenTag::Or,
 			Sym::TRUE | Sym::FALSE => TokenTag::Bool,
 			Sym::NIL => TokenTag::Nil,
 			_ => TokenTag::Ident,
@@ -674,6 +681,9 @@ pub struct Binary(pub BinaryOp, pub ExprId, pub ExprId);
 
 #[derive(Debug)]
 pub enum BinaryOp {
+	Or,
+	And,
+
 	Eq,
 	NotEq,
 
@@ -782,18 +792,22 @@ struct Precedence(u8);
 impl Precedence {
 	const NONE: Precedence = Precedence(0);
 	const ASSIGN: Precedence = Precedence(1);
-	const COMPARE: Precedence = Precedence(2);
-	const ADD: Precedence = Precedence(3);
-	const SUB: Precedence = Precedence(3);
-	const MUL: Precedence = Precedence(4);
-	const DIV: Precedence = Precedence(4);
-	const CALL: Precedence = Precedence(5);
-	const MEMBER: Precedence = Precedence(5);
-	const SCRIPT: Precedence = Precedence(5);
+	const OR: Precedence = Precedence(2);
+	const AND: Precedence = Precedence(3);
+	const COMPARE: Precedence = Precedence(4);
+	const ADD: Precedence = Precedence(5);
+	const SUB: Precedence = Precedence(5);
+	const MUL: Precedence = Precedence(6);
+	const DIV: Precedence = Precedence(6);
+	const CALL: Precedence = Precedence(7);
+	const MEMBER: Precedence = Precedence(7);
+	const SCRIPT: Precedence = Precedence(7);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
 			TokenTag::Eq => Precedence::ASSIGN,
+			TokenTag::Or => Precedence::OR,
+			TokenTag::And => Precedence::AND,
 			TokenTag::EqEq => Precedence::COMPARE,
 			TokenTag::NotEq => Precedence::COMPARE,
 			TokenTag::Lt => Precedence::COMPARE,
@@ -925,6 +939,8 @@ impl<'src> Parser<'src> {
 		while Precedence::of(self.toks[self.pos].tag) > min_prec {
 			expr_id = match self.toks[self.pos].tag {
 				TokenTag::Eq => self.parse_assign_expr(expr_id)?,
+				TokenTag::Or => self.parse_binary_expr(expr_id, BinaryOp::Or, Precedence::OR)?,
+				TokenTag::And => self.parse_binary_expr(expr_id, BinaryOp::And, Precedence::AND)?,
 				TokenTag::EqEq => {
 					self.parse_binary_expr(expr_id, BinaryOp::Eq, Precedence::COMPARE)?
 				}
