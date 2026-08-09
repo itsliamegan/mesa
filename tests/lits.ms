@@ -2,7 +2,7 @@
 #> 5.23
 #> true
 #> [1, 7]
-#> {id: 774}
+#> {"id": 774}
 #> nil
 
 $print("Hello, world!")

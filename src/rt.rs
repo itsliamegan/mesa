@@ -1084,7 +1084,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let mut res = String::new();
 			res.push('[');
 			for (i, item) in list.items.iter().enumerate() {
-				res.push_str(&rt_print_val(syms, types, item));
+				res.push_str(&rt_debug_val(syms, types, item));
 				if i + 1 != list.items.len() {
 					res.push_str(", ");
 				}
@@ -1096,9 +1096,9 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let mut res = String::new();
 			res.push('{');
 			for (i, (key, val)) in dict.pairs.iter().enumerate() {
-				res.push_str(&rt_print_val(syms, types, key));
+				res.push_str(&rt_debug_val(syms, types, key));
 				res.push_str(": ");
-				res.push_str(&rt_print_val(syms, types, val));
+				res.push_str(&rt_debug_val(syms, types, val));
 				if i + 1 != dict.pairs.len() {
 					res.push_str(", ");
 				}
@@ -1166,4 +1166,14 @@ fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	}
 	res.push(')');
 	res
+}
+
+fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
+	match val {
+		Val::Obj(rf) => match &*rf.borrow() {
+			Obj::Str(str) => format!("\"{}\"", str.chars),
+			obj => rt_print_obj(syms, types, obj),
+		},
+		val => rt_print_val(syms, types, val),
+	}
 }

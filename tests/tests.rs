@@ -20,6 +20,11 @@ fn test_lists() {
 }
 
 #[test]
+fn test_dicts() {
+	assert_eval(include_str!("dict.ms"));
+}
+
+#[test]
 fn test_assigns_locals() {
 	assert_eval(include_str!("locals.ms"));
 }
