@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each,
-	Expr, ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, When,
+	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
+	ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, When,
 };
 
 #[derive(Debug)]
@@ -16,7 +16,7 @@ pub enum Error {
 	WrongArgCount(Location, usize, usize),
 	CallNonCallable(Location, String),
 	IterNonIterable(Location, String),
-	AccessNonMember(Location, String, String),
+	NoSuchMember(Location, String, String),
 	AssignReadOnlyMember(Location, String, String),
 	ScriptNonScriptable(Location, String),
 	ScriptNonIndex(Location, String),
@@ -30,7 +30,7 @@ impl Error {
 			Self::WrongArgCount(loc, _, _) => loc,
 			Self::CallNonCallable(loc, _) => loc,
 			Self::IterNonIterable(loc, _) => loc,
-			Self::AccessNonMember(loc, _, _) => loc,
+			Self::NoSuchMember(loc, _, _) => loc,
 			Self::AssignReadOnlyMember(loc, _, _) => loc,
 			Self::ScriptNonScriptable(loc, _) => loc,
 			Self::ScriptNonIndex(loc, _) => loc,
@@ -49,7 +49,7 @@ impl Display for Error {
 			}
 			Self::CallNonCallable(_, val) => write!(f, "call of non-callable {}", val),
 			Self::IterNonIterable(_, val) => write!(f, "iter of non-iterable {}", val),
-			Self::AccessNonMember(_, typ, name) => {
+			Self::NoSuchMember(_, typ, name) => {
 				write!(f, "no such member '{}' on type '{}'", name, typ)
 			}
 			Self::AssignReadOnlyMember(_, typ, name) => {
@@ -203,6 +203,14 @@ impl Str {
 			chars: Box::from(""),
 		}))))
 	}
+
+	fn size(val: &Val) -> Val {
+		let Val::Obj(rf) = val else { panic!() };
+		let Obj::Str(str) = &*rf.borrow() else {
+			panic!()
+		};
+		Val::Num(Num(str.chars.len() as f64))
+	}
 }
 
 #[derive(Debug)]
@@ -213,6 +221,14 @@ struct List {
 impl List {
 	fn new() -> Val {
 		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
+	}
+
+	fn size(val: &Val) -> Val {
+		let Val::Obj(rf) = val else { panic!() };
+		let Obj::List(list) = &*rf.borrow() else {
+			panic!()
+		};
+		Val::Num(Num(list.items.len() as f64))
 	}
 }
 
@@ -285,8 +301,20 @@ const CORE_TYPES: &[(
 	("Nil", NativeTypeId::NIL, Some(Nil::new), &[], &[]),
 	("Num", NativeTypeId::NUM, Some(Num::new), &[], &[]),
 	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[], &[]),
-	("Str", NativeTypeId::STR, Some(Str::new), &[], &[]),
-	("List", NativeTypeId::LIST, Some(List::new), &[], &[]),
+	(
+		"Str",
+		NativeTypeId::STR,
+		Some(Str::new),
+		&[("size", Str::size)],
+		&[],
+	),
+	(
+		"List",
+		NativeTypeId::LIST,
+		Some(List::new),
+		&[("size", List::size)],
+		&[],
+	),
 	("Dict", NativeTypeId::DICT, Some(Dict::new), &[], &[]),
 	("Proc", NativeTypeId::PROC, None, &[], &[]),
 	("Type", NativeTypeId::TYPE, None, &[], &[]),
@@ -731,7 +759,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Access(Access(val_id, name)) => {
+			Expr::Member(syn::Member(val_id, name)) => {
 				let val = self.eval_expr(chunk, *val_id)?;
 
 				if let Some(member) = val.member(*name, &self.types) {
@@ -743,7 +771,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					};
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-					Err(Signal::Error(Error::AccessNonMember(
+					Err(Signal::Error(Error::NoSuchMember(
 						loc,
 						self.syms.resolve(type_name).to_string(),
 						self.syms.resolve(*name).to_string(),
@@ -834,7 +862,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							};
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-							Err(Signal::Error(Error::AccessNonMember(
+							Err(Signal::Error(Error::NoSuchMember(
 								loc,
 								self.syms.resolve(type_name).to_string(),
 								self.syms.resolve(*name).to_string(),

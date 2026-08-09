@@ -10,6 +10,16 @@ fn test_parses_literals() {
 }
 
 #[test]
+fn test_strs() {
+	assert_eval(include_str!("str.ms"));
+}
+
+#[test]
+fn test_lists() {
+	assert_eval(include_str!("list.ms"));
+}
+
+#[test]
 fn test_assigns_locals() {
 	assert_eval(include_str!("locals.ms"));
 }
