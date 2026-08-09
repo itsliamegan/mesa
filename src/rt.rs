@@ -8,7 +8,7 @@ use std::rc::Rc;
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
-	ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, When,
+	ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -1025,6 +1025,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 						BinaryOp::Or | BinaryOp::And => panic!(),
 					}
+				}
+			},
+			Expr::Unary(Unary(op, val_id)) => match op {
+				UnaryOp::Not => {
+					let val = self.eval_expr(chunk, *val_id)?;
+					Ok(Val::Bool(Bool(!val.is_truthy())))
 				}
 			},
 			Expr::Ident(Ident(name)) => {

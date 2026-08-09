@@ -159,6 +159,7 @@ pub enum TokenTag {
 
 	Or,
 	And,
+	Not,
 
 	EqEq,
 	NotEq,
@@ -202,6 +203,7 @@ impl TokenTag {
 			TokenTag::Return => "RETURN",
 			TokenTag::Or => "OR",
 			TokenTag::And => "AND",
+			TokenTag::Not => "NOT",
 
 			TokenTag::Ident => "IDENT",
 			TokenTag::Builtin => "BUILTIN",
@@ -536,6 +538,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			Sym::RETURN => TokenTag::Return,
 			Sym::AND => TokenTag::And,
 			Sym::OR => TokenTag::Or,
+			Sym::NOT => TokenTag::Not,
 			Sym::TRUE | Sym::FALSE => TokenTag::Bool,
 			Sym::NIL => TokenTag::Nil,
 			_ => TokenTag::Ident,
@@ -635,6 +638,7 @@ pub enum Expr {
 	Script(Script),
 	Assign(Assign),
 	Binary(Binary),
+	Unary(Unary),
 	Ident(Ident),
 	Builtin(Builtin),
 	Lit(Lit),
@@ -696,6 +700,14 @@ pub enum BinaryOp {
 	Sub,
 	Mul,
 	Div,
+}
+
+#[derive(Debug)]
+pub struct Unary(pub UnaryOp, pub ExprId);
+
+#[derive(Debug)]
+pub enum UnaryOp {
+	Not,
 }
 
 #[derive(Debug)]
@@ -794,14 +806,15 @@ impl Precedence {
 	const ASSIGN: Precedence = Precedence(1);
 	const OR: Precedence = Precedence(2);
 	const AND: Precedence = Precedence(3);
-	const COMPARE: Precedence = Precedence(4);
-	const ADD: Precedence = Precedence(5);
-	const SUB: Precedence = Precedence(5);
-	const MUL: Precedence = Precedence(6);
-	const DIV: Precedence = Precedence(6);
-	const CALL: Precedence = Precedence(7);
-	const MEMBER: Precedence = Precedence(7);
-	const SCRIPT: Precedence = Precedence(7);
+	const NOT: Precedence = Precedence(4);
+	const COMPARE: Precedence = Precedence(5);
+	const ADD: Precedence = Precedence(6);
+	const SUB: Precedence = Precedence(6);
+	const MUL: Precedence = Precedence(7);
+	const DIV: Precedence = Precedence(7);
+	const CALL: Precedence = Precedence(8);
+	const MEMBER: Precedence = Precedence(8);
+	const SCRIPT: Precedence = Precedence(8);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
@@ -1048,11 +1061,20 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
+	fn parse_unary_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Not)?;
+		let val_id = self.parse_expr_prec(Precedence::NOT)?;
+		let expr = Expr::Unary(Unary(UnaryOp::Not, val_id));
+		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
+	}
+
 	fn parse_expr_unit(&mut self) -> Result<ExprId, Error> {
 		match self.toks[self.pos].tag {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Return => self.parse_return_expr(),
+			TokenTag::Not => self.parse_unary_expr(),
 			TokenTag::Ident => self.parse_ident_expr(),
 			TokenTag::Builtin => self.parse_builtin_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),

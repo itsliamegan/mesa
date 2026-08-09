@@ -16,10 +16,11 @@ impl Sym {
 	pub const RETURN: Sym = Sym(9);
 	pub const AND: Sym = Sym(10);
 	pub const OR: Sym = Sym(11);
-	pub const SELF: Sym = Sym(12);
-	pub const TRUE: Sym = Sym(13);
-	pub const FALSE: Sym = Sym(14);
-	pub const NIL: Sym = Sym(15);
+	pub const NOT: Sym = Sym(12);
+	pub const SELF: Sym = Sym(13);
+	pub const TRUE: Sym = Sym(14);
+	pub const FALSE: Sym = Sym(15);
+	pub const NIL: Sym = Sym(16);
 }
 
 const KEYWORDS: &[(&str, Sym)] = &[
@@ -35,6 +36,7 @@ const KEYWORDS: &[(&str, Sym)] = &[
 	("return", Sym::RETURN),
 	("and", Sym::AND),
 	("or", Sym::OR),
+	("not", Sym::NOT),
 	("self", Sym::SELF),
 	("true", Sym::TRUE),
 	("false", Sym::FALSE),

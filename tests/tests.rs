@@ -70,6 +70,11 @@ fn test_performs_comparisons() {
 }
 
 #[test]
+fn test_performs_boolean_logic() {
+	assert_eval(include_str!("bool.ms"));
+}
+
+#[test]
 fn test_iterates() {
 	assert_eval(include_str!("each.ms"));
 }
