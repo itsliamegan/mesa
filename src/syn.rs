@@ -157,6 +157,14 @@ pub enum TokenTag {
 
 	Eq,
 
+	EqEq,
+	NotEq,
+
+	Lt,
+	Gt,
+	LtEq,
+	GtEq,
+
 	Plus,
 	Minus,
 	Star,
@@ -198,6 +206,14 @@ impl TokenTag {
 			TokenTag::Nil => "NIL",
 
 			TokenTag::Eq => "EQ",
+
+			TokenTag::EqEq => "EQEQ",
+			TokenTag::NotEq => "NOTEQ",
+
+			TokenTag::Lt => "LT",
+			TokenTag::Gt => "GT",
+			TokenTag::LtEq => "LTEQ",
+			TokenTag::GtEq => "GTEQ",
 
 			TokenTag::Plus => "PLUS",
 			TokenTag::Minus => "MINUS",
@@ -280,6 +296,76 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					Ok(Token {
 						src: self.src.id,
 						tag: TokenTag::Colon,
+						sym: None,
+						pos: self.pos - 1,
+						end: self.pos,
+					})
+				}
+			}
+			b'=' => {
+				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+					self.pos += 2;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::EqEq,
+						sym: None,
+						pos: self.pos - 2,
+						end: self.pos,
+					})
+				} else {
+					Err(Error::UnexpectedChar(self.src.loc(self.pos), '='))
+				}
+			}
+			b'!' => {
+				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+					self.pos += 2;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::NotEq,
+						sym: None,
+						pos: self.pos - 2,
+						end: self.pos,
+					})
+				} else {
+					Err(Error::UnexpectedChar(self.src.loc(self.pos), '!'))
+				}
+			}
+			b'<' => {
+				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+					self.pos += 2;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::LtEq,
+						sym: None,
+						pos: self.pos - 2,
+						end: self.pos,
+					})
+				} else {
+					self.pos += 1;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::Lt,
+						sym: None,
+						pos: self.pos - 1,
+						end: self.pos,
+					})
+				}
+			}
+			b'>' => {
+				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+					self.pos += 2;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::GtEq,
+						sym: None,
+						pos: self.pos - 2,
+						end: self.pos,
+					})
+				} else {
+					self.pos += 1;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::Gt,
 						sym: None,
 						pos: self.pos - 1,
 						end: self.pos,
@@ -588,6 +674,14 @@ pub struct Binary(pub BinaryOp, pub ExprId, pub ExprId);
 
 #[derive(Debug)]
 pub enum BinaryOp {
+	Eq,
+	NotEq,
+
+	Lt,
+	Gt,
+	LtEq,
+	GtEq,
+
 	Add,
 	Sub,
 	Mul,
@@ -688,17 +782,24 @@ struct Precedence(u8);
 impl Precedence {
 	const NONE: Precedence = Precedence(0);
 	const ASSIGN: Precedence = Precedence(1);
-	const ADD: Precedence = Precedence(2);
-	const SUB: Precedence = Precedence(2);
-	const MUL: Precedence = Precedence(3);
-	const DIV: Precedence = Precedence(3);
-	const CALL: Precedence = Precedence(4);
-	const MEMBER: Precedence = Precedence(4);
-	const SCRIPT: Precedence = Precedence(4);
+	const COMPARE: Precedence = Precedence(2);
+	const ADD: Precedence = Precedence(3);
+	const SUB: Precedence = Precedence(3);
+	const MUL: Precedence = Precedence(4);
+	const DIV: Precedence = Precedence(4);
+	const CALL: Precedence = Precedence(5);
+	const MEMBER: Precedence = Precedence(5);
+	const SCRIPT: Precedence = Precedence(5);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
 			TokenTag::Eq => Precedence::ASSIGN,
+			TokenTag::EqEq => Precedence::COMPARE,
+			TokenTag::NotEq => Precedence::COMPARE,
+			TokenTag::Lt => Precedence::COMPARE,
+			TokenTag::Gt => Precedence::COMPARE,
+			TokenTag::LtEq => Precedence::COMPARE,
+			TokenTag::GtEq => Precedence::COMPARE,
 			TokenTag::Plus => Precedence::ADD,
 			TokenTag::Minus => Precedence::SUB,
 			TokenTag::Star => Precedence::MUL,
@@ -824,6 +925,24 @@ impl<'src> Parser<'src> {
 		while Precedence::of(self.toks[self.pos].tag) > min_prec {
 			expr_id = match self.toks[self.pos].tag {
 				TokenTag::Eq => self.parse_assign_expr(expr_id)?,
+				TokenTag::EqEq => {
+					self.parse_binary_expr(expr_id, BinaryOp::Eq, Precedence::COMPARE)?
+				}
+				TokenTag::NotEq => {
+					self.parse_binary_expr(expr_id, BinaryOp::NotEq, Precedence::COMPARE)?
+				}
+				TokenTag::Lt => {
+					self.parse_binary_expr(expr_id, BinaryOp::Lt, Precedence::COMPARE)?
+				}
+				TokenTag::Gt => {
+					self.parse_binary_expr(expr_id, BinaryOp::Gt, Precedence::COMPARE)?
+				}
+				TokenTag::LtEq => {
+					self.parse_binary_expr(expr_id, BinaryOp::LtEq, Precedence::COMPARE)?
+				}
+				TokenTag::GtEq => {
+					self.parse_binary_expr(expr_id, BinaryOp::GtEq, Precedence::COMPARE)?
+				}
 				TokenTag::Plus => {
 					self.parse_binary_expr(expr_id, BinaryOp::Add, Precedence::ADD)?
 				}

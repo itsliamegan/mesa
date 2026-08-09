@@ -22,6 +22,7 @@ pub enum Error {
 	ScriptNonIndex(Location, String),
 	ScriptIndexOutOfBounds(Location, usize),
 	ArithNonNum(Location, String),
+	CompareNonNum(Location, String),
 	UnboundIdent(Location, String),
 }
 
@@ -37,6 +38,7 @@ impl Error {
 			Self::ScriptNonIndex(loc, _) => loc,
 			Self::ScriptIndexOutOfBounds(loc, _) => loc,
 			Self::ArithNonNum(loc, _) => loc,
+			Self::CompareNonNum(loc, _) => loc,
 			Self::UnboundIdent(loc, _) => loc,
 		}
 	}
@@ -63,6 +65,7 @@ impl Display for Error {
 				write!(f, "script index {} out of bounds", idx)
 			}
 			Self::ArithNonNum(_, val) => write!(f, "arithmetic on non-number {}", val),
+			Self::CompareNonNum(_, val) => write!(f, "comparison with non-number {}", val),
 			Self::UnboundIdent(_, ident) => write!(f, "unbound ident '{}'", ident),
 		}
 	}
@@ -937,25 +940,56 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Binary(Binary(op, lhs_id, rhs_id)) => {
 				let lhs = self.eval_expr(chunk, *lhs_id)?;
 				let rhs = self.eval_expr(chunk, *rhs_id)?;
-				match (lhs, rhs) {
-					(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
-						BinaryOp::Add => lhs.0 + rhs.0,
-						BinaryOp::Sub => lhs.0 - rhs.0,
-						BinaryOp::Mul => lhs.0 * rhs.0,
-						BinaryOp::Div => lhs.0 / rhs.0,
-					}))),
-					(lhs, rhs) => {
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-						let val = match (&lhs, &rhs) {
-							(Val::Num(_), _) => rhs,
-							(_, Val::Num(_)) => lhs,
-							_ => lhs,
-						};
-						Err(Signal::Error(Error::ArithNonNum(
-							loc,
-							rt_print_val(self.syms, &self.types, &val),
-						)))
+				match op {
+					BinaryOp::Eq => Ok(Val::Bool(Bool(lhs == rhs))),
+					BinaryOp::NotEq => Ok(Val::Bool(Bool(lhs != rhs))),
+					BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
+						match (lhs, rhs) {
+							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Bool(Bool(match op {
+								BinaryOp::Lt => lhs.0 < rhs.0,
+								BinaryOp::Gt => lhs.0 > rhs.0,
+								BinaryOp::LtEq => lhs.0 <= rhs.0,
+								BinaryOp::GtEq => lhs.0 >= rhs.0,
+								_ => panic!(),
+							}))),
+							(lhs, rhs) => {
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								let val = match (&lhs, &rhs) {
+									(Val::Num(_), _) => rhs,
+									(_, Val::Num(_)) => lhs,
+									_ => lhs,
+								};
+								Err(Signal::Error(Error::CompareNonNum(
+									loc,
+									rt_print_val(self.syms, &self.types, &val),
+								)))
+							}
+						}
+					}
+					BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+						match (lhs, rhs) {
+							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
+								BinaryOp::Add => lhs.0 + rhs.0,
+								BinaryOp::Sub => lhs.0 - rhs.0,
+								BinaryOp::Mul => lhs.0 * rhs.0,
+								BinaryOp::Div => lhs.0 / rhs.0,
+								_ => panic!(),
+							}))),
+							(lhs, rhs) => {
+								let src = self.pkg.get_src(chunk.src);
+								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								let val = match (&lhs, &rhs) {
+									(Val::Num(_), _) => rhs,
+									(_, Val::Num(_)) => lhs,
+									_ => lhs,
+								};
+								Err(Signal::Error(Error::ArithNonNum(
+									loc,
+									rt_print_val(self.syms, &self.types, &val),
+								)))
+							}
+						}
 					}
 				}
 			}

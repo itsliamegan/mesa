@@ -1,7 +1,7 @@
 #> {"id": 105}
 #> Alice
 #> 2
-#> 2
+#> 105
 
 dict := {"id": 105}
 $print(dict)
@@ -11,8 +11,8 @@ $print(dict["name"])
 
 $print(dict.size)
 
-size := 0
 each key in dict do
-	size := size + 1
+	when key == "id" then
+		 $print(dict[key])
+	end
 end
-$print(size)

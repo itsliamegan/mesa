@@ -65,6 +65,11 @@ fn test_performs_arithmetic() {
 }
 
 #[test]
+fn test_performs_comparisons() {
+	assert_eval(include_str!("cmp.ms"));
+}
+
+#[test]
 fn test_iterates() {
 	assert_eval(include_str!("each.ms"));
 }
