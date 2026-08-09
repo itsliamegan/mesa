@@ -798,12 +798,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
 					Place::Ident(Ident(sym)) => {
-						if let Some(rf) = &self.inst
+						if let Some(local) = Scope::local(&self.scope, *sym) {
+							local.set(val.clone());
+						} else if let Some(rf) = &self.inst
 							&& let Some(member) = Val::Obj(rf.clone()).member(*sym, &self.types)
 						{
 							member.set(val.clone()).unwrap();
-						} else if let Some(local) = Scope::local(&self.scope, *sym) {
-							local.set(val.clone());
 						} else {
 							self.scope.borrow_mut().locals.insert(*sym, val.clone());
 						}

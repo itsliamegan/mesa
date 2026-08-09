@@ -69,6 +69,11 @@ fn test_walks_scope() {
 	assert_eval(include_str!("scope.ms"));
 }
 
+#[test]
+fn test_shadows_fields() {
+	assert_eval(include_str!("shadow.ms"));
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {
