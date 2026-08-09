@@ -627,6 +627,33 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						self.scope = outer_scope;
 						Ok(Val::Nil(Nil))
 					}
+					Obj::Dict(dict) => {
+						let outer_scope = self.scope.clone();
+						let inner_scope = Scope {
+							locals: HashMap::new(),
+							outer: Some(outer_scope.clone()),
+						};
+						self.scope = Rc::new(RefCell::new(inner_scope));
+						let body = chunk.get_block(*body_id);
+						for key in dict.pairs.keys() {
+							self.scope.borrow_mut().locals.insert(*name, key.clone());
+							for expr_id in &body.0 {
+								match self.eval_expr(chunk, *expr_id) {
+									Ok(_) => {}
+									Err(Signal::Return(val)) => {
+										self.scope = outer_scope;
+										return Err(Signal::Return(val));
+									}
+									Err(Signal::Error(err)) => {
+										self.scope = outer_scope;
+										return Err(Signal::Error(err));
+									}
+								}
+							}
+						}
+						self.scope = outer_scope;
+						Ok(Val::Nil(Nil))
+					}
 					obj => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
