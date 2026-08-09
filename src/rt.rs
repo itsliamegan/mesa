@@ -126,7 +126,7 @@ impl Val {
 			}
 			TypeId::Native(type_id) => {
 				let typ = types.get_native_type(type_id);
-				if typ.fields.contains_key(&name) {
+				if typ.fields.contains_key(&name) || typ.methods.contains_key(&name) {
 					Some(Member::Native(self.clone(), name))
 				} else {
 					None
@@ -239,8 +239,18 @@ struct Proc {
 
 #[derive(Debug, Clone, Copy)]
 enum TypeId {
-	Native(NativeTypeId),
 	User(UserTypeId),
+	Native(NativeTypeId),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UserTypeId(u32);
+
+#[derive(Debug)]
+struct UserType {
+	name: Sym,
+	fields: Vec<Sym>,
+	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -252,10 +262,17 @@ struct NativeField {
 }
 
 #[derive(Debug)]
+struct NativeMethod {
+	arity: usize,
+	call: fn(&Val, Vec<Val>) -> Val,
+}
+
+#[derive(Debug)]
 struct NativeType {
 	name: Sym,
 	new: Option<fn() -> Val>,
 	fields: HashMap<Sym, NativeField>,
+	methods: HashMap<Sym, NativeMethod>,
 }
 
 const CORE_TYPES: &[(
@@ -263,15 +280,16 @@ const CORE_TYPES: &[(
 	NativeTypeId,
 	Option<fn() -> Val>,
 	&[(&str, fn(&Val) -> Val)],
+	&[(&str, fn(&Val, Vec<Val>) -> Val, usize)],
 )] = &[
-	("Nil", NativeTypeId::NIL, Some(Nil::new), &[]),
-	("Num", NativeTypeId::NUM, Some(Num::new), &[]),
-	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[]),
-	("Str", NativeTypeId::STR, Some(Str::new), &[]),
-	("List", NativeTypeId::LIST, Some(List::new), &[]),
-	("Dict", NativeTypeId::DICT, Some(Dict::new), &[]),
-	("Proc", NativeTypeId::PROC, None, &[]),
-	("Type", NativeTypeId::TYPE, None, &[]),
+	("Nil", NativeTypeId::NIL, Some(Nil::new), &[], &[]),
+	("Num", NativeTypeId::NUM, Some(Num::new), &[], &[]),
+	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[], &[]),
+	("Str", NativeTypeId::STR, Some(Str::new), &[], &[]),
+	("List", NativeTypeId::LIST, Some(List::new), &[], &[]),
+	("Dict", NativeTypeId::DICT, Some(Dict::new), &[], &[]),
+	("Proc", NativeTypeId::PROC, None, &[], &[]),
+	("Type", NativeTypeId::TYPE, None, &[], &[]),
 ];
 
 impl NativeTypeId {
@@ -285,45 +303,42 @@ impl NativeTypeId {
 	const TYPE: NativeTypeId = NativeTypeId(7);
 }
 
-#[derive(Debug, Clone, Copy)]
-struct UserTypeId(u32);
-
-#[derive(Debug)]
-struct UserType {
-	name: Sym,
-	fields: Vec<Sym>,
-	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
-}
-
 struct TypeRegistry {
-	native: Vec<NativeType>,
 	user: Vec<UserType>,
+	native: Vec<NativeType>,
 }
 
 impl TypeRegistry {
 	fn new(syms: &mut Interner) -> Self {
 		let mut native = Vec::with_capacity(CORE_TYPES.len());
 
-		for (name, _id, new, field_pairs) in CORE_TYPES {
+		for (name, _id, new, field_pairs, method_pairs) in CORE_TYPES {
 			let mut fields = HashMap::with_capacity(field_pairs.len());
 			for (name, get) in *field_pairs {
 				fields.insert(syms.intern(name), NativeField { get: *get });
+			}
+			let mut methods = HashMap::with_capacity(method_pairs.len());
+			for (name, call, arity) in *method_pairs {
+				methods.insert(
+					syms.intern(name),
+					NativeMethod {
+						arity: *arity,
+						call: *call,
+					},
+				);
 			}
 			native.push(NativeType {
 				name: syms.intern(name),
 				new: *new,
 				fields,
+				methods,
 			});
 		}
 
 		Self {
-			native,
 			user: Vec::new(),
+			native,
 		}
-	}
-
-	fn get_native_type(&self, id: NativeTypeId) -> &NativeType {
-		&self.native[id.0 as usize]
 	}
 
 	fn get_user_type(&self, id: UserTypeId) -> &UserType {
@@ -334,6 +349,10 @@ impl TypeRegistry {
 		let id = UserTypeId(self.user.len() as u32);
 		self.user.push(typ);
 		id
+	}
+
+	fn get_native_type(&self, id: NativeTypeId) -> &NativeType {
+		&self.native[id.0 as usize]
 	}
 }
 
@@ -350,9 +369,9 @@ enum Member {
 }
 
 #[derive(Debug)]
-struct Method {
-	proc: Rc<RefCell<Proc>>,
-	inst: Rc<RefCell<Obj>>,
+enum Method {
+	User(Rc<RefCell<Obj>>, Rc<RefCell<Proc>>),
+	Native(Val, Sym),
 }
 
 impl Member {
@@ -366,21 +385,29 @@ impl Member {
 				if let Some(val) = inst.fields.get(name) {
 					val.clone()
 				} else if let Some(proc_rf) = typ.methods.get(name) {
-					Val::Obj(Rc::new(RefCell::new(Obj::Method(Method {
-						proc: proc_rf.clone(),
-						inst: inst_rf.clone(),
-					}))))
+					Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
+						inst_rf.clone(),
+						proc_rf.clone(),
+					)))))
 				} else {
 					panic!();
 				}
 			}
-			Member::Native(val, name) => {
-				let TypeId::Native(type_id) = val.type_id() else {
+			Member::Native(recv, name) => {
+				let TypeId::Native(type_id) = recv.type_id() else {
 					panic!();
 				};
 				let typ = types.get_native_type(type_id);
-				let field = typ.fields.get(name).unwrap();
-				(field.get)(val)
+				if let Some(field) = typ.fields.get(name) {
+					(field.get)(recv)
+				} else if typ.methods.contains_key(name) {
+					Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::Native(
+						recv.clone(),
+						*name,
+					)))))
+				} else {
+					panic!();
+				}
 			}
 		}
 	}
@@ -658,13 +685,33 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 							}
 						},
-						Obj::Method(meth) => self.eval_proc_call(
-							chunk,
-							&tok,
-							&meth.proc.borrow(),
-							Some(meth.inst.clone()),
-							args,
-						),
+						Obj::Method(meth) => match meth {
+							Method::User(inst, proc) => self.eval_proc_call(
+								chunk,
+								&tok,
+								&proc.borrow(),
+								Some(inst.clone()),
+								args,
+							),
+							Method::Native(recv, name) => {
+								let TypeId::Native(type_id) = recv.type_id() else {
+									panic!()
+								};
+								let typ = self.types.get_native_type(type_id);
+								let meth = typ.methods.get(name).unwrap();
+								if args.len() != meth.arity {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(tok.pos);
+									Err(Signal::Error(Error::WrongArgCount(
+										loc,
+										args.len(),
+										meth.arity,
+									)))
+								} else {
+									Ok((meth.call)(recv, args))
+								}
+							}
+						},
 						_ => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.pos);
@@ -691,8 +738,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Ok(member.get(&self.types))
 				} else {
 					let type_name = match val.type_id() {
-						TypeId::Native(id) => self.types.get_native_type(id).name,
 						TypeId::User(id) => self.types.get_user_type(id).name,
+						TypeId::Native(id) => self.types.get_native_type(id).name,
 					};
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -768,8 +815,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						if let Some(member) = target.member(*name, &self.types) {
 							if let Err(()) = member.set(val.clone()) {
 								let type_name = match target.type_id() {
-									TypeId::Native(id) => self.types.get_native_type(id).name,
 									TypeId::User(id) => self.types.get_user_type(id).name,
+									TypeId::Native(id) => self.types.get_native_type(id).name,
 								};
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -782,8 +829,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Ok(val)
 						} else {
 							let type_name = match target.type_id() {
-								TypeId::Native(id) => self.types.get_native_type(id).name,
 								TypeId::User(id) => self.types.get_user_type(id).name,
+								TypeId::Native(id) => self.types.get_native_type(id).name,
 							};
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -1014,7 +1061,12 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			res.push(')');
 			res
 		}
-		Obj::Method(meth) => rt_print_proc(syms, &meth.proc.borrow()),
+		Obj::Method(meth) => match meth {
+			Method::User(_, proc) => rt_print_proc(syms, &proc.borrow()),
+			Method::Native(_, name) => {
+				format!("def {}", syms.resolve(*name))
+			}
+		},
 	}
 }
 
