@@ -248,6 +248,14 @@ impl Dict {
 			pairs: HashMap::new(),
 		}))))
 	}
+
+	fn size(val: &Val) -> Val {
+		let Val::Obj(rf) = val else { panic!() };
+		let Obj::Dict(dict) = &*rf.borrow() else {
+			panic!()
+		};
+		Val::Num(Num(dict.pairs.len() as f64))
+	}
 }
 
 #[derive(Debug)]
@@ -320,7 +328,13 @@ const CORE_TYPES: &[(
 		&[("size", List::size)],
 		&[],
 	),
-	("Dict", NativeTypeId::DICT, Some(Dict::new), &[], &[]),
+	(
+		"Dict",
+		NativeTypeId::DICT,
+		Some(Dict::new),
+		&[("size", Dict::size)],
+		&[],
+	),
 	("Proc", NativeTypeId::PROC, None, &[], &[]),
 	("Type", NativeTypeId::TYPE, None, &[], &[]),
 ];
