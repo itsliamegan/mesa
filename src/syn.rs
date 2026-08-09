@@ -708,6 +708,7 @@ pub struct Unary(pub UnaryOp, pub ExprId);
 #[derive(Debug)]
 pub enum UnaryOp {
 	Not,
+	Neg,
 }
 
 #[derive(Debug)]
@@ -812,9 +813,10 @@ impl Precedence {
 	const SUB: Precedence = Precedence(6);
 	const MUL: Precedence = Precedence(7);
 	const DIV: Precedence = Precedence(7);
-	const CALL: Precedence = Precedence(8);
-	const MEMBER: Precedence = Precedence(8);
-	const SCRIPT: Precedence = Precedence(8);
+	const NEG: Precedence = Precedence(8);
+	const CALL: Precedence = Precedence(9);
+	const MEMBER: Precedence = Precedence(9);
+	const SCRIPT: Precedence = Precedence(9);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
@@ -1061,10 +1063,15 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
-	fn parse_unary_expr(&mut self) -> Result<ExprId, Error> {
-		let tok = self.take(TokenTag::Not)?;
-		let val_id = self.parse_expr_prec(Precedence::NOT)?;
-		let expr = Expr::Unary(Unary(UnaryOp::Not, val_id));
+	fn parse_unary_expr(
+		&mut self,
+		tag: TokenTag,
+		op: UnaryOp,
+		prec: Precedence,
+	) -> Result<ExprId, Error> {
+		let tok = self.take(tag)?;
+		let val_id = self.parse_expr_prec(prec)?;
+		let expr = Expr::Unary(Unary(op, val_id));
 		let expr_id = self.chunk.add_expr(tok, expr);
 		Ok(expr_id)
 	}
@@ -1074,7 +1081,10 @@ impl<'src> Parser<'src> {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Return => self.parse_return_expr(),
-			TokenTag::Not => self.parse_unary_expr(),
+			TokenTag::Not => self.parse_unary_expr(TokenTag::Not, UnaryOp::Not, Precedence::NOT),
+			TokenTag::Minus => {
+				self.parse_unary_expr(TokenTag::Minus, UnaryOp::Neg, Precedence::NEG)
+			}
 			TokenTag::Ident => self.parse_ident_expr(),
 			TokenTag::Builtin => self.parse_builtin_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),

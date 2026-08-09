@@ -1032,6 +1032,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let val = self.eval_expr(chunk, *val_id)?;
 					Ok(Val::Bool(Bool(!val.is_truthy())))
 				}
+				UnaryOp::Neg => match self.eval_expr(chunk, *val_id)? {
+					Val::Num(num) => Ok(Val::Num(Num(-num.0))),
+					val => {
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						Err(Signal::Error(Error::ArithNonNum(
+							loc,
+							rt_print_val(self.syms, &self.types, &val),
+						)))
+					}
+				},
 			},
 			Expr::Ident(Ident(name)) => {
 				if *name == Sym::SELF

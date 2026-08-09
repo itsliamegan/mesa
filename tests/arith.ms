@@ -8,7 +8,15 @@
 #> 5
 #> 1
 #> 11
+#> -5
+#> 1
+#> 1
+#> -6
 #> 6
+#> 12
+#> 5
+#> 6
+#> -5
 
 $print(1 + 2)
 $print(5.27 + 0.9)
@@ -21,8 +29,17 @@ $print(10 - 2 - 3)
 $print(20 / 4 / 5)
 $print(2 + 3 * 4 - 6 / 2)
 
+$print(-5)
+$print(-2 + 3)
+$print(3 + -2)
+$print(-2 * 3)
+$print(-2 * -3)
+$print(10 - -2)
+$print(- -5)
+
 type Box(val)
 end
 
 box := Box(5)
 $print(box.val + 1)
+$print(-box.val)
