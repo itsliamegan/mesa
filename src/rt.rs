@@ -632,7 +632,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 						Err(Signal::Error(Error::IterNonIterable(
 							loc,
-							format!("{:?}", obj),
+							rt_print_obj(&self.syms, &self.types, obj),
 						)))
 					}
 				},
@@ -641,7 +641,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					Err(Signal::Error(Error::IterNonIterable(
 						loc,
-						format!("{:?}", val),
+						rt_print_val(&self.syms, &self.types, &val),
 					)))
 				}
 			},
