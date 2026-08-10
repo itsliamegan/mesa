@@ -29,8 +29,18 @@ fn main() {
 		Ok(toks) => match Parser::new(src, toks).parse() {
 			Ok(chunk) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
 				Ok(()) => {}
-				Err((err, loc)) => {
-					eprintln!("{}: runtime error: {}", loc, err);
+				Err((err, mut trace)) => {
+					{
+						let mut frame = trace.first_mut().unwrap();
+						eprintln!("{}: runtime error: {}", frame.1, err);
+					}
+					{
+						let mut frame = trace.last_mut().unwrap();
+						frame.0.push_str("<main>");
+					}
+					for (proc_name, loc) in trace {
+						eprintln!("\tat {} ({})", proc_name, loc);
+					}
 					process::exit(1);
 				}
 			},

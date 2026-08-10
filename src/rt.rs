@@ -590,7 +590,7 @@ pub struct Interpreter<'syms, 'pkg> {
 
 enum Signal {
 	Return(Val),
-	Error(Error, Location),
+	Error(Error, Vec<(String, Location)>),
 }
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
@@ -608,12 +608,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
-	pub fn eval(mut self, chunk: Chunk) -> Result<(), (Error, Location)> {
+	pub fn eval(mut self, chunk: Chunk) -> Result<(), (Error, Vec<(String, Location)>)> {
 		for decl_id in &chunk.top {
 			match self.eval_decl(&chunk, *decl_id) {
 				Ok(()) => {}
 				Err(Signal::Return(_)) => break,
-				Err(Signal::Error(err, loc)) => return Err((err, loc)),
+				Err(Signal::Error(err, trace)) => return Err((err, trace)),
 			}
 		}
 		Ok(())
@@ -699,7 +699,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
 						Err(Signal::Error(
 							Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
-							loc,
+							vec![(String::new(), loc)],
 						))
 					}
 				},
@@ -709,7 +709,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
 						Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
-						loc,
+						vec![(String::new(), loc)],
 					))
 				}
 			},
@@ -752,7 +752,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											args.len(),
 											typ.fields.len(),
 										)),
-										loc,
+										vec![(String::new(), loc)],
 									));
 								}
 								let mut fields = HashMap::new();
@@ -780,7 +780,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 													args.len(),
 													0,
 												)),
-												loc,
+												vec![(String::new(), loc)],
 											))
 										}
 									}
@@ -792,7 +792,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											Error::TypeError(TypeError::NotCallable(
 												type_name.to_string(),
 											)),
-											loc,
+											vec![(String::new(), loc)],
 										))
 									}
 								}
@@ -820,7 +820,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											args.len(),
 											meth.arity,
 										)),
-										loc,
+										vec![(String::new(), loc)],
 									))
 								} else {
 									Ok((meth.call)(recv, args))
@@ -834,7 +834,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								self.syms.resolve(self.types.get_type_name(obj.type_id()));
 							Err(Signal::Error(
 								Error::TypeError(TypeError::NotCallable(type_name.to_string())),
-								loc,
+								vec![(String::new(), loc)],
 							))
 						}
 					},
@@ -844,7 +844,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 						Err(Signal::Error(
 							Error::TypeError(TypeError::NotCallable(type_name.to_string())),
-							loc,
+							vec![(String::new(), loc)],
 						))
 					}
 				}
@@ -866,7 +866,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							self.syms.resolve(type_name).to_string(),
 							self.syms.resolve(*name).to_string(),
 						)),
-						loc,
+						vec![(String::new(), loc)],
 					))
 				}
 			}
@@ -881,10 +881,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 									return Err(Signal::Error(
-										Error::IndexError(IndexError::NonIntegral(
-											num.0,
-										)),
-										loc,
+										Error::IndexError(IndexError::NonIntegral(num.0)),
+										vec![(String::new(), loc)],
 									));
 								}
 							}
@@ -897,7 +895,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										&self.types,
 										&val,
 									))),
-									loc,
+									vec![(String::new(), loc)],
 								));
 							}
 						};
@@ -921,7 +919,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Error::ProtocolError(ProtocolError::NotScriptable(
 								type_name.to_string(),
 							)),
-							loc,
+							vec![(String::new(), loc)],
 						))
 					}
 				},
@@ -931,7 +929,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
 						Error::ProtocolError(ProtocolError::NotScriptable(type_name.to_string())),
-						loc,
+						vec![(String::new(), loc)],
 					))
 				}
 			},
@@ -966,7 +964,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										self.syms.resolve(type_name).to_string(),
 										self.syms.resolve(*name).to_string(),
 									)),
-									loc,
+									vec![(String::new(), loc)],
 								));
 							}
 							Ok(val)
@@ -982,7 +980,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									self.syms.resolve(type_name).to_string(),
 									self.syms.resolve(*name).to_string(),
 								)),
-								loc,
+								vec![(String::new(), loc)],
 							))
 						}
 					}
@@ -1002,7 +1000,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 													Error::IndexError(IndexError::NonIntegral(
 														num.0,
 													)),
-													loc,
+													vec![(String::new(), loc)],
 												));
 											}
 										}
@@ -1013,7 +1011,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 												Error::TypeError(TypeError::IndexNonNum(
 													rt_print_val(self.syms, &self.types, &val),
 												)),
-												loc,
+												vec![(String::new(), loc)],
 											));
 										}
 									};
@@ -1025,7 +1023,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 										Err(Signal::Error(
 											Error::IndexError(IndexError::OutOfRange(idx)),
-											loc,
+											vec![(String::new(), loc)],
 										))
 									}
 								}
@@ -1043,7 +1041,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										Error::ProtocolError(ProtocolError::NotScriptable(
 											type_name.to_string(),
 										)),
-										loc,
+										vec![(String::new(), loc)],
 									))
 								}
 							},
@@ -1056,7 +1054,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									Error::ProtocolError(ProtocolError::NotScriptable(
 										type_name.to_string(),
 									)),
-									loc,
+									vec![(String::new(), loc)],
 								))
 							}
 						}
@@ -1120,7 +1118,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										Error::TypeError(TypeError::NotOrderable(
 											type_name.to_string(),
 										)),
-										loc,
+										vec![(String::new(), loc)],
 									))
 								}
 							}
@@ -1148,7 +1146,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										Error::TypeError(TypeError::ArithNonNum(
 											type_name.to_string(),
 										)),
-										loc,
+										vec![(String::new(), loc)],
 									))
 								}
 							}
@@ -1170,7 +1168,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 						Err(Signal::Error(
 							Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
-							loc,
+							vec![(String::new(), loc)],
 						))
 					}
 				},
@@ -1190,7 +1188,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					let name = self.syms.resolve(*name);
-					Err(Signal::Error(Error::NameError(name.to_string()), loc))
+					Err(Signal::Error(Error::NameError(name.to_string()), vec![(String::new(), loc)]))
 				}
 			}
 			Expr::Builtin(builtin) => match builtin {
@@ -1241,7 +1239,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			let loc = src.loc(tok.pos);
 			return Err(Signal::Error(
 				Error::ArgumentError(ArgumentError::WrongCount(args.len(), proc.params.len())),
-				loc,
+				vec![(String::new(), loc)],
 			));
 		}
 		let mut scope = Scope {
@@ -1258,7 +1256,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		match result {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
-			Err(err) => Err(err),
+			Err(Signal::Error(err, mut trace)) => {
+				let proc_name = self.syms.resolve(proc.name);
+				trace.last_mut().unwrap().0.push_str(proc_name);
+
+				let src = self.pkg.get_src(chunk.src);
+				let loc = src.loc(tok.pos);
+				trace.push((String::new(), loc));
+				Err(Signal::Error(err, trace))
+			}
 		}
 	}
 
