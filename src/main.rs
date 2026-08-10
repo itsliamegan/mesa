@@ -29,8 +29,8 @@ fn main() {
 		Ok(toks) => match Parser::new(src, toks).parse() {
 			Ok(chunk) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
 				Ok(()) => {}
-				Err(err) => {
-					eprintln!("{}", err);
+				Err((err, loc)) => {
+					eprintln!("{}: runtime error: {}", loc, err);
 					process::exit(1);
 				}
 			},

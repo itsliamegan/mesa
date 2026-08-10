@@ -11,62 +11,115 @@ use crate::syn::{
 	ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
 };
 
+// Grouped by why the operation failed, not by which operation caught it
+// (DESIGN_NOTES.md §19). Raise-site Location is diagnostic only and lives on
+// Signal::Error, never on a variant here.
 #[derive(Debug)]
 pub enum Error {
-	WrongArgCount(Location, usize, usize),
-	CallNonCallable(Location, String),
-	IterNonIterable(Location, String),
-	NoSuchMember(Location, String, String),
-	AssignReadOnlyMember(Location, String, String),
-	ScriptNonScriptable(Location, String),
-	ScriptNonIndex(Location, String),
-	ScriptIndexOutOfBounds(Location, usize),
-	ArithNonNum(Location, String),
-	CompareNonNum(Location, String),
-	UnboundIdent(Location, String),
+	ProtocolError(ProtocolError),
+	ArgumentError(ArgumentError),
+	TypeError(TypeError),
+	MemberError(MemberError),
+	IndexError(IndexError),
+	NameError(String),
+	KeyError(String),
 }
 
-impl Error {
-	fn loc(&self) -> &Location {
-		match self {
-			Self::WrongArgCount(loc, _, _) => loc,
-			Self::CallNonCallable(loc, _) => loc,
-			Self::IterNonIterable(loc, _) => loc,
-			Self::NoSuchMember(loc, _, _) => loc,
-			Self::AssignReadOnlyMember(loc, _, _) => loc,
-			Self::ScriptNonScriptable(loc, _) => loc,
-			Self::ScriptNonIndex(loc, _) => loc,
-			Self::ScriptIndexOutOfBounds(loc, _) => loc,
-			Self::ArithNonNum(loc, _) => loc,
-			Self::CompareNonNum(loc, _) => loc,
-			Self::UnboundIdent(loc, _) => loc,
-		}
-	}
+#[derive(Debug)]
+pub enum ProtocolError {
+	NotIterable(String),
+	NotScriptable(String),
+}
+
+#[derive(Debug)]
+pub enum ArgumentError {
+	WrongCount(usize, usize),
+}
+
+#[derive(Debug)]
+pub enum TypeError {
+	IndexNonNum(String),
+	ArithNonNum(String),
+	NotCallable(String),
+	NotInvokable(String),
+	NotOrderable(String),
+}
+
+#[derive(Debug)]
+pub enum MemberError {
+	Missing(String, String),
+	ReadOnly(String, String),
+}
+
+#[derive(Debug)]
+pub enum IndexError {
+	OutOfRange(usize),
+	NonIntegral(f64),
 }
 
 impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-		write!(f, "{}: runtime error: ", self.loc())?;
 		match self {
-			Self::WrongArgCount(_, have, want) => {
+			Self::ProtocolError(err) => Display::fmt(err, f),
+			Self::ArgumentError(err) => Display::fmt(err, f),
+			Self::TypeError(err) => Display::fmt(err, f),
+			Self::MemberError(err) => Display::fmt(err, f),
+			Self::IndexError(err) => Display::fmt(err, f),
+			Self::NameError(name) => write!(f, "unbound name '{}'", name),
+			Self::KeyError(key) => write!(f, "key {} not found", key),
+		}
+	}
+}
+
+impl Display for ProtocolError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::NotIterable(val) => write!(f, "iter of non-iterable {}", val),
+			Self::NotScriptable(val) => write!(f, "script of non-scriptable {}", val),
+		}
+	}
+}
+
+impl Display for ArgumentError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::WrongCount(have, want) => {
 				write!(f, "wrong number of args; have {}, want {}", have, want)
 			}
-			Self::CallNonCallable(_, val) => write!(f, "call of non-callable {}", val),
-			Self::IterNonIterable(_, val) => write!(f, "iter of non-iterable {}", val),
-			Self::NoSuchMember(_, typ, name) => {
+		}
+	}
+}
+
+impl Display for TypeError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::IndexNonNum(val) => write!(f, "script with non-index {}", val),
+			Self::ArithNonNum(val) => write!(f, "arithmetic on non-number {}", val),
+			Self::NotCallable(val) => write!(f, "call of non-callable {}", val),
+			Self::NotInvokable(val) => write!(f, "invoke of non-invokable {}", val),
+			Self::NotOrderable(val) => write!(f, "comparison with non-orderable {}", val),
+		}
+	}
+}
+
+impl Display for MemberError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::Missing(typ, name) => {
 				write!(f, "no such member '{}' on type '{}'", name, typ)
 			}
-			Self::AssignReadOnlyMember(_, typ, name) => {
+			Self::ReadOnly(typ, name) => {
 				write!(f, "member '{}' on type '{}' is read-only", name, typ)
 			}
-			Self::ScriptNonScriptable(_, val) => write!(f, "script of non-scriptable {}", val),
-			Self::ScriptNonIndex(_, val) => write!(f, "script with non-index {}", val),
-			Self::ScriptIndexOutOfBounds(_, idx) => {
-				write!(f, "script index {} out of bounds", idx)
-			}
-			Self::ArithNonNum(_, val) => write!(f, "arithmetic on non-number {}", val),
-			Self::CompareNonNum(_, val) => write!(f, "comparison with non-number {}", val),
-			Self::UnboundIdent(_, ident) => write!(f, "unbound ident '{}'", ident),
+		}
+	}
+}
+
+impl Display for IndexError {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		match self {
+			Self::OutOfRange(idx) => write!(f, "script index {} out of bounds", idx),
+			Self::NonIntegral(idx) => write!(f, "script index {} is not a whole number", idx),
 		}
 	}
 }
@@ -531,7 +584,7 @@ pub struct Interpreter<'syms, 'pkg> {
 
 enum Signal {
 	Return(Val),
-	Error(Error),
+	Error(Error, Location),
 }
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
@@ -549,12 +602,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
-	pub fn eval(mut self, chunk: Chunk) -> Result<(), Error> {
+	pub fn eval(mut self, chunk: Chunk) -> Result<(), (Error, Location)> {
 		for decl_id in &chunk.top {
 			match self.eval_decl(&chunk, *decl_id) {
 				Ok(()) => {}
 				Err(Signal::Return(_)) => break,
-				Err(Signal::Error(err)) => return Err(err),
+				Err(Signal::Error(err, loc)) => return Err((err, loc)),
 			}
 		}
 		Ok(())
@@ -637,19 +690,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					obj => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-						Err(Signal::Error(Error::IterNonIterable(
+						Err(Signal::Error(
+							Error::ProtocolError(ProtocolError::NotIterable(rt_print_obj(
+								&self.syms,
+								&self.types,
+								obj,
+							))),
 							loc,
-							rt_print_obj(&self.syms, &self.types, obj),
-						)))
+						))
 					}
 				},
 				val => {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-					Err(Signal::Error(Error::IterNonIterable(
+					Err(Signal::Error(
+						Error::ProtocolError(ProtocolError::NotIterable(rt_print_val(
+							&self.syms,
+							&self.types,
+							&val,
+						))),
 						loc,
-						rt_print_val(&self.syms, &self.types, &val),
-					)))
+					))
 				}
 			},
 			Expr::When(When(cond, then_branch, else_branch)) => {
@@ -686,11 +747,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								if args.len() != typ.fields.len() {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(tok.pos);
-									return Err(Signal::Error(Error::WrongArgCount(
+									return Err(Signal::Error(
+										Error::ArgumentError(ArgumentError::WrongCount(
+											args.len(),
+											typ.fields.len(),
+										)),
 										loc,
-										args.len(),
-										typ.fields.len(),
-									)));
+									));
 								}
 								let mut fields = HashMap::new();
 								for (field, val) in typ.fields.iter().zip(args) {
@@ -712,24 +775,26 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										} else {
 											let src = self.pkg.get_src(chunk.src);
 											let loc = src.loc(tok.pos);
-											Err(Signal::Error(Error::WrongArgCount(
+											Err(Signal::Error(
+												Error::ArgumentError(ArgumentError::WrongCount(
+													args.len(),
+													0,
+												)),
 												loc,
-												args.len(),
-												0,
-											)))
+											))
 										}
 									}
 									None => {
 										let src = self.pkg.get_src(chunk.src);
 										let loc = src.loc(tok.pos);
-										Err(Signal::Error(Error::CallNonCallable(
-											loc,
-											rt_print_val(
+										Err(Signal::Error(
+											Error::TypeError(TypeError::NotCallable(rt_print_val(
 												self.syms,
 												&self.types,
 												&Val::Obj(rf.clone()),
-											),
-										)))
+											))),
+											loc,
+										))
 									}
 								}
 							}
@@ -751,11 +816,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								if args.len() != meth.arity {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(tok.pos);
-									Err(Signal::Error(Error::WrongArgCount(
+									Err(Signal::Error(
+										Error::ArgumentError(ArgumentError::WrongCount(
+											args.len(),
+											meth.arity,
+										)),
 										loc,
-										args.len(),
-										meth.arity,
-									)))
+									))
 								} else {
 									Ok((meth.call)(recv, args))
 								}
@@ -764,19 +831,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						_ => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.pos);
-							Err(Signal::Error(Error::CallNonCallable(
+							Err(Signal::Error(
+								Error::TypeError(TypeError::NotCallable(rt_print_val(
+									self.syms,
+									&self.types,
+									&Val::Obj(rf.clone()),
+								))),
 								loc,
-								rt_print_val(self.syms, &self.types, &Val::Obj(rf.clone())),
-							)))
+							))
 						}
 					},
 					val => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(tok.pos);
-						Err(Signal::Error(Error::CallNonCallable(
+						Err(Signal::Error(
+							Error::TypeError(TypeError::NotCallable(rt_print_val(
+								self.syms,
+								&self.types,
+								&val,
+							))),
 							loc,
-							rt_print_val(self.syms, &self.types, &val),
-						)))
+						))
 					}
 				}
 			}
@@ -792,11 +867,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					};
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-					Err(Signal::Error(Error::NoSuchMember(
+					Err(Signal::Error(
+						Error::MemberError(MemberError::Missing(
+							self.syms.resolve(type_name).to_string(),
+							self.syms.resolve(*name).to_string(),
+						)),
 						loc,
-						self.syms.resolve(type_name).to_string(),
-						self.syms.resolve(*name).to_string(),
-					)))
+					))
 				}
 			}
 			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
@@ -807,10 +884,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							val => {
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-								return Err(Signal::Error(Error::ScriptNonIndex(
+								return Err(Signal::Error(
+									Error::TypeError(TypeError::IndexNonNum(rt_print_val(
+										self.syms,
+										&self.types,
+										&val,
+									))),
 									loc,
-									rt_print_val(self.syms, &self.types, &val),
-								)));
+								));
 							}
 						};
 						match list.items.get(idx) {
@@ -828,19 +909,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					_ => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-						Err(Signal::Error(Error::ScriptNonScriptable(
+						Err(Signal::Error(
+							Error::ProtocolError(ProtocolError::NotScriptable(rt_print_val(
+								self.syms,
+								&self.types,
+								&Val::Obj(rf.clone()),
+							))),
 							loc,
-							rt_print_val(self.syms, &self.types, &Val::Obj(rf.clone())),
-						)))
+						))
 					}
 				},
 				val => {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-					Err(Signal::Error(Error::ScriptNonScriptable(
+					Err(Signal::Error(
+						Error::ProtocolError(ProtocolError::NotScriptable(rt_print_val(
+							self.syms,
+							&self.types,
+							&val,
+						))),
 						loc,
-						rt_print_val(self.syms, &self.types, &val),
-					)))
+					))
 				}
 			},
 			Expr::Assign(Assign(place, val_expr_id)) => {
@@ -869,11 +958,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								};
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-								return Err(Signal::Error(Error::AssignReadOnlyMember(
+								return Err(Signal::Error(
+									Error::MemberError(MemberError::ReadOnly(
+										self.syms.resolve(type_name).to_string(),
+										self.syms.resolve(*name).to_string(),
+									)),
 									loc,
-									self.syms.resolve(type_name).to_string(),
-									self.syms.resolve(*name).to_string(),
-								)));
+								));
 							}
 							Ok(val)
 						} else {
@@ -883,11 +974,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							};
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-							Err(Signal::Error(Error::NoSuchMember(
+							Err(Signal::Error(
+								Error::MemberError(MemberError::Missing(
+									self.syms.resolve(type_name).to_string(),
+									self.syms.resolve(*name).to_string(),
+								)),
 								loc,
-								self.syms.resolve(type_name).to_string(),
-								self.syms.resolve(*name).to_string(),
-							)))
+							))
 						}
 					}
 					Place::Script(syn::Script(target_id, key_id)) => {
@@ -900,10 +993,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										val => {
 											let src = self.pkg.get_src(chunk.src);
 											let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-											return Err(Signal::Error(Error::ScriptNonIndex(
+											return Err(Signal::Error(
+												Error::TypeError(TypeError::IndexNonNum(
+													rt_print_val(self.syms, &self.types, &val),
+												)),
 												loc,
-												rt_print_val(self.syms, &self.types, &val),
-											)));
+											));
 										}
 									};
 									if idx < list.items.len() {
@@ -912,7 +1007,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									} else {
 										let src = self.pkg.get_src(chunk.src);
 										let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-										Err(Signal::Error(Error::ScriptIndexOutOfBounds(loc, idx)))
+										Err(Signal::Error(
+											Error::IndexError(IndexError::OutOfRange(idx)),
+											loc,
+										))
 									}
 								}
 								Obj::Dict(dict) => {
@@ -923,19 +1021,23 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								_ => {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-									Err(Signal::Error(Error::ScriptNonScriptable(
+									Err(Signal::Error(
+										Error::ProtocolError(ProtocolError::NotScriptable(
+											rt_print_val(self.syms, &self.types, &target),
+										)),
 										loc,
-										rt_print_val(self.syms, &self.types, &target),
-									)))
+									))
 								}
 							},
 							_ => {
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-								Err(Signal::Error(Error::ScriptNonScriptable(
+								Err(Signal::Error(
+									Error::ProtocolError(ProtocolError::NotScriptable(
+										rt_print_val(self.syms, &self.types, &target),
+									)),
 									loc,
-									rt_print_val(self.syms, &self.types, &target),
-								)))
+								))
 							}
 						}
 					}
@@ -992,10 +1094,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										(_, Val::Num(_)) => lhs,
 										_ => lhs,
 									};
-									Err(Signal::Error(Error::CompareNonNum(
+									Err(Signal::Error(
+										Error::TypeError(TypeError::NotOrderable(rt_print_val(
+											self.syms,
+											&self.types,
+											&val,
+										))),
 										loc,
-										rt_print_val(self.syms, &self.types, &val),
-									)))
+									))
 								}
 							}
 						}
@@ -1016,10 +1122,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										(_, Val::Num(_)) => lhs,
 										_ => lhs,
 									};
-									Err(Signal::Error(Error::ArithNonNum(
+									Err(Signal::Error(
+										Error::TypeError(TypeError::ArithNonNum(rt_print_val(
+											self.syms,
+											&self.types,
+											&val,
+										))),
 										loc,
-										rt_print_val(self.syms, &self.types, &val),
-									)))
+									))
 								}
 							}
 						}
@@ -1037,10 +1147,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					val => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-						Err(Signal::Error(Error::ArithNonNum(
+						Err(Signal::Error(
+							Error::TypeError(TypeError::ArithNonNum(rt_print_val(
+								self.syms,
+								&self.types,
+								&val,
+							))),
 							loc,
-							rt_print_val(self.syms, &self.types, &val),
-						)))
+						))
 					}
 				},
 			},
@@ -1059,7 +1173,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					let name = self.syms.resolve(*name);
-					Err(Signal::Error(Error::UnboundIdent(loc, name.to_string())))
+					Err(Signal::Error(Error::NameError(name.to_string()), loc))
 				}
 			}
 			Expr::Builtin(builtin) => match builtin {
@@ -1108,11 +1222,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		if args.len() != proc.params.len() {
 			let src = self.pkg.get_src(chunk.src);
 			let loc = src.loc(tok.pos);
-			return Err(Signal::Error(Error::WrongArgCount(
+			return Err(Signal::Error(
+				Error::ArgumentError(ArgumentError::WrongCount(args.len(), proc.params.len())),
 				loc,
-				args.len(),
-				proc.params.len(),
-			)));
+			));
 		}
 		let mut scope = Scope {
 			locals: HashMap::new(),
@@ -1151,9 +1264,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					self.scope = saved;
 					return Err(Signal::Return(val));
 				}
-				Err(Signal::Error(err)) => {
+				Err(Signal::Error(err, loc)) => {
 					self.scope = saved;
-					return Err(Signal::Error(err));
+					return Err(Signal::Error(err, loc));
 				}
 			}
 		}
