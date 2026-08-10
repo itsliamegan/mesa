@@ -672,11 +672,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Each(Each(name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
-						let scope = Rc::new(RefCell::new(Scope {
-							locals: HashMap::new(),
-							outer: Some(self.scope.clone()),
-						}));
 						for item in &list.items {
+							let scope = Rc::new(RefCell::new(Scope {
+								locals: HashMap::new(),
+								outer: Some(self.scope.clone()),
+							}));
 							scope.borrow_mut().locals.insert(*name, item.clone());
 							self.eval_block(chunk, scope.clone(), *body_id)?;
 						}
