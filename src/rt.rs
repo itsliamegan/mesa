@@ -11,9 +11,6 @@ use crate::syn::{
 	ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
 };
 
-// Grouped by why the operation failed, not by which operation caught it
-// (DESIGN_NOTES.md §19). Raise-site Location is diagnostic only and lives on
-// Signal::Error, never on a variant here.
 #[derive(Debug)]
 pub enum Error {
 	ProtocolError(ProtocolError),
@@ -74,8 +71,8 @@ impl Display for Error {
 impl Display for ProtocolError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::NotIterable(val) => write!(f, "iter of non-iterable {}", val),
-			Self::NotScriptable(val) => write!(f, "script of non-scriptable {}", val),
+			Self::NotIterable(type_name) => write!(f, "type {} is not iterable", type_name),
+			Self::NotScriptable(type_name) => write!(f, "type {} is not scriptable", type_name),
 		}
 	}
 }
@@ -93,11 +90,13 @@ impl Display for ArgumentError {
 impl Display for TypeError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::IndexNonNum(val) => write!(f, "script with non-index {}", val),
-			Self::ArithNonNum(val) => write!(f, "arithmetic on non-number {}", val),
-			Self::NotCallable(val) => write!(f, "call of non-callable {}", val),
-			Self::NotInvokable(val) => write!(f, "invoke of non-invokable {}", val),
-			Self::NotOrderable(val) => write!(f, "comparison with non-orderable {}", val),
+			Self::IndexNonNum(val) => write!(f, "index {} is not a number", val),
+			Self::ArithNonNum(type_name) => {
+				write!(f, "type {} cannot be used in arithmetic", type_name)
+			}
+			Self::NotCallable(type_name) => write!(f, "type {} is not callable", type_name),
+			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
+			Self::NotOrderable(type_name) => write!(f, "type {} is not orderable", type_name),
 		}
 	}
 }
@@ -105,11 +104,11 @@ impl Display for TypeError {
 impl Display for MemberError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::Missing(typ, name) => {
-				write!(f, "no such member '{}' on type '{}'", name, typ)
+			Self::Missing(type_name, name) => {
+				write!(f, "type {} has no such member '{}'", type_name, name)
 			}
-			Self::ReadOnly(typ, name) => {
-				write!(f, "member '{}' on type '{}' is read-only", name, typ)
+			Self::ReadOnly(type_name, name) => {
+				write!(f, "member '{}' on type {} is read-only", type_name, name)
 			}
 		}
 	}
@@ -118,8 +117,8 @@ impl Display for MemberError {
 impl Display for IndexError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::OutOfRange(idx) => write!(f, "script index {} out of bounds", idx),
-			Self::NonIntegral(idx) => write!(f, "script index {} is not a whole number", idx),
+			Self::OutOfRange(idx) => write!(f, "index {} is out of bounds", idx),
+			Self::NonIntegral(idx) => write!(f, "index {} is not a whole number", idx),
 		}
 	}
 }
@@ -453,6 +452,13 @@ impl TypeRegistry {
 		}
 	}
 
+	fn get_type_name(&self, id: TypeId) -> Sym {
+		match id {
+			TypeId::User(id) => self.get_user_type(id).name,
+			TypeId::Native(id) => self.get_native_type(id).name,
+		}
+	}
+
 	fn get_user_type(&self, id: UserTypeId) -> &UserType {
 		&self.user[id.0 as usize]
 	}
@@ -690,12 +696,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					obj => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotIterable(rt_print_obj(
-								&self.syms,
-								&self.types,
-								obj,
-							))),
+							Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
 							loc,
 						))
 					}
@@ -703,12 +706,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				val => {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotIterable(rt_print_val(
-							&self.syms,
-							&self.types,
-							&val,
-						))),
+						Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
 						loc,
 					))
 				}
@@ -787,12 +787,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									None => {
 										let src = self.pkg.get_src(chunk.src);
 										let loc = src.loc(tok.pos);
+										let type_name = self.syms.resolve(typ.name);
 										Err(Signal::Error(
-											Error::TypeError(TypeError::NotCallable(rt_print_val(
-												self.syms,
-												&self.types,
-												&Val::Obj(rf.clone()),
-											))),
+											Error::TypeError(TypeError::NotCallable(
+												type_name.to_string(),
+											)),
 											loc,
 										))
 									}
@@ -828,15 +827,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 							}
 						},
-						_ => {
+						obj => {
 							let src = self.pkg.get_src(chunk.src);
 							let loc = src.loc(tok.pos);
+							let type_name =
+								self.syms.resolve(self.types.get_type_name(obj.type_id()));
 							Err(Signal::Error(
-								Error::TypeError(TypeError::NotCallable(rt_print_val(
-									self.syms,
-									&self.types,
-									&Val::Obj(rf.clone()),
-								))),
+								Error::TypeError(TypeError::NotCallable(type_name.to_string())),
 								loc,
 							))
 						}
@@ -844,12 +841,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					val => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(tok.pos);
+						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 						Err(Signal::Error(
-							Error::TypeError(TypeError::NotCallable(rt_print_val(
-								self.syms,
-								&self.types,
-								&val,
-							))),
+							Error::TypeError(TypeError::NotCallable(type_name.to_string())),
 							loc,
 						))
 					}
@@ -880,7 +874,20 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						let idx = match self.eval_expr(chunk, *key_id)? {
-							Val::Num(num) if num.0 >= 0.0 => num.0.trunc() as usize,
+							Val::Num(num) => {
+								if num.0.fract() <= 1e-10 {
+									num.0.trunc() as usize
+								} else {
+									let src = self.pkg.get_src(chunk.src);
+									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									return Err(Signal::Error(
+										Error::IndexError(IndexError::NonIntegral(
+											num.0,
+										)),
+										loc,
+									));
+								}
+							}
 							val => {
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -906,15 +913,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							None => Ok(Val::Nil(Nil)),
 						}
 					}
-					_ => {
+					obj => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotScriptable(rt_print_val(
-								self.syms,
-								&self.types,
-								&Val::Obj(rf.clone()),
-							))),
+							Error::ProtocolError(ProtocolError::NotScriptable(
+								type_name.to_string(),
+							)),
 							loc,
 						))
 					}
@@ -922,12 +928,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				val => {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotScriptable(rt_print_val(
-							self.syms,
-							&self.types,
-							&val,
-						))),
+						Error::ProtocolError(ProtocolError::NotScriptable(type_name.to_string())),
 						loc,
 					))
 				}
@@ -989,7 +992,20 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Val::Obj(rf) => match &mut *rf.borrow_mut() {
 								Obj::List(list) => {
 									let idx = match self.eval_expr(chunk, *key_id)? {
-										Val::Num(num) if num.0 >= 0.0 => num.0.trunc() as usize,
+										Val::Num(num) => {
+											if num.0.fract() <= 1e-10 {
+												num.0.trunc() as usize
+											} else {
+												let src = self.pkg.get_src(chunk.src);
+												let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+												return Err(Signal::Error(
+													Error::IndexError(IndexError::NonIntegral(
+														num.0,
+													)),
+													loc,
+												));
+											}
+										}
 										val => {
 											let src = self.pkg.get_src(chunk.src);
 											let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
@@ -1018,23 +1034,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									dict.pairs.insert(key, val.clone());
 									Ok(val)
 								}
-								_ => {
+								obj => {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let type_name =
+										self.syms.resolve(self.types.get_type_name(obj.type_id()));
 									Err(Signal::Error(
 										Error::ProtocolError(ProtocolError::NotScriptable(
-											rt_print_val(self.syms, &self.types, &target),
+											type_name.to_string(),
 										)),
 										loc,
 									))
 								}
 							},
-							_ => {
+							val => {
 								let src = self.pkg.get_src(chunk.src);
 								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								let type_name =
+									self.syms.resolve(self.types.get_type_name(val.type_id()));
 								Err(Signal::Error(
 									Error::ProtocolError(ProtocolError::NotScriptable(
-										rt_print_val(self.syms, &self.types, &target),
+										type_name.to_string(),
 									)),
 									loc,
 								))
@@ -1094,12 +1114,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										(_, Val::Num(_)) => lhs,
 										_ => lhs,
 									};
+									let type_name =
+										self.syms.resolve(self.types.get_type_name(val.type_id()));
 									Err(Signal::Error(
-										Error::TypeError(TypeError::NotOrderable(rt_print_val(
-											self.syms,
-											&self.types,
-											&val,
-										))),
+										Error::TypeError(TypeError::NotOrderable(
+											type_name.to_string(),
+										)),
 										loc,
 									))
 								}
@@ -1122,12 +1142,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										(_, Val::Num(_)) => lhs,
 										_ => lhs,
 									};
+									let type_name =
+										self.syms.resolve(self.types.get_type_name(val.type_id()));
 									Err(Signal::Error(
-										Error::TypeError(TypeError::ArithNonNum(rt_print_val(
-											self.syms,
-											&self.types,
-											&val,
-										))),
+										Error::TypeError(TypeError::ArithNonNum(
+											type_name.to_string(),
+										)),
 										loc,
 									))
 								}
@@ -1147,12 +1167,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					val => {
 						let src = self.pkg.get_src(chunk.src);
 						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 						Err(Signal::Error(
-							Error::TypeError(TypeError::ArithNonNum(rt_print_val(
-								self.syms,
-								&self.types,
-								&val,
-							))),
+							Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
 							loc,
 						))
 					}
