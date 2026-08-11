@@ -10,7 +10,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
-	ExprId, Ident, Lit, Location, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
+	ExprId, Name, Lit, Location, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -64,7 +64,7 @@ impl Display for Error {
 			Self::TypeError(err) => Display::fmt(err, f),
 			Self::MemberError(err) => Display::fmt(err, f),
 			Self::IndexError(err) => Display::fmt(err, f),
-			Self::NameError(name) => write!(f, "unbound name '{}'", name),
+			Self::NameError(name) => write!(f, "name '{}' is not defined", name),
 			Self::KeyError(key) => write!(f, "key {} not found", key),
 		}
 	}
@@ -1042,7 +1042,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Assign(Assign(place, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
-					Place::Ident(Ident(sym)) => {
+					Place::Name(Name(sym)) => {
 						let local = Scope::local(&self.scope, *sym);
 						if local.is_bound() && !local.is_root {
 							local.set(val.clone());
@@ -1273,7 +1273,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				},
 			},
-			Expr::Ident(Ident(name)) => {
+			Expr::Name(Name(name)) => {
 				if *name == Sym::SELF
 					&& let Some(inst) = &self.inst
 				{

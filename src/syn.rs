@@ -650,7 +650,7 @@ pub enum Expr {
 	Assign(Assign),
 	Binary(Binary),
 	Unary(Unary),
-	Ident(Ident),
+	Name(Name),
 	Builtin(Builtin),
 	Lit(Lit),
 }
@@ -678,13 +678,13 @@ pub struct Assign(pub Place, pub ExprId);
 
 #[derive(Debug, Clone)]
 pub enum Place {
-	Ident(Ident),
+	Name(Name),
 	Member(Member),
 	Script(Script),
 }
 
 #[derive(Debug, Clone)]
-pub struct Ident(pub Sym);
+pub struct Name(pub Sym);
 
 #[derive(Debug, Clone)]
 pub enum Builtin {
@@ -1057,7 +1057,7 @@ impl<'src> Parser<'src> {
 	fn parse_assign_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Eq)?;
 		let place = match self.chunk.get_expr(val_id) {
-			Expr::Ident(ident) => Place::Ident(ident.clone()),
+			Expr::Name(name) => Place::Name(name.clone()),
 			Expr::Member(member) => Place::Member(member.clone()),
 			Expr::Script(script) => Place::Script(script.clone()),
 			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok)),
@@ -1104,7 +1104,7 @@ impl<'src> Parser<'src> {
 			TokenTag::Minus => {
 				self.parse_unary_expr(TokenTag::Minus, UnaryOp::Neg, Precedence::NEG)
 			}
-			TokenTag::Ident => self.parse_ident_expr(),
+			TokenTag::Ident => self.parse_name_expr(),
 			TokenTag::Builtin => self.parse_builtin_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
@@ -1184,10 +1184,10 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
-	fn parse_ident_expr(&mut self) -> Result<ExprId, Error> {
+	fn parse_name_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Ident)?;
 		let sym = tok.sym.unwrap();
-		let expr = Expr::Ident(Ident(sym));
+		let expr = Expr::Name(Name(sym));
 		let expr_id = self.chunk.add_expr(tok, expr);
 		Ok(expr_id)
 	}
