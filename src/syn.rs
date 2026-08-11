@@ -523,6 +523,17 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		{
 			self.pos += 1;
 		}
+		if self.pos < self.src.len() {
+			if self.src[self.pos] == b'!'
+				&& !(self.pos + 1 < self.src.len()
+					&& self.src[self.pos + 1] == b'='
+					&& !(self.pos + 2 < self.src.len() && self.src[self.pos + 2] == b'='))
+			{
+				self.pos += 1;
+			} else if self.src[self.pos] == b'?' {
+				self.pos += 1;
+			}
+		}
 		let span = &self.src[pos..self.pos];
 		let sym = self.syms.intern(span);
 		let tag = match sym {
@@ -882,7 +893,15 @@ impl<'src> Parser<'src> {
 
 	fn parse_type_decl(&mut self) -> Result<DeclId, Error> {
 		let tok = self.take(TokenTag::Type)?;
-		let name = self.take(TokenTag::Ident)?.sym.unwrap();
+		let ident = self.take(TokenTag::Ident)?;
+		let name = ident.sym.unwrap();
+		let last = self.src[ident.end - 1];
+		if last == b'!' || last == b'?' {
+			return Err(Error::UnexpectedChar(
+				self.src.loc(ident.end - 1),
+				last as char,
+			));
+		}
 		let mut fields = Vec::new();
 		if self.toks[self.pos].tag == TokenTag::LParen {
 			self.take(TokenTag::LParen)?;

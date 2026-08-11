@@ -99,6 +99,11 @@ fn test_shadows_fields() {
 	assert_eval(include_str!("shadow.ms"));
 }
 
+#[test]
+fn test_bang_and_huh_names() {
+	assert_eval(include_str!("names.ms"));
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {
@@ -116,7 +121,7 @@ fn eval(input: &str) -> String {
 	let temp_file = temp_dir.join(format!("main.{:x}.ms", suffix));
 	fs::write(&temp_file, input).unwrap();
 
-	let (stdout, stderr) = (|| {
+	let (mut stdout, stderr) = (|| {
 		let bin = env!("CARGO_BIN_EXE_mesa");
 		let output = Command::new(bin).arg(&temp_file).output().unwrap();
 		(
@@ -127,5 +132,6 @@ fn eval(input: &str) -> String {
 
 	fs::remove_file(temp_file).unwrap();
 
-	if stdout.is_empty() { stderr } else { stdout }
+	stdout.push_str(&stderr);
+	stdout
 }

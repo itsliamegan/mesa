@@ -1188,7 +1188,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let src = self.pkg.get_src(chunk.src);
 					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
 					let name = self.syms.resolve(*name);
-					Err(Signal::Error(Error::NameError(name.to_string()), vec![(String::new(), loc)]))
+					Err(Signal::Error(
+						Error::NameError(name.to_string()),
+						vec![(String::new(), loc)],
+					))
 				}
 			}
 			Expr::Builtin(builtin) => match builtin {
