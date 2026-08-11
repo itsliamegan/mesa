@@ -148,6 +148,7 @@ pub enum TokenTag {
 	End,
 	Return,
 
+	Self_,
 	Ident,
 	Builtin,
 	Str,
@@ -205,6 +206,7 @@ impl TokenTag {
 			TokenTag::And => "AND",
 			TokenTag::Not => "NOT",
 
+			TokenTag::Self_ => "SELF",
 			TokenTag::Ident => "IDENT",
 			TokenTag::Builtin => "BUILTIN",
 			TokenTag::Str => "STR",
@@ -550,6 +552,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			Sym::AND => TokenTag::And,
 			Sym::OR => TokenTag::Or,
 			Sym::NOT => TokenTag::Not,
+			Sym::SELF => TokenTag::Self_,
 			Sym::TRUE | Sym::FALSE => TokenTag::Bool,
 			Sym::NIL => TokenTag::Nil,
 			_ => TokenTag::Ident,
@@ -644,6 +647,7 @@ pub enum Expr {
 	Each(Each),
 	When(When),
 	Return(Return),
+	Self_,
 	Call(Call),
 	Member(Member),
 	Script(Script),
@@ -1100,6 +1104,7 @@ impl<'src> Parser<'src> {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Return => self.parse_return_expr(),
+			TokenTag::Self_ => self.parse_self_expr(),
 			TokenTag::Not => self.parse_unary_expr(TokenTag::Not, UnaryOp::Not, Precedence::NOT),
 			TokenTag::Minus => {
 				self.parse_unary_expr(TokenTag::Minus, UnaryOp::Neg, Precedence::NEG)
@@ -1181,6 +1186,12 @@ impl<'src> Parser<'src> {
 		}
 		let expr = Expr::When(When(cond, then_branch, else_branch));
 		let expr_id = self.chunk.add_expr(tok, expr);
+		Ok(expr_id)
+	}
+
+	fn parse_self_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Self_)?;
+		let expr_id = self.chunk.add_expr(tok, Expr::Self_);
 		Ok(expr_id)
 	}
 

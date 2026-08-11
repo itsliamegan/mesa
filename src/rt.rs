@@ -10,7 +10,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
-	ExprId, Name, Lit, Location, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
+	ExprId, Lit, Location, Name, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -1273,30 +1273,28 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				},
 			},
+			Expr::Self_ => match &self.inst {
+				Some(inst) => Ok(Val::Obj(inst.clone())),
+				None => todo!(),
+			},
 			Expr::Name(Name(name)) => {
-				if *name == Sym::SELF
-					&& let Some(inst) = &self.inst
+				let local = Scope::local(&self.scope, *name);
+				if local.is_bound() && !local.is_root {
+					Ok(local.get())
+				} else if let Some(rf) = &self.inst
+					&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
 				{
-					Ok(Val::Obj(inst.clone()))
+					Ok(member.get(&self.types))
+				} else if local.is_bound() {
+					Ok(local.get())
 				} else {
-					let local = Scope::local(&self.scope, *name);
-					if local.is_bound() && !local.is_root {
-						Ok(local.get())
-					} else if let Some(rf) = &self.inst
-						&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
-					{
-						Ok(member.get(&self.types))
-					} else if local.is_bound() {
-						Ok(local.get())
-					} else {
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-						let name = self.syms.resolve(*name);
-						Err(Signal::Error(
-							Error::NameError(name.to_string()),
-							vec![(String::new(), loc)],
-						))
-					}
+					let src = self.pkg.get_src(chunk.src);
+					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let name = self.syms.resolve(*name);
+					Err(Signal::Error(
+						Error::NameError(name.to_string()),
+						vec![(String::new(), loc)],
+					))
 				}
 			}
 			Expr::Builtin(builtin) => match builtin {
