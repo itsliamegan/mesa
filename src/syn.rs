@@ -1158,19 +1158,27 @@ impl<'src> Parser<'src> {
 			then_branch.push(expr_id);
 		}
 		let then_branch = self.chunk.add_block(Block(then_branch));
-		let else_branch = if self.toks[self.pos].tag == TokenTag::Else {
+		let (else_branch, consume_end) = if self.toks[self.pos].tag == TokenTag::Else {
 			self.take(TokenTag::Else)?;
-			let mut else_branch = Vec::new();
-			while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
-				let expr_id = self.parse_expr()?;
-				else_branch.push(expr_id);
+			if self.toks[self.pos].tag == TokenTag::When {
+				let nested_when = self.parse_when_expr()?;
+				let else_branch = self.chunk.add_block(Block(vec![nested_when]));
+				(Some(else_branch), false)
+			} else {
+				let mut else_branch = Vec::new();
+				while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
+					let expr_id = self.parse_expr()?;
+					else_branch.push(expr_id);
+				}
+				let else_branch = self.chunk.add_block(Block(else_branch));
+				(Some(else_branch), true)
 			}
-			let else_branch = self.chunk.add_block(Block(else_branch));
-			Some(else_branch)
 		} else {
-			None
+			(None, true)
 		};
-		self.take(TokenTag::End)?;
+		if consume_end {
+			self.take(TokenTag::End)?;
+		}
 		let expr = Expr::When(When(cond, then_branch, else_branch));
 		let expr_id = self.chunk.add_expr(tok, expr);
 		Ok(expr_id)

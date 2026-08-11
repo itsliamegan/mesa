@@ -4,6 +4,8 @@
 #> 0
 #> nil
 #> Str
+#> two
+#> other
 
 when true then
 	$print(true)
@@ -29,4 +31,20 @@ end
 
 when "Str" then
 	$print("Str")
+end
+
+when false then
+	$print("one")
+else when true then
+	$print("two")
+else
+	$print("other")
+end
+
+when false then
+	$print("one")
+else when false then
+	$print("two")
+else
+	$print("other")
 end
