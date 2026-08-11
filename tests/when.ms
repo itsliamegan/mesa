@@ -19,7 +19,6 @@ when 5 then
 end
 
 when 0 then
-else
 	$print(0)
 end
 

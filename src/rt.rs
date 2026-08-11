@@ -172,10 +172,9 @@ impl Val {
 
 	fn is_truthy(&self) -> bool {
 		match self {
-			Val::Num(num) => num.0 != 0.0,
 			Val::Bool(bool) => bool.0,
-			Val::Obj(_) => true,
 			Val::Nil(_) => false,
+			_ => true,
 		}
 	}
 
