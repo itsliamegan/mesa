@@ -109,6 +109,30 @@ fn test_calls_static_methods() {
 	assert_eval(include_str!("statics.ms"));
 }
 
+#[test]
+fn test_prelude_names() {
+	assert_eval(include_str!("prelude.ms"));
+}
+
+#[test]
+fn test_rejects_shadowing_prelude() {
+	use mesa::intern::Interner;
+	use mesa::sem;
+	use mesa::syn::{Lexer, Package, Parser};
+
+	let mut syms = Interner::new();
+	let mut pkg = Package::new();
+	let src_id = pkg.add_src("shadow.ms".to_string(), "type Str end".to_string());
+	let src = pkg.get_src(src_id);
+	let toks = Lexer::new(&mut syms, src).lex().unwrap();
+	let chunk = Parser::new(src, toks).parse().unwrap();
+
+	match sem::check(&mut syms, &chunk, src) {
+		Err(sem::Error::PreludeShadowed(_, name)) => assert_eq!(name, "Str"),
+		other => panic!("expected PreludeShadowed, got {:?}", other),
+	}
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {
