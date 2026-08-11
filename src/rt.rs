@@ -5,6 +5,8 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
+use ordermap::OrderMap;
+
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
@@ -303,13 +305,13 @@ impl List {
 
 #[derive(Debug)]
 struct Dict {
-	pairs: HashMap<Val, Val>,
+	pairs: OrderMap<Val, Val>,
 }
 
 impl Dict {
 	fn new() -> Val {
 		Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict {
-			pairs: HashMap::new(),
+			pairs: OrderMap::new(),
 		}))))
 	}
 
@@ -1216,7 +1218,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Val::Obj(Rc::new(RefCell::new(Obj::List(List { items }))))
 				}
 				Lit::Dict(pair_ids) => {
-					let mut pairs = HashMap::with_capacity(pair_ids.len());
+					let mut pairs = OrderMap::with_capacity(pair_ids.len());
 					for (key_id, val_id) in pair_ids {
 						let key = self.eval_expr(chunk, *key_id)?;
 						let val = self.eval_expr(chunk, *val_id)?;
