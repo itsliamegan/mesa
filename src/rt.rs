@@ -9,8 +9,9 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Decl, DeclId, Def, Each, Expr,
-	ExprId, Lit, Location, Name, Package, Place, Return, Script, Token, Unary, UnaryOp, When,
+	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Def, Each, Expr, ExprId, Lit,
+	Location, ModuleItem, ModuleItemId, Name, Package, Place, Return, Script, Token, TypeItem,
+	Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -719,8 +720,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 
 	pub fn eval(mut self, chunk: Chunk) -> Result<(), (Error, Vec<(String, Location)>)> {
-		for decl_id in &chunk.top {
-			match self.eval_decl(&chunk, *decl_id) {
+		for item_id in &chunk.top {
+			match self.eval_module_item(&chunk, *item_id) {
 				Ok(()) => {}
 				Err(Signal::Return(_)) => break,
 				Err(Signal::Error(err, trace)) => return Err((err, trace)),
@@ -729,30 +730,38 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		Ok(())
 	}
 
-	fn eval_decl(&mut self, chunk: &Chunk, decl_id: DeclId) -> Result<(), Signal> {
-		match chunk.get_decl(decl_id) {
-			Decl::Type(syn::Type(name, fields, items)) => {
+	fn eval_module_item(&mut self, chunk: &Chunk, item_id: ModuleItemId) -> Result<(), Signal> {
+		match chunk.get_module_item(item_id) {
+			ModuleItem::Type(syn::Type(name, fields, items)) => {
 				let mut methods = HashMap::new();
-				for decl_id in items {
-					match chunk.get_decl(*decl_id) {
-						Decl::Type(syn::Type(_, _, _)) => todo!(),
-						Decl::Def(Def(name, params, body)) => {
-							let proc = Proc {
+				let mut statics = HashMap::new();
+				for item_id in items {
+					match chunk.get_type_item(*item_id) {
+						TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
+							let proc = Rc::new(RefCell::new(Proc {
 								name: *name,
 								params: params.to_vec(),
 								body: *body,
 								scope: self.scope.clone(),
-							};
-							methods.insert(*name, Rc::new(RefCell::new(proc)));
+							}));
+							methods.insert(*name, proc);
 						}
-						Decl::Expr(_) => todo!(),
+						TypeItem::Method(syn::Method::Static(Def(name, params, body))) => {
+							let proc = Rc::new(RefCell::new(Proc {
+								name: *name,
+								params: params.to_vec(),
+								body: *body,
+								scope: self.scope.clone(),
+							}));
+							statics.insert(*name, Static::Proc(proc));
+						}
 					}
 				}
 				let typ = UserType {
 					name: *name,
 					fields: fields.to_vec(),
 					methods,
-					statics: HashMap::new(),
+					statics,
 				};
 				let id = self.types.add_user_type(typ);
 				let obj = Obj::Type(TypeId::User(id));
@@ -760,7 +769,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				self.scope.borrow_mut().locals.insert(*name, val);
 				Ok(())
 			}
-			Decl::Def(Def(name, params, body)) => {
+			ModuleItem::Def(Def(name, params, body)) => {
 				let obj = Obj::Proc(Proc {
 					name: *name,
 					params: params.to_vec(),
@@ -771,7 +780,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				self.scope.borrow_mut().locals.insert(*name, val);
 				Ok(())
 			}
-			Decl::Expr(expr_id) => {
+			ModuleItem::Expr(expr_id) => {
 				self.eval_expr(chunk, *expr_id)?;
 				Ok(())
 			}

@@ -104,6 +104,11 @@ fn test_bang_and_huh_names() {
 	assert_eval(include_str!("names.ms"));
 }
 
+#[test]
+fn test_calls_static_methods() {
+	assert_eval(include_str!("statics.ms"));
+}
+
 fn assert_eval(input: &str) {
 	let mut output = String::new();
 	for line in input.lines() {

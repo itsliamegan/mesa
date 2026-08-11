@@ -624,20 +624,34 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct DeclId(u32);
+pub struct ModuleItemId(u32);
 
 #[derive(Debug)]
-pub enum Decl {
+pub enum ModuleItem {
 	Type(Type),
 	Def(Def),
 	Expr(ExprId),
 }
 
 #[derive(Debug)]
-pub struct Type(pub Sym, pub Vec<Sym>, pub Vec<DeclId>);
+pub struct Type(pub Sym, pub Vec<Sym>, pub Vec<TypeItemId>);
 
 #[derive(Debug)]
 pub struct Def(pub Sym, pub Vec<Sym>, pub BlockId);
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TypeItemId(u32);
+
+#[derive(Debug)]
+pub enum TypeItem {
+	Method(Method),
+}
+
+#[derive(Debug)]
+pub enum Method {
+	Instance(Def),
+	Static(Def),
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ExprId(u32);
@@ -748,9 +762,11 @@ pub struct ChunkId(u32);
 #[derive(Debug)]
 pub struct Chunk {
 	pub src: SourceId,
-	pub top: Vec<DeclId>,
-	decls: Vec<Decl>,
-	decl_toks: Vec<Token>,
+	pub top: Vec<ModuleItemId>,
+	module_items: Vec<ModuleItem>,
+	module_item_toks: Vec<Token>,
+	type_items: Vec<TypeItem>,
+	type_item_toks: Vec<Token>,
 	exprs: Vec<Expr>,
 	expr_toks: Vec<Token>,
 	blocks: Vec<Block>,
@@ -761,26 +777,43 @@ impl Chunk {
 		Self {
 			src,
 			top: Vec::new(),
-			decls: Vec::new(),
-			decl_toks: Vec::new(),
+			module_items: Vec::new(),
+			module_item_toks: Vec::new(),
+			type_items: Vec::new(),
+			type_item_toks: Vec::new(),
 			exprs: Vec::new(),
 			expr_toks: Vec::new(),
 			blocks: Vec::new(),
 		}
 	}
 
-	pub fn get_decl(&self, decl_id: DeclId) -> &Decl {
-		&self.decls[decl_id.0 as usize]
+	pub fn get_module_item(&self, item_id: ModuleItemId) -> &ModuleItem {
+		&self.module_items[item_id.0 as usize]
 	}
 
-	pub fn get_decl_tok(&self, decl_id: DeclId) -> Token {
-		self.decl_toks[decl_id.0 as usize]
+	pub fn get_module_item_tok(&self, item_id: ModuleItemId) -> Token {
+		self.module_item_toks[item_id.0 as usize]
 	}
 
-	pub fn add_decl(&mut self, tok: Token, decl: Decl) -> DeclId {
-		let id = DeclId(self.decls.len() as u32);
-		self.decls.push(decl);
-		self.decl_toks.push(tok);
+	pub fn add_module_item(&mut self, tok: Token, item: ModuleItem) -> ModuleItemId {
+		let id = ModuleItemId(self.module_items.len() as u32);
+		self.module_items.push(item);
+		self.module_item_toks.push(tok);
+		id
+	}
+
+	pub fn get_type_item(&self, item_id: TypeItemId) -> &TypeItem {
+		&self.type_items[item_id.0 as usize]
+	}
+
+	pub fn get_type_item_tok(&self, item_id: TypeItemId) -> Token {
+		self.type_item_toks[item_id.0 as usize]
+	}
+
+	pub fn add_type_item(&mut self, tok: Token, item: TypeItem) -> TypeItemId {
+		let id = TypeItemId(self.type_items.len() as u32);
+		self.type_items.push(item);
+		self.type_item_toks.push(tok);
 		id
 	}
 
@@ -809,8 +842,8 @@ impl Chunk {
 		id
 	}
 
-	pub fn add_to_top(&mut self, decl_id: DeclId) {
-		self.top.push(decl_id);
+	pub fn add_to_top(&mut self, item_id: ModuleItemId) {
+		self.top.push(item_id);
 	}
 }
 
@@ -875,27 +908,27 @@ impl<'src> Parser<'src> {
 
 	pub fn parse(mut self) -> Result<Chunk, Error> {
 		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::Eof {
-			let decl_id = self.parse_decl()?;
-			self.chunk.add_to_top(decl_id);
+			let item_id = self.parse_module_item()?;
+			self.chunk.add_to_top(item_id);
 		}
 		Ok(self.chunk)
 	}
 
-	fn parse_decl(&mut self) -> Result<DeclId, Error> {
+	fn parse_module_item(&mut self) -> Result<ModuleItemId, Error> {
 		match self.toks[self.pos].tag {
 			TokenTag::Type => self.parse_type_decl(),
 			TokenTag::Def => self.parse_def_decl(),
 			_ => {
 				let expr_id = self.parse_expr()?;
 				let tok = self.chunk.get_expr_tok(expr_id);
-				let decl = Decl::Expr(expr_id);
-				let decl_id = self.chunk.add_decl(tok, decl);
-				Ok(decl_id)
+				let item = ModuleItem::Expr(expr_id);
+				let item_id = self.chunk.add_module_item(tok, item);
+				Ok(item_id)
 			}
 		}
 	}
 
-	fn parse_type_decl(&mut self) -> Result<DeclId, Error> {
+	fn parse_type_decl(&mut self) -> Result<ModuleItemId, Error> {
 		let tok = self.take(TokenTag::Type)?;
 		let ident = self.take(TokenTag::Ident)?;
 		let name = ident.sym.unwrap();
@@ -927,16 +960,69 @@ impl<'src> Parser<'src> {
 		}
 		let mut items = Vec::new();
 		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
-			let item_id = self.parse_decl()?;
+			let item_id = self.parse_type_item()?;
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		let decl = Decl::Type(Type(name, fields, items));
-		let decl_id = self.chunk.add_decl(tok, decl);
-		Ok(decl_id)
+		let item = ModuleItem::Type(Type(name, fields, items));
+		let item_id = self.chunk.add_module_item(tok, item);
+		Ok(item_id)
 	}
 
-	fn parse_def_decl(&mut self) -> Result<DeclId, Error> {
+	fn parse_type_item(&mut self) -> Result<TypeItemId, Error> {
+		match self.toks[self.pos].tag {
+			TokenTag::Type => todo!(),
+			TokenTag::Def => self.parse_method_decl(),
+			_ => todo!(),
+		}
+	}
+
+	fn parse_method_decl(&mut self) -> Result<TypeItemId, Error> {
+		let tok = self.take(TokenTag::Def)?;
+		let is_static = self.toks[self.pos].tag == TokenTag::Self_;
+		let name = if is_static {
+			self.take(TokenTag::Self_)?;
+			self.take(TokenTag::Dot)?;
+			self.take(TokenTag::Ident)?.sym.unwrap()
+		} else {
+			self.take(TokenTag::Ident)?.sym.unwrap()
+		};
+		let mut params = Vec::new();
+		self.take(TokenTag::LParen)?;
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::RParen {
+			let param = self.take(TokenTag::Ident)?.sym.unwrap();
+			params.push(param);
+			match self.toks[self.pos].tag {
+				TokenTag::Comma => {
+					self.pos += 1;
+				}
+				TokenTag::RParen => {}
+				_ => {
+					let tok = &self.toks[self.pos];
+					return Err(Error::UnexpectedToken(self.src.loc(tok.pos), *tok));
+				}
+			}
+		}
+		self.take(TokenTag::RParen)?;
+		let mut body = Vec::new();
+		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
+			let expr_id = self.parse_expr()?;
+			body.push(expr_id);
+		}
+		self.take(TokenTag::End)?;
+		let block = self.chunk.add_block(Block(body));
+		let def = Def(name, params, block);
+		let method = if is_static {
+			Method::Static(def)
+		} else {
+			Method::Instance(def)
+		};
+		let item = TypeItem::Method(method);
+		let item_id = self.chunk.add_type_item(tok, item);
+		Ok(item_id)
+	}
+
+	fn parse_def_decl(&mut self) -> Result<ModuleItemId, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut params = Vec::new();
@@ -963,9 +1049,9 @@ impl<'src> Parser<'src> {
 		}
 		self.take(TokenTag::End)?;
 		let block = self.chunk.add_block(Block(body));
-		let decl = Decl::Def(Def(name, params, block));
-		let decl_id = self.chunk.add_decl(tok, decl);
-		Ok(decl_id)
+		let item = ModuleItem::Def(Def(name, params, block));
+		let item_id = self.chunk.add_module_item(tok, item);
+		Ok(item_id)
 	}
 
 	fn parse_expr(&mut self) -> Result<ExprId, Error> {
