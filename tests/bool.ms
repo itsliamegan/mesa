@@ -10,6 +10,10 @@
 #> false
 #> true
 #> false
+#> 2
+#> nil
+#> 1
+#> 2
 
 $print(true and true)
 $print(true and false)
@@ -25,3 +29,8 @@ $print(not nil)
 $print(not true and false)
 $print(not 1 == 2)
 $print(not 1 == 1)
+
+$print(1 and 2)
+$print(nil and 2)
+$print(1 or 2)
+$print(nil or 2)

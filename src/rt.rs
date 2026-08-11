@@ -1066,19 +1066,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				BinaryOp::Or => {
 					let lhs = self.eval_expr(chunk, *lhs_id)?;
 					if lhs.is_truthy() {
-						Ok(Val::Bool(Bool(true)))
+						Ok(lhs)
 					} else {
-						let rhs = self.eval_expr(chunk, *rhs_id)?;
-						Ok(Val::Bool(Bool(rhs.is_truthy())))
+						self.eval_expr(chunk, *rhs_id)
 					}
 				}
 				BinaryOp::And => {
 					let lhs = self.eval_expr(chunk, *lhs_id)?;
 					if !lhs.is_truthy() {
-						Ok(Val::Bool(Bool(false)))
+						Ok(lhs)
 					} else {
-						let rhs = self.eval_expr(chunk, *rhs_id)?;
-						Ok(Val::Bool(Bool(rhs.is_truthy())))
+						self.eval_expr(chunk, *rhs_id)
 					}
 				}
 				BinaryOp::Eq
