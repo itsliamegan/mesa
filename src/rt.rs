@@ -466,6 +466,16 @@ const CORE_TYPES: &[(
 	("Type", NativeTypeId::TYPE, None, &[], &[]),
 ];
 
+pub(crate) const CORE_TYPE_NAMES: [&str; CORE_TYPES.len()] = {
+	let mut names = [""; CORE_TYPES.len()];
+	let mut i = 0;
+	while i < CORE_TYPES.len() {
+		names[i] = CORE_TYPES[i].0;
+		i += 1;
+	}
+	names
+};
+
 impl NativeTypeId {
 	const NIL: NativeTypeId = NativeTypeId(0);
 	const NUM: NativeTypeId = NativeTypeId(1);
@@ -637,17 +647,24 @@ impl Member {
 	}
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tier {
+	Local,
+	Module,
+	Prelude,
+}
+
 #[derive(Debug)]
 struct Scope {
 	locals: HashMap<Sym, Val>,
 	outer: Option<Rc<RefCell<Scope>>>,
-	is_root: bool,
+	tier: Tier,
 }
 
 struct Local {
 	name: Sym,
 	scope: Rc<RefCell<Scope>>,
-	is_root: bool,
+	tier: Tier,
 }
 
 impl Local {
@@ -669,12 +686,8 @@ impl Scope {
 		let mut scope = origin.clone();
 		loop {
 			if scope.borrow().locals.contains_key(&name) {
-				let is_root = scope.borrow().is_root;
-				return Local {
-					name,
-					scope,
-					is_root,
-				};
+				let tier = scope.borrow().tier;
+				return Local { name, scope, tier };
 			}
 			let outer = scope.borrow().outer.clone();
 			if let Some(outer) = outer {
@@ -683,7 +696,7 @@ impl Scope {
 				return Local {
 					name,
 					scope: origin.clone(),
-					is_root: origin.borrow().is_root,
+					tier: origin.borrow().tier,
 				};
 			}
 		}
@@ -706,15 +719,32 @@ enum Signal {
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
 		let types = TypeRegistry::new(syms);
+
+		let prelude = {
+			let mut locals = HashMap::with_capacity(CORE_TYPES.len());
+			for (_, id, _, _, _) in CORE_TYPES {
+				let typ = types.get_native_type(*id);
+				let obj = Obj::Type(TypeId::Native(*id));
+				locals.insert(typ.name, Val::Obj(Rc::new(RefCell::new(obj))));
+			}
+			Rc::new(RefCell::new(Scope {
+				locals,
+				outer: None,
+				tier: Tier::Prelude,
+			}))
+		};
+
+		let scope = Rc::new(RefCell::new(Scope {
+			locals: HashMap::new(),
+			outer: Some(prelude),
+			tier: Tier::Module,
+		}));
+
 		Self {
 			syms,
 			pkg,
 			types,
-			scope: Rc::new(RefCell::new(Scope {
-				locals: HashMap::new(),
-				outer: None,
-				is_root: true,
-			})),
+			scope,
 			inst: None,
 		}
 	}
@@ -796,7 +826,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let scope = Rc::new(RefCell::new(Scope {
 								locals: HashMap::new(),
 								outer: Some(self.scope.clone()),
-								is_root: false,
+								tier: Tier::Local,
 							}));
 							scope.borrow_mut().locals.insert(*name, item.clone());
 							self.eval_block(chunk, scope.clone(), *body_id)?;
@@ -807,7 +837,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let scope = Rc::new(RefCell::new(Scope {
 							locals: HashMap::new(),
 							outer: Some(self.scope.clone()),
-							is_root: false,
+							tier: Tier::Local,
 						}));
 						for key in dict.pairs.keys() {
 							scope.borrow_mut().locals.insert(*name, key.clone());
@@ -840,7 +870,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let scope = Rc::new(RefCell::new(Scope {
 					locals: HashMap::new(),
 					outer: Some(self.scope.clone()),
-					is_root: false,
+					tier: Tier::Local,
 				}));
 				if cond {
 					self.eval_block(chunk, scope, *then_branch)
@@ -1053,7 +1083,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				match place {
 					Place::Name(Name(sym)) => {
 						let local = Scope::local(&self.scope, *sym);
-						if local.is_bound() && !local.is_root {
+						if local.is_bound() && local.tier == Tier::Local {
 							local.set(val.clone());
 						} else if let Some(rf) = &self.inst
 							&& let Some(member) = Val::Obj(rf.clone()).member(*sym, &self.types)
@@ -1288,7 +1318,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			},
 			Expr::Name(Name(name)) => {
 				let local = Scope::local(&self.scope, *name);
-				if local.is_bound() && !local.is_root {
+				if local.is_bound() && local.tier == Tier::Local {
 					Ok(local.get())
 				} else if let Some(rf) = &self.inst
 					&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
@@ -1360,7 +1390,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let mut scope = Scope {
 			locals: HashMap::new(),
 			outer: Some(proc.scope.clone()),
-			is_root: false,
+			tier: Tier::Local,
 		};
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
 			scope.locals.insert(*param, arg);
