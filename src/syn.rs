@@ -623,8 +623,55 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	}
 }
 
+trait NodeId: Copy {
+	fn from_index(i: u32) -> Self;
+	fn index(self) -> u32;
+}
+
+#[derive(Debug)]
+struct Nodes<Node, Id> {
+	nodes: Vec<Node>,
+	toks: Vec<Token>,
+	_id: std::marker::PhantomData<Id>,
+}
+
+impl<Node, Id: NodeId> Nodes<Node, Id> {
+	fn new() -> Self {
+		Self {
+			nodes: Vec::new(),
+			toks: Vec::new(),
+			_id: std::marker::PhantomData,
+		}
+	}
+
+	fn get(&self, id: Id) -> &Node {
+		&self.nodes[id.index() as usize]
+	}
+
+	fn get_tok(&self, id: Id) -> Token {
+		self.toks[id.index() as usize]
+	}
+
+	fn add(&mut self, tok: Token, node: Node) -> Id {
+		let id = Id::from_index(self.nodes.len() as u32);
+		self.nodes.push(node);
+		self.toks.push(tok);
+		id
+	}
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ModuleItemId(u32);
+
+impl NodeId for ModuleItemId {
+	fn from_index(i: u32) -> Self {
+		Self(i)
+	}
+
+	fn index(self) -> u32 {
+		self.0
+	}
+}
 
 #[derive(Debug)]
 pub enum ModuleItem {
@@ -642,6 +689,16 @@ pub struct Def(pub Sym, pub Vec<Sym>, pub BlockId);
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TypeItemId(u32);
 
+impl NodeId for TypeItemId {
+	fn from_index(i: u32) -> Self {
+		Self(i)
+	}
+
+	fn index(self) -> u32 {
+		self.0
+	}
+}
+
 #[derive(Debug)]
 pub enum TypeItem {
 	Method(Method),
@@ -655,6 +712,16 @@ pub enum Method {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ExprId(u32);
+
+impl NodeId for ExprId {
+	fn from_index(i: u32) -> Self {
+		Self(i)
+	}
+
+	fn index(self) -> u32 {
+		self.0
+	}
+}
 
 #[derive(Debug)]
 pub enum Expr {
@@ -763,12 +830,9 @@ pub struct ChunkId(u32);
 pub struct Chunk {
 	pub src: SourceId,
 	pub top: Vec<ModuleItemId>,
-	module_items: Vec<ModuleItem>,
-	module_item_toks: Vec<Token>,
-	type_items: Vec<TypeItem>,
-	type_item_toks: Vec<Token>,
-	exprs: Vec<Expr>,
-	expr_toks: Vec<Token>,
+	module_items: Nodes<ModuleItem, ModuleItemId>,
+	type_items: Nodes<TypeItem, TypeItemId>,
+	exprs: Nodes<Expr, ExprId>,
 	blocks: Vec<Block>,
 }
 
@@ -777,59 +841,47 @@ impl Chunk {
 		Self {
 			src,
 			top: Vec::new(),
-			module_items: Vec::new(),
-			module_item_toks: Vec::new(),
-			type_items: Vec::new(),
-			type_item_toks: Vec::new(),
-			exprs: Vec::new(),
-			expr_toks: Vec::new(),
+			module_items: Nodes::new(),
+			type_items: Nodes::new(),
+			exprs: Nodes::new(),
 			blocks: Vec::new(),
 		}
 	}
 
 	pub fn get_module_item(&self, item_id: ModuleItemId) -> &ModuleItem {
-		&self.module_items[item_id.0 as usize]
+		self.module_items.get(item_id)
 	}
 
 	pub fn get_module_item_tok(&self, item_id: ModuleItemId) -> Token {
-		self.module_item_toks[item_id.0 as usize]
+		self.module_items.get_tok(item_id)
 	}
 
 	pub fn add_module_item(&mut self, tok: Token, item: ModuleItem) -> ModuleItemId {
-		let id = ModuleItemId(self.module_items.len() as u32);
-		self.module_items.push(item);
-		self.module_item_toks.push(tok);
-		id
+		self.module_items.add(tok, item)
 	}
 
 	pub fn get_type_item(&self, item_id: TypeItemId) -> &TypeItem {
-		&self.type_items[item_id.0 as usize]
+		self.type_items.get(item_id)
 	}
 
 	pub fn get_type_item_tok(&self, item_id: TypeItemId) -> Token {
-		self.type_item_toks[item_id.0 as usize]
+		self.type_items.get_tok(item_id)
 	}
 
 	pub fn add_type_item(&mut self, tok: Token, item: TypeItem) -> TypeItemId {
-		let id = TypeItemId(self.type_items.len() as u32);
-		self.type_items.push(item);
-		self.type_item_toks.push(tok);
-		id
+		self.type_items.add(tok, item)
 	}
 
 	pub fn get_expr(&self, expr_id: ExprId) -> &Expr {
-		&self.exprs[expr_id.0 as usize]
+		self.exprs.get(expr_id)
 	}
 
 	pub fn get_expr_tok(&self, expr_id: ExprId) -> Token {
-		self.expr_toks[expr_id.0 as usize]
+		self.exprs.get_tok(expr_id)
 	}
 
 	pub fn add_expr(&mut self, tok: Token, expr: Expr) -> ExprId {
-		let id = ExprId(self.exprs.len() as u32);
-		self.exprs.push(expr);
-		self.expr_toks.push(tok);
-		id
+		self.exprs.add(tok, expr)
 	}
 
 	pub fn get_block(&self, block_id: BlockId) -> &Block {
