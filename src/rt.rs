@@ -549,14 +549,20 @@ impl Member {
 struct Scope {
 	locals: HashMap<Sym, Val>,
 	outer: Option<Rc<RefCell<Scope>>>,
+	is_root: bool,
 }
 
 struct Local {
 	name: Sym,
 	scope: Rc<RefCell<Scope>>,
+	is_root: bool,
 }
 
 impl Local {
+	fn is_bound(&self) -> bool {
+		self.scope.borrow().locals.contains_key(&self.name)
+	}
+
 	fn get(&self) -> Val {
 		self.scope.borrow().locals.get(&self.name).cloned().unwrap()
 	}
@@ -567,16 +573,23 @@ impl Local {
 }
 
 impl Scope {
-	fn local(scope: &Rc<RefCell<Scope>>, name: Sym) -> Option<Local> {
-		if scope.borrow().locals.contains_key(&name) {
-			Some(Local {
-				name,
-				scope: scope.clone(),
-			})
-		} else if let Some(outer) = &scope.borrow().outer {
-			Scope::local(outer, name)
-		} else {
-			None
+	fn local(origin: &Rc<RefCell<Scope>>, name: Sym) -> Local {
+		let mut scope = origin.clone();
+		loop {
+			if scope.borrow().locals.contains_key(&name) {
+				let is_root = scope.borrow().is_root;
+				return Local { name, scope, is_root };
+			}
+			let outer = scope.borrow().outer.clone();
+			if let Some(outer) = outer {
+				scope = outer;
+			} else {
+				return Local {
+					name,
+					scope: origin.clone(),
+					is_root: origin.borrow().is_root,
+				};
+			}
 		}
 	}
 }
@@ -604,6 +617,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			scope: Rc::new(RefCell::new(Scope {
 				locals: HashMap::new(),
 				outer: None,
+				is_root: true,
 			})),
 			inst: None,
 		}
@@ -677,6 +691,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							let scope = Rc::new(RefCell::new(Scope {
 								locals: HashMap::new(),
 								outer: Some(self.scope.clone()),
+								is_root: false,
 							}));
 							scope.borrow_mut().locals.insert(*name, item.clone());
 							self.eval_block(chunk, scope.clone(), *body_id)?;
@@ -687,6 +702,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let scope = Rc::new(RefCell::new(Scope {
 							locals: HashMap::new(),
 							outer: Some(self.scope.clone()),
+							is_root: false,
 						}));
 						for key in dict.pairs.keys() {
 							scope.borrow_mut().locals.insert(*name, key.clone());
@@ -719,6 +735,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let scope = Rc::new(RefCell::new(Scope {
 					locals: HashMap::new(),
 					outer: Some(self.scope.clone()),
+					is_root: false,
 				}));
 				if cond {
 					self.eval_block(chunk, scope, *then_branch)
@@ -938,14 +955,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
 					Place::Ident(Ident(sym)) => {
-						if let Some(local) = Scope::local(&self.scope, *sym) {
+						let local = Scope::local(&self.scope, *sym);
+						if local.is_bound() && !local.is_root {
 							local.set(val.clone());
 						} else if let Some(rf) = &self.inst
 							&& let Some(member) = Val::Obj(rf.clone()).member(*sym, &self.types)
 						{
 							member.set(val.clone()).unwrap();
 						} else {
-							self.scope.borrow_mut().locals.insert(*sym, val.clone());
+							local.set(val.clone());
 						}
 						Ok(val)
 					}
@@ -1177,20 +1195,25 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					&& let Some(inst) = &self.inst
 				{
 					Ok(Val::Obj(inst.clone()))
-				} else if let Some(local) = Scope::local(&self.scope, *name) {
-					Ok(local.get())
-				} else if let Some(rf) = &self.inst
-					&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
-				{
-					Ok(member.get(&self.types))
 				} else {
-					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
-					let name = self.syms.resolve(*name);
-					Err(Signal::Error(
-						Error::NameError(name.to_string()),
-						vec![(String::new(), loc)],
-					))
+					let local = Scope::local(&self.scope, *name);
+					if local.is_bound() && !local.is_root {
+						Ok(local.get())
+					} else if let Some(rf) = &self.inst
+						&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
+					{
+						Ok(member.get(&self.types))
+					} else if local.is_bound() {
+						Ok(local.get())
+					} else {
+						let src = self.pkg.get_src(chunk.src);
+						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let name = self.syms.resolve(*name);
+						Err(Signal::Error(
+							Error::NameError(name.to_string()),
+							vec![(String::new(), loc)],
+						))
+					}
 				}
 			}
 			Expr::Builtin(builtin) => match builtin {
@@ -1247,6 +1270,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let mut scope = Scope {
 			locals: HashMap::new(),
 			outer: Some(proc.scope.clone()),
+			is_root: false,
 		};
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
 			scope.locals.insert(*param, arg);
