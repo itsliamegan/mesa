@@ -23,7 +23,7 @@ impl Display for Error {
 		write!(f, "{}: semantic error: ", self.loc())?;
 		match self {
 			Self::PreludeShadowed(_, name) => {
-				write!(f, "cannot bind '{}'; shadows a prelude name", name)
+				write!(f, "name '{}' shadows a name in the prelude", name)
 			}
 		}
 	}

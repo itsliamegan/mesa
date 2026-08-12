@@ -1,166 +1,102 @@
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::Command;
 
 use rand;
 
-#[test]
-fn test_parses_literals() {
-	assert_eval(include_str!("lits.ms"));
+macro_rules! test_files {
+	($($name:ident => $file:literal,)*) => {
+		$(
+			#[test]
+			fn $name() {
+				assert_eval($file, include_str!($file));
+			}
+		)*
+	};
 }
 
-#[test]
-fn test_strs() {
-	assert_eval(include_str!("str.ms"));
+test_files! {
+	test_parses_literals => "lits.ms",
+	test_strs => "str.ms",
+	test_lists => "list.ms",
+	test_dicts => "dict.ms",
+	test_assigns_locals => "locals.ms",
+	test_calls_procs => "procs.ms",
+	test_instantiates_types => "types.ms",
+	test_accesses_fields => "fields.ms",
+	test_calls_methods => "methods.ms",
+	test_skips_comments => "comments.ms",
+	test_honors_precedence => "prec.ms",
+	test_performs_arithmetic => "arith.ms",
+	test_performs_comparisons => "cmp.ms",
+	test_performs_boolean_logic => "bool.ms",
+	test_iterates => "each.ms",
+	test_branches => "when.ms",
+	test_escapes_strings => "escapes.ms",
+	test_walks_scope => "scope.ms",
+	test_shadows_fields => "shadow.ms",
+	test_bang_and_huh_names => "names.ms",
+	test_calls_static_methods => "statics.ms",
+	test_prelude_names => "prelude.ms",
+	test_reports_runtime_errors => "rt_errors.ms",
+	test_reports_prelude_shadow => "sem_error_prelude.ms",
 }
 
-#[test]
-fn test_lists() {
-	assert_eval(include_str!("list.ms"));
-}
-
-#[test]
-fn test_dicts() {
-	assert_eval(include_str!("dict.ms"));
-}
-
-#[test]
-fn test_assigns_locals() {
-	assert_eval(include_str!("locals.ms"));
-}
-
-#[test]
-fn test_calls_procs() {
-	assert_eval(include_str!("procs.ms"));
-}
-
-#[test]
-fn test_instantiates_types() {
-	assert_eval(include_str!("types.ms"));
-}
-
-#[test]
-fn test_accesses_fields() {
-	assert_eval(include_str!("fields.ms"));
-}
-
-#[test]
-fn test_calls_methods() {
-	assert_eval(include_str!("methods.ms"));
-}
-
-#[test]
-fn test_skips_comments() {
-	assert_eval(include_str!("comments.ms"));
-}
-
-#[test]
-fn test_honors_precedence() {
-	assert_eval(include_str!("prec.ms"));
-}
-
-#[test]
-fn test_performs_arithmetic() {
-	assert_eval(include_str!("arith.ms"));
-}
-
-#[test]
-fn test_performs_comparisons() {
-	assert_eval(include_str!("cmp.ms"));
-}
-
-#[test]
-fn test_performs_boolean_logic() {
-	assert_eval(include_str!("bool.ms"));
-}
-
-#[test]
-fn test_iterates() {
-	assert_eval(include_str!("each.ms"));
-}
-
-#[test]
-fn test_branches() {
-	assert_eval(include_str!("when.ms"));
-}
-
-#[test]
-fn test_escapes_strings() {
-	assert_eval(include_str!("escapes.ms"));
-}
-
-#[test]
-fn test_walks_scope() {
-	assert_eval(include_str!("scope.ms"));
-}
-
-#[test]
-fn test_shadows_fields() {
-	assert_eval(include_str!("shadow.ms"));
-}
-
-#[test]
-fn test_bang_and_huh_names() {
-	assert_eval(include_str!("names.ms"));
-}
-
-#[test]
-fn test_calls_static_methods() {
-	assert_eval(include_str!("statics.ms"));
-}
-
-#[test]
-fn test_prelude_names() {
-	assert_eval(include_str!("prelude.ms"));
-}
-
-#[test]
-fn test_rejects_shadowing_prelude() {
-	use mesa::intern::Interner;
-	use mesa::sem;
-	use mesa::syn::{Lexer, Package, Parser};
-
-	let mut syms = Interner::new();
-	let mut pkg = Package::new();
-	let src_id = pkg.add_src("shadow.ms".to_string(), "type Str end".to_string());
-	let src = pkg.get_src(src_id);
-	let toks = Lexer::new(&mut syms, src).lex().unwrap();
-	let chunk = Parser::new(src, toks).parse().unwrap();
-
-	match sem::check(&mut syms, &chunk, src) {
-		Err(sem::Error::PreludeShadowed(_, name)) => assert_eq!(name, "Str"),
-		other => panic!("expected PreludeShadowed, got {:?}", other),
-	}
-}
-
-fn assert_eval(input: &str) {
-	let mut output = String::new();
-	for line in input.lines() {
-		if let Some((_, text)) = line.split_once("#> ") {
-			output.push_str(text);
-			output.push('\n');
-		}
-	}
-	assert_eq!(output, eval(input));
-}
-
-fn eval(input: &str) -> String {
-	let suffix = rand::random::<u32>();
+fn assert_eval(file: &str, input: &str) {
 	let temp_dir = env::temp_dir();
-	let temp_file = temp_dir.join(format!("main.{:x}.ms", suffix));
-	fs::write(&temp_file, input).unwrap();
+	let test_dir = temp_dir.join(format!("mesa-test-{:x}", rand::random::<u32>()));
+	fs::create_dir(&test_dir).unwrap();
 
-	let (mut stdout, stderr) = (|| {
-		let bin = env!("CARGO_BIN_EXE_mesa");
-		let output = Command::new(bin).arg(&temp_file).output().unwrap();
-		(
-			String::from_utf8(output.stdout).unwrap(),
-			String::from_utf8(output.stderr).unwrap(),
-		)
-	})();
+	let lines = input.lines().collect::<Vec<_>>();
+	let mut start = 0;
+	while start < lines.len() {
+		let mut end = start;
+		while end < lines.len() && !lines[end].starts_with("#---") {
+			end += 1;
+		}
+		assert_case(&test_dir, file, &lines, start, end);
+		start = end + 1;
+	}
 
-	fs::remove_file(temp_file).unwrap();
+	fs::remove_dir_all(&test_dir).unwrap();
+}
 
-	stdout.push_str(&stderr);
-	stdout
+fn assert_case(dir: &Path, file: &str, lines: &[&str], start: usize, end: usize) {
+	let mut src = String::new();
+	let mut out = String::new();
+	let mut err = String::new();
+	for (i, line) in lines.iter().enumerate() {
+		if i >= start && i < end {
+			src.push_str(line);
+			if let Some((_, text)) = line.split_once("#> ") {
+				out.push_str(text);
+				out.push('\n');
+			} else if let Some((_, text)) = line.split_once("#! ") {
+				err.push_str(text);
+				err.push('\n');
+			}
+		}
+		src.push('\n');
+	}
+
+	let (stdout, stderr) = eval(dir, file, &src);
+	assert_eq!(out, stdout, "stdout of {} case at line {}", file, start + 1);
+	assert_eq!(err, stderr, "stderr of {} case at line {}", file, start + 1);
+}
+
+fn eval(dir: &Path, file: &str, src: &str) -> (String, String) {
+	fs::write(dir.join(file), src).unwrap();
+
+	let bin = env!("CARGO_BIN_EXE_mesa");
+	let output = Command::new(bin)
+		.arg(file)
+		.current_dir(dir)
+		.output()
+		.unwrap();
+
+	(
+		String::from_utf8(output.stdout).unwrap(),
+		String::from_utf8(output.stderr).unwrap(),
+	)
 }
