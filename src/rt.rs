@@ -307,12 +307,12 @@ impl Str {
 		}))))
 	}
 
-	fn size(val: &Val) -> Val {
+	fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
 		let Val::Obj(rf) = val else { panic!() };
 		let Obj::Str(str) = &*rf.borrow() else {
 			panic!()
 		};
-		Val::Num(Num(str.chars.len() as f64))
+		Ok(Val::Num(Num(str.chars.len() as f64)))
 	}
 }
 
@@ -326,12 +326,12 @@ impl List {
 		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
 	}
 
-	fn size(val: &Val) -> Val {
+	fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
 		let Val::Obj(rf) = val else { panic!() };
 		let Obj::List(list) = &*rf.borrow() else {
 			panic!()
 		};
-		Val::Num(Num(list.items.len() as f64))
+		Ok(Val::Num(Num(list.items.len() as f64)))
 	}
 }
 
@@ -347,12 +347,12 @@ impl Dict {
 		}))))
 	}
 
-	fn size(val: &Val) -> Val {
+	fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
 		let Val::Obj(rf) = val else { panic!() };
 		let Obj::Dict(dict) = &*rf.borrow() else {
 			panic!()
 		};
-		Val::Num(Num(dict.pairs.len() as f64))
+		Ok(Val::Num(Num(dict.pairs.len() as f64)))
 	}
 }
 
@@ -401,36 +401,29 @@ impl UserType {
 enum Static {
 	Proc(Rc<RefCell<Proc>>),
 	Type(Val),
-	NativeMethod(NativeMethod),
-	NativeField(NativeField),
+	NativeMember(NativeMember),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeTypeId(u32);
 
 #[derive(Debug, Clone)]
-struct NativeField {
-	get: fn(&Val) -> Val,
-}
-
-#[derive(Debug, Clone)]
-struct NativeMethod {
+struct NativeMember {
 	arity: usize,
-	call: fn(&Val, Vec<Val>) -> Val,
+	call: fn(&Val, Vec<Val>) -> Result<Val, Error>,
 }
 
 #[derive(Debug)]
 struct NativeType {
 	name: Sym,
 	new: Option<fn() -> Val>,
-	fields: FxHashMap<Sym, NativeField>,
-	methods: FxHashMap<Sym, NativeMethod>,
+	members: FxHashMap<Sym, NativeMember>,
 	statics: FxHashMap<Sym, Static>,
 }
 
 impl NativeType {
 	fn has_member(&self, name: Sym) -> bool {
-		self.fields.contains_key(&name) || self.methods.contains_key(&name)
+		self.members.contains_key(&name)
 	}
 
 	fn get_static(&self, name: Sym) -> Option<Static> {
@@ -442,35 +435,31 @@ const CORE_TYPES: &[(
 	&str,
 	NativeTypeId,
 	Option<fn() -> Val>,
-	&[(&str, fn(&Val) -> Val)],
-	&[(&str, fn(&Val, Vec<Val>) -> Val, usize)],
+	&[(&str, usize, fn(&Val, Vec<Val>) -> Result<Val, Error>)],
 )] = &[
-	("Nil", NativeTypeId::NIL, Some(Nil::new), &[], &[]),
-	("Num", NativeTypeId::NUM, Some(Num::new), &[], &[]),
-	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[], &[]),
+	("Nil", NativeTypeId::NIL, Some(Nil::new), &[]),
+	("Num", NativeTypeId::NUM, Some(Num::new), &[]),
+	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[]),
 	(
 		"Str",
 		NativeTypeId::STR,
 		Some(Str::new),
-		&[("size", Str::size)],
-		&[],
+		&[("size", 0, Str::size)],
 	),
 	(
 		"List",
 		NativeTypeId::LIST,
 		Some(List::new),
-		&[("size", List::size)],
-		&[],
+		&[("size", 0, List::size)],
 	),
 	(
 		"Dict",
 		NativeTypeId::DICT,
 		Some(Dict::new),
-		&[("size", Dict::size)],
-		&[],
+		&[("size", 0, Dict::size)],
 	),
-	("Proc", NativeTypeId::PROC, None, &[], &[]),
-	("Type", NativeTypeId::TYPE, None, &[], &[]),
+	("Proc", NativeTypeId::PROC, None, &[]),
+	("Type", NativeTypeId::TYPE, None, &[]),
 ];
 
 pub(crate) const CORE_TYPE_NAMES: [&str; CORE_TYPES.len()] = {
@@ -503,16 +492,12 @@ impl TypeRegistry {
 	fn new(syms: &mut Interner) -> Self {
 		let mut native = Vec::with_capacity(CORE_TYPES.len());
 
-		for (name, _id, new, field_pairs, method_pairs) in CORE_TYPES {
-			let mut fields = HashMap::with_capacity_and_hasher(field_pairs.len(), FxBuildHasher);
-			for (name, get) in *field_pairs {
-				fields.insert(syms.intern(name), NativeField { get: *get });
-			}
-			let mut methods = HashMap::with_capacity_and_hasher(method_pairs.len(), FxBuildHasher);
-			for (name, call, arity) in *method_pairs {
-				methods.insert(
+		for (name, _id, new, member_pairs) in CORE_TYPES {
+			let mut members = HashMap::with_capacity_and_hasher(member_pairs.len(), FxBuildHasher);
+			for (name, arity, call) in *member_pairs {
+				members.insert(
 					syms.intern(name),
-					NativeMethod {
+					NativeMember {
 						arity: *arity,
 						call: *call,
 					},
@@ -521,8 +506,7 @@ impl TypeRegistry {
 			native.push(NativeType {
 				name: syms.intern(name),
 				new: *new,
-				fields,
-				methods,
+				members,
 				statics: FxHashMap::default(),
 			});
 		}
@@ -571,11 +555,11 @@ enum Member {
 #[derive(Debug)]
 enum Method {
 	User(Rc<RefCell<Obj>>, Rc<RefCell<Proc>>),
-	Native(Val, Sym, NativeMethod),
+	Native(Val, Sym, NativeMember),
 }
 
 impl Member {
-	fn get(&self, types: &TypeRegistry) -> Val {
+	fn get(&self, types: &TypeRegistry) -> Result<Val, Error> {
 		match self {
 			Member::Static(type_rf, name) => {
 				let Obj::Type(type_id) = *type_rf.borrow() else {
@@ -584,21 +568,25 @@ impl Member {
 				match type_id {
 					TypeId::User(type_id) => {
 						match types.get_user_type(type_id).get_static(*name).unwrap() {
-							Static::Proc(proc_rf) => Val::Obj(Rc::new(RefCell::new(Obj::Method(
-								Method::User(type_rf.clone(), proc_rf),
+							Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(
+								Obj::Method(Method::User(type_rf.clone(), proc_rf)),
 							)))),
-							Static::Type(val) => val,
-							Static::NativeField(_) | Static::NativeMethod(_) => panic!(),
+							Static::Type(val) => Ok(val),
+							Static::NativeMember(_) => panic!(),
 						}
 					}
 					TypeId::Native(type_id) => {
 						match types.get_native_type(type_id).get_static(*name).unwrap() {
 							Static::Proc(_) => panic!(),
 							Static::Type(_) => panic!(),
-							Static::NativeField(field) => (field.get)(&Val::Obj(type_rf.clone())),
-							Static::NativeMethod(meth) => Val::Obj(Rc::new(RefCell::new(
-								Obj::Method(Method::Native(Val::Obj(type_rf.clone()), *name, meth)),
-							))),
+							Static::NativeMember(member) if member.arity == 0 => {
+								(member.call)(&Val::Obj(type_rf.clone()), Vec::new())
+							}
+							Static::NativeMember(member) => {
+								Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
+									Method::Native(Val::Obj(type_rf.clone()), *name, member),
+								)))))
+							}
 						}
 					}
 				}
@@ -609,12 +597,12 @@ impl Member {
 				};
 				let typ = types.get_user_type(inst.typ);
 				if let Some(val) = inst.fields.get(name) {
-					val.clone()
+					Ok(val.clone())
 				} else if let Some(proc_rf) = typ.methods.get(name) {
-					Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
+					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
 						inst_rf.clone(),
 						proc_rf.clone(),
-					)))))
+					))))))
 				} else {
 					panic!();
 				}
@@ -624,16 +612,12 @@ impl Member {
 					panic!();
 				};
 				let typ = types.get_native_type(type_id);
-				if let Some(field) = typ.fields.get(name) {
-					(field.get)(recv)
-				} else if let Some(meth) = typ.methods.get(name) {
-					Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::Native(
-						recv.clone(),
-						*name,
-						meth.clone(),
-					)))))
-				} else {
-					panic!();
+				match typ.members.get(name) {
+					Some(member) if member.arity == 0 => (member.call)(recv, Vec::new()),
+					Some(member) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
+						Method::Native(recv.clone(), *name, member.clone()),
+					))))),
+					None => panic!(),
 				}
 			}
 		}
@@ -729,7 +713,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 		let prelude = {
 			let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
-			for (_, id, _, _, _) in CORE_TYPES {
+			for (_, id, _, _) in CORE_TYPES {
 				let typ = types.get_native_type(*id);
 				let obj = Obj::Type(TypeId::Native(*id));
 				locals.insert(typ.name, Val::Obj(Rc::new(RefCell::new(obj))));
@@ -1019,7 +1003,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										vec![(String::new(), loc)],
 									))
 								} else {
-									Ok((meth.call)(recv, args))
+									match (meth.call)(recv, args) {
+										Ok(val) => Ok(val),
+										Err(err) => {
+											let loc = span.loc(self.pkg);
+											Err(Signal::Error(err, vec![(String::new(), loc)]))
+										}
+									}
 								}
 							}
 						},
@@ -1047,7 +1037,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_expr(chunk, *val_id)?;
 
 				if let Some(member) = val.member(*name, &self.types) {
-					Ok(member.get(&self.types))
+					match member.get(&self.types) {
+						Ok(val) => Ok(val),
+						Err(err) => {
+							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+							Err(Signal::Error(err, vec![(String::new(), loc)]))
+						}
+					}
 				} else {
 					let type_name = self.types.get_type_name(val.namespace_type_id());
 					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
@@ -1355,7 +1351,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				} else if let Some(rf) = &self.inst
 					&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
 				{
-					Ok(member.get(&self.types))
+					match member.get(&self.types) {
+						Ok(val) => Ok(val),
+						Err(err) => {
+							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+							Err(Signal::Error(err, vec![(String::new(), loc)]))
+						}
+					}
 				} else if local.is_bound() {
 					Ok(local.get())
 				} else {
