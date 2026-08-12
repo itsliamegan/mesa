@@ -375,14 +375,18 @@ struct UserTypeId(u32);
 #[derive(Debug)]
 struct UserType {
 	name: Sym,
-	fields: Vec<Sym>,
+	ctor_fields: Vec<Sym>,
+	body_fields: Vec<(Sym, ExprId)>,
 	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
 	statics: HashMap<Sym, Static>,
+	scope: Rc<RefCell<Scope>>,
 }
 
 impl UserType {
 	fn has_member(&self, name: Sym) -> bool {
-		self.fields.contains(&name) || self.methods.contains_key(&name)
+		self.ctor_fields.contains(&name)
+			|| self.body_fields.iter().any(|(field, _)| *field == name)
+			|| self.methods.contains_key(&name)
 	}
 
 	fn get_static(&self, name: Sym) -> Option<Static> {
@@ -762,11 +766,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_module_item(&mut self, chunk: &Chunk, item_id: ModuleItemId) -> Result<(), Signal> {
 		match chunk.get_module_item(item_id) {
-			ModuleItem::Type(syn::Type(name, fields, items)) => {
+			ModuleItem::Type(syn::Type(name, ctor_fields, items)) => {
 				let mut methods = HashMap::new();
 				let mut statics = HashMap::new();
+				let mut body_fields = Vec::new();
 				for item_id in items {
 					match chunk.get_type_item(*item_id) {
+						TypeItem::Field(syn::Field(name, init)) => {
+							body_fields.push((*name, *init));
+						}
 						TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
 							let proc = Rc::new(RefCell::new(Proc {
 								name: *name,
@@ -789,9 +797,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				let typ = UserType {
 					name: *name,
-					fields: fields.to_vec(),
+					ctor_fields: ctor_fields.to_vec(),
+					body_fields,
 					methods,
 					statics,
+					scope: self.scope.clone(),
 				};
 				let id = self.types.add_user_type(typ);
 				let obj = Obj::Type(TypeId::User(id));
@@ -896,28 +906,53 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Obj::Proc(proc) => self.eval_proc_call(chunk, &tok, proc, None, args),
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_id) => {
-								let typ = self.types.get_user_type(*type_id);
-								if args.len() != typ.fields.len() {
+								let type_id = *type_id;
+								let typ = self.types.get_user_type(type_id);
+								if args.len() != typ.ctor_fields.len() {
 									let src = self.pkg.get_src(chunk.src);
 									let loc = src.loc(tok.pos);
 									return Err(Signal::Error(
 										Error::ArgumentError(ArgumentError::WrongCount(
 											args.len(),
-											typ.fields.len(),
+											typ.ctor_fields.len(),
 										)),
 										vec![(String::new(), loc)],
 									));
 								}
 								let mut fields = HashMap::new();
-								for (field, val) in typ.fields.iter().zip(args) {
+								for (field, val) in typ.ctor_fields.iter().zip(args) {
 									fields.insert(*field, val);
 								}
-								let obj = Obj::Instance(Instance {
-									typ: *type_id,
+								let body_fields = typ.body_fields.clone();
+								let type_scope = typ.scope.clone();
+								let inst_rc = Rc::new(RefCell::new(Obj::Instance(Instance {
+									typ: type_id,
 									fields,
-								});
-								let val = Val::Obj(Rc::new(RefCell::new(obj)));
-								Ok(val)
+								})));
+
+								let saved_scope = self.scope.clone();
+								let saved_inst = self.inst.clone();
+								self.inst = Some(inst_rc.clone());
+								for (name, init_id) in &body_fields {
+									self.scope = Rc::new(RefCell::new(Scope {
+										locals: HashMap::new(),
+										outer: Some(type_scope.clone()),
+										tier: Tier::Local,
+									}));
+									let val = match self.eval_expr(chunk, *init_id) {
+										Ok(val) => val,
+										Err(signal) => {
+											self.scope = saved_scope;
+											self.inst = saved_inst;
+											return Err(signal);
+										}
+									};
+									Member::User(inst_rc.clone(), *name).set(val).unwrap();
+								}
+								self.scope = saved_scope;
+								self.inst = saved_inst;
+
+								Ok(Val::Obj(inst_rc))
 							}
 							TypeId::Native(type_id) => {
 								let typ = self.types.get_native_type(*type_id);
@@ -1489,10 +1524,10 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 				let name = syms.resolve(typ.name);
 				let mut res = String::new();
 				res.push_str(&format!("type {}(", name));
-				for (i, field) in typ.fields.iter().enumerate() {
+				for (i, field) in typ.ctor_fields.iter().enumerate() {
 					let field = syms.resolve(*field);
 					res.push_str(field);
-					if i + 1 != typ.fields.len() {
+					if i + 1 != typ.ctor_fields.len() {
 						res.push_str(", ");
 					}
 				}
@@ -1510,10 +1545,10 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let name = syms.resolve(typ.name);
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
-			for (i, name) in typ.fields.iter().enumerate() {
+			for (i, name) in typ.ctor_fields.iter().enumerate() {
 				let val = inst.fields.get(name).unwrap();
 				res.push_str(&rt_print_val(syms, types, val));
-				if i + 1 != typ.fields.len() {
+				if i + 1 != typ.ctor_fields.len() {
 					res.push_str(", ");
 				}
 			}

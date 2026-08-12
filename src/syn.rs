@@ -711,8 +711,12 @@ impl NodeId for TypeItemId {
 
 #[derive(Debug)]
 pub enum TypeItem {
+	Field(Field),
 	Method(Method),
 }
+
+#[derive(Debug)]
+pub struct Field(pub Sym, pub ExprId);
 
 #[derive(Debug)]
 pub enum Method {
@@ -1038,8 +1042,17 @@ impl<'src> Parser<'src> {
 			self.take(TokenTag::RParen)?;
 		}
 		let mut items = Vec::new();
+		let mut seen_method = false;
 		while self.pos < self.toks.len() && self.toks[self.pos].tag != TokenTag::End {
 			let item_id = self.parse_type_item()?;
+			if let TypeItem::Field(..) = self.chunk.get_type_item(item_id) {
+				if seen_method {
+					let tok = self.chunk.get_type_item_tok(item_id);
+					return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok));
+				}
+			} else {
+				seen_method = true;
+			}
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
@@ -1052,8 +1065,22 @@ impl<'src> Parser<'src> {
 		match self.toks[self.pos].tag {
 			TokenTag::Type => todo!(),
 			TokenTag::Def => self.parse_method_decl(),
-			_ => todo!(),
+			TokenTag::Ident => self.parse_field_decl(),
+			_ => {
+				let tok = self.toks[self.pos];
+				Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok))
+			}
 		}
+	}
+
+	fn parse_field_decl(&mut self) -> Result<TypeItemId, Error> {
+		let tok = self.take(TokenTag::Ident)?;
+		let name = tok.sym.unwrap();
+		self.take(TokenTag::Eq)?;
+		let expr_id = self.parse_expr()?;
+		let item = TypeItem::Field(Field(name, expr_id));
+		let item_id = self.chunk.add_type_item(tok, item);
+		Ok(item_id)
 	}
 
 	fn parse_method_decl(&mut self) -> Result<TypeItemId, Error> {
