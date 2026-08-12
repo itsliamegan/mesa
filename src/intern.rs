@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use rustc_hash::{FxBuildHasher, FxHashMap};
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Sym(u32);
 
@@ -44,13 +46,13 @@ const KEYWORDS: &[(&str, Sym)] = &[
 ];
 
 pub struct Interner {
-	syms: HashMap<&'static str, Sym>,
+	syms: FxHashMap<&'static str, Sym>,
 	names: Vec<&'static str>,
 }
 
 impl Interner {
 	pub fn new() -> Self {
-		let mut syms = HashMap::with_capacity(KEYWORDS.len());
+		let mut syms = HashMap::with_capacity_and_hasher(KEYWORDS.len(), FxBuildHasher);
 		let mut names = Vec::new();
 
 		for (name, sym) in KEYWORDS {

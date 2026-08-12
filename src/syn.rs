@@ -838,7 +838,7 @@ pub enum Method {
 	Static(Def),
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ExprId(u32);
 
 impl NodeId for ExprId {

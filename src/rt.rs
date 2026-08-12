@@ -5,7 +5,8 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use ordermap::OrderMap;
+use ordermap::{OrderMap, OrderSet};
+use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
@@ -376,18 +377,18 @@ struct UserTypeId(u32);
 #[derive(Debug)]
 struct UserType {
 	name: Sym,
-	ctor_fields: Vec<Sym>,
-	body_fields: Vec<(Sym, ExprId)>,
+	ctor_fields: OrderSet<Sym, FxBuildHasher>,
+	body_fields: OrderMap<Sym, ExprId, FxBuildHasher>,
 	chunk: ChunkId,
-	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
-	statics: HashMap<Sym, Static>,
+	methods: FxHashMap<Sym, Rc<RefCell<Proc>>>,
+	statics: FxHashMap<Sym, Static>,
 	scope: Rc<RefCell<Scope>>,
 }
 
 impl UserType {
 	fn has_member(&self, name: Sym) -> bool {
 		self.ctor_fields.contains(&name)
-			|| self.body_fields.iter().any(|(field, _)| *field == name)
+			|| self.body_fields.contains_key(&name)
 			|| self.methods.contains_key(&name)
 	}
 
@@ -422,9 +423,9 @@ struct NativeMethod {
 struct NativeType {
 	name: Sym,
 	new: Option<fn() -> Val>,
-	fields: HashMap<Sym, NativeField>,
-	methods: HashMap<Sym, NativeMethod>,
-	statics: HashMap<Sym, Static>,
+	fields: FxHashMap<Sym, NativeField>,
+	methods: FxHashMap<Sym, NativeMethod>,
+	statics: FxHashMap<Sym, Static>,
 }
 
 impl NativeType {
@@ -503,11 +504,11 @@ impl TypeRegistry {
 		let mut native = Vec::with_capacity(CORE_TYPES.len());
 
 		for (name, _id, new, field_pairs, method_pairs) in CORE_TYPES {
-			let mut fields = HashMap::with_capacity(field_pairs.len());
+			let mut fields = HashMap::with_capacity_and_hasher(field_pairs.len(), FxBuildHasher);
 			for (name, get) in *field_pairs {
 				fields.insert(syms.intern(name), NativeField { get: *get });
 			}
-			let mut methods = HashMap::with_capacity(method_pairs.len());
+			let mut methods = HashMap::with_capacity_and_hasher(method_pairs.len(), FxBuildHasher);
 			for (name, call, arity) in *method_pairs {
 				methods.insert(
 					syms.intern(name),
@@ -522,7 +523,7 @@ impl TypeRegistry {
 				new: *new,
 				fields,
 				methods,
-				statics: HashMap::new(),
+				statics: FxHashMap::default(),
 			});
 		}
 
@@ -557,7 +558,7 @@ impl TypeRegistry {
 #[derive(Debug)]
 struct Instance {
 	typ: UserTypeId,
-	fields: HashMap<Sym, Val>,
+	fields: FxHashMap<Sym, Val>,
 }
 
 #[derive(Debug)]
@@ -662,7 +663,7 @@ enum Tier {
 
 #[derive(Debug)]
 struct Scope {
-	locals: HashMap<Sym, Val>,
+	locals: FxHashMap<Sym, Val>,
 	outer: Option<Rc<RefCell<Scope>>>,
 	tier: Tier,
 }
@@ -727,7 +728,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let types = TypeRegistry::new(syms);
 
 		let prelude = {
-			let mut locals = HashMap::with_capacity(CORE_TYPES.len());
+			let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
 			for (_, id, _, _, _) in CORE_TYPES {
 				let typ = types.get_native_type(*id);
 				let obj = Obj::Type(TypeId::Native(*id));
@@ -741,7 +742,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		};
 
 		let scope = Rc::new(RefCell::new(Scope {
-			locals: HashMap::new(),
+			locals: FxHashMap::default(),
 			outer: Some(prelude),
 			tier: Tier::Module,
 		}));
@@ -774,14 +775,19 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		item_id: ModuleItemId,
 	) -> Result<(), Signal> {
 		match chunk.get_module_item(item_id) {
-			ModuleItem::Type(syn::Type(name, ctor_fields, items)) => {
-				let mut methods = HashMap::new();
-				let mut statics = HashMap::new();
-				let mut body_fields = Vec::new();
+			ModuleItem::Type(syn::Type(name, ctor_field_names, items)) => {
+				let mut methods = FxHashMap::default();
+				let mut statics = FxHashMap::default();
+				let mut ctor_fields =
+					OrderSet::with_capacity_and_hasher(ctor_field_names.len(), FxBuildHasher);
+				for field in ctor_field_names {
+					ctor_fields.insert(*field);
+				}
+				let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
 				for item_id in items {
 					match chunk.get_type_item(*item_id) {
 						TypeItem::Field(syn::Field(name, init)) => {
-							body_fields.push((*name, *init));
+							body_fields.insert(*name, *init);
 						}
 						TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
 							let proc = Rc::new(RefCell::new(Proc {
@@ -807,7 +813,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				let typ = UserType {
 					name: *name,
-					ctor_fields: ctor_fields.to_vec(),
+					ctor_fields,
 					body_fields,
 					chunk: chunk_id,
 					methods,
@@ -846,7 +852,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Obj::List(list) => {
 						for item in &list.items {
 							let scope = Rc::new(RefCell::new(Scope {
-								locals: HashMap::new(),
+								locals: FxHashMap::default(),
 								outer: Some(self.scope.clone()),
 								tier: Tier::Local,
 							}));
@@ -857,7 +863,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					Obj::Dict(dict) => {
 						let scope = Rc::new(RefCell::new(Scope {
-							locals: HashMap::new(),
+							locals: FxHashMap::default(),
 							outer: Some(self.scope.clone()),
 							tier: Tier::Local,
 						}));
@@ -888,7 +894,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::When(When(cond, then_branch, else_branch)) => {
 				let cond = self.eval_expr(chunk, *cond)?.is_truthy();
 				let scope = Rc::new(RefCell::new(Scope {
-					locals: HashMap::new(),
+					locals: FxHashMap::default(),
 					outer: Some(self.scope.clone()),
 					tier: Tier::Local,
 				}));
@@ -932,7 +938,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										vec![(String::new(), loc)],
 									));
 								}
-								let mut fields = HashMap::new();
+								let mut fields = FxHashMap::default();
 								for (field, val) in typ.ctor_fields.iter().zip(args) {
 									fields.insert(*field, val);
 								}
@@ -949,7 +955,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								self.inst = Some(inst_rc.clone());
 								for (name, init_id) in &body_fields {
 									self.scope = Rc::new(RefCell::new(Scope {
-										locals: HashMap::new(),
+										locals: FxHashMap::default(),
 										outer: Some(type_scope.clone()),
 										tier: Tier::Local,
 									}));
@@ -1411,7 +1417,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			));
 		}
 		let mut scope = Scope {
-			locals: HashMap::new(),
+			locals: FxHashMap::default(),
 			outer: Some(proc.scope.clone()),
 			tier: Tier::Local,
 		};
