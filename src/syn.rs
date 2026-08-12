@@ -8,7 +8,7 @@ pub enum Error {
 	UnexpectedChar(Location, char),
 	UnexpectedToken(Location, TokenTag),
 	UnterminatedStrLit(Location),
-	UnsupportedStrEsc(Location, char),
+	UnknownStrEsc(Location, char),
 	UnknownBuiltin(Location, String),
 }
 
@@ -18,7 +18,7 @@ impl Error {
 			Self::UnexpectedChar(loc, _) => loc,
 			Self::UnexpectedToken(loc, _) => loc,
 			Self::UnterminatedStrLit(loc) => loc,
-			Self::UnsupportedStrEsc(loc, _) => loc,
+			Self::UnknownStrEsc(loc, _) => loc,
 			Self::UnknownBuiltin(loc, _) => loc,
 		}
 	}
@@ -31,7 +31,7 @@ impl Display for Error {
 			Self::UnexpectedChar(_, char) => write!(f, "unexpected char '{}'", char),
 			Self::UnexpectedToken(_, tag) => write!(f, "unexpected token {}", tag.name()),
 			Self::UnterminatedStrLit(_) => write!(f, "unterminated string literal"),
-			Self::UnsupportedStrEsc(_, esc) => write!(f, "unsupported escape sequence '\\{}'", esc),
+			Self::UnknownStrEsc(_, esc) => write!(f, "unknown escape sequence '\\{}'", esc),
 			Self::UnknownBuiltin(_, builtin) => write!(f, "unknown builtin '{}'", builtin),
 		}
 	}
@@ -1550,7 +1550,7 @@ impl<'src> Parser<'src> {
 					b'\\' => str.push('\\'),
 					_ => {
 						let char = self.src[pos..self.src.len()].chars().next().unwrap();
-						return Err(Error::UnsupportedStrEsc(self.src.loc(pos), char));
+						return Err(Error::UnknownStrEsc(self.src.loc(pos), char));
 					}
 				}
 				pos += 2;
