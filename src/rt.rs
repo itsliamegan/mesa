@@ -905,7 +905,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let arg = self.eval_expr(chunk, *arg_id)?;
 					args.push(arg);
 				}
-				match self.eval_expr(chunk, *val_id)? {
+				let callee = match chunk.get_expr(*val_id) {
+					Expr::Name(Name(name)) => self.eval_name_raw(chunk, *val_id, *name)?,
+					Expr::Member(syn::Member(target_id, name)) => {
+						self.eval_member_raw(chunk, *val_id, *target_id, *name)?
+					}
+					_ => self.eval_expr(chunk, *val_id)?,
+				};
+				match callee {
 					Val::Obj(rf) => match &*rf.borrow() {
 						Obj::Proc(proc) => self.eval_proc_call(span, proc, None, args),
 						Obj::Type(type_id) => match type_id {
@@ -1034,27 +1041,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 			Expr::Member(syn::Member(val_id, name)) => {
-				let val = self.eval_expr(chunk, *val_id)?;
-
-				if let Some(member) = val.member(*name, &self.types) {
-					match member.get(&self.types) {
-						Ok(val) => Ok(val),
-						Err(err) => {
-							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-							Err(Signal::Error(err, vec![(String::new(), loc)]))
-						}
-					}
-				} else {
-					let type_name = self.types.get_type_name(val.namespace_type_id());
-					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-					Err(Signal::Error(
-						Error::MemberError(MemberError::Missing(
-							self.syms.resolve(type_name).to_string(),
-							self.syms.resolve(*name).to_string(),
-						)),
-						vec![(String::new(), loc)],
-					))
-				}
+				self.eval_member_raw(chunk, expr_id, *val_id, *name)
 			}
 			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
@@ -1344,31 +1331,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Some(inst) => Ok(Val::Obj(inst.clone())),
 				None => todo!(),
 			},
-			Expr::Name(Name(name)) => {
-				let local = Scope::local(&self.scope, *name);
-				if local.is_bound() && local.tier == Tier::Local {
-					Ok(local.get())
-				} else if let Some(rf) = &self.inst
-					&& let Some(member) = Val::Obj(rf.clone()).member(*name, &self.types)
-				{
-					match member.get(&self.types) {
-						Ok(val) => Ok(val),
-						Err(err) => {
-							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-							Err(Signal::Error(err, vec![(String::new(), loc)]))
-						}
-					}
-				} else if local.is_bound() {
-					Ok(local.get())
-				} else {
-					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-					let name = self.syms.resolve(*name);
-					Err(Signal::Error(
-						Error::NameError(name.to_string()),
-						vec![(String::new(), loc)],
-					))
-				}
-			}
+			Expr::Name(Name(name)) => self.eval_name_raw(chunk, expr_id, *name),
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Print(val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
@@ -1401,6 +1364,62 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				Lit::Nil => Val::Nil(Nil),
 			}),
+		}
+	}
+
+	fn eval_name_raw(&mut self, chunk: &Chunk, expr_id: ExprId, name: Sym) -> Result<Val, Signal> {
+		let local = Scope::local(&self.scope, name);
+		if local.is_bound() && local.tier == Tier::Local {
+			Ok(local.get())
+		} else if let Some(rf) = &self.inst
+			&& let Some(member) = Val::Obj(rf.clone()).member(name, &self.types)
+		{
+			match member.get(&self.types) {
+				Ok(val) => Ok(val),
+				Err(err) => {
+					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+					Err(Signal::Error(err, vec![(String::new(), loc)]))
+				}
+			}
+		} else if local.is_bound() {
+			Ok(local.get())
+		} else {
+			let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+			let name = self.syms.resolve(name);
+			Err(Signal::Error(
+				Error::NameError(name.to_string()),
+				vec![(String::new(), loc)],
+			))
+		}
+	}
+
+	fn eval_member_raw(
+		&mut self,
+		chunk: &Chunk,
+		expr_id: ExprId,
+		val_id: ExprId,
+		name: Sym,
+	) -> Result<Val, Signal> {
+		let val = self.eval_expr(chunk, val_id)?;
+
+		if let Some(member) = val.member(name, &self.types) {
+			match member.get(&self.types) {
+				Ok(val) => Ok(val),
+				Err(err) => {
+					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+					Err(Signal::Error(err, vec![(String::new(), loc)]))
+				}
+			}
+		} else {
+			let type_name = self.types.get_type_name(val.namespace_type_id());
+			let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+			Err(Signal::Error(
+				Error::MemberError(MemberError::Missing(
+					self.syms.resolve(type_name).to_string(),
+					self.syms.resolve(name).to_string(),
+				)),
+				vec![(String::new(), loc)],
+			))
 		}
 	}
 
