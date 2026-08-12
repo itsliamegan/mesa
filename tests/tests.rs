@@ -41,6 +41,7 @@ test_files! {
 	test_prelude_names => "prelude.ms",
 	test_reports_runtime_errors => "rt_errors.ms",
 	test_reports_prelude_shadow => "sem_error_prelude.ms",
+	test_honors_significant_newlines => "newlines.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {

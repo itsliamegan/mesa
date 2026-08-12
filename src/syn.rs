@@ -254,21 +254,27 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		Self { syms, src, pos: 0 }
 	}
 
-	pub fn lex(mut self) -> Result<Vec<Token>, Error> {
+	pub fn lex(mut self) -> Result<(Vec<Token>, Vec<bool>), Error> {
 		let mut toks = Vec::new();
+		let mut nl_befores = Vec::new();
 		loop {
-			let tok = self.lex_next()?;
+			let (tok, nl_before) = self.lex_next_skip_space()?;
 			toks.push(tok);
+			nl_befores.push(nl_before);
 			if tok.tag == TokenTag::Eof {
 				break;
 			}
 		}
-		Ok(toks)
+		Ok((toks, nl_befores))
 	}
 
-	fn lex_next(&mut self) -> Result<Token, Error> {
+	fn lex_next_skip_space(&mut self) -> Result<(Token, bool), Error> {
+		let mut nl_before = false;
 		while self.pos < self.src.len() {
-			if self.src[self.pos].is_ascii_whitespace() {
+			if self.src[self.pos] == b'\n' {
+				nl_before = true;
+				self.pos += 1;
+			} else if self.src[self.pos].is_ascii_whitespace() {
 				self.pos += 1;
 			} else if self.src[self.pos] == b'#' {
 				while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
@@ -278,7 +284,11 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				break;
 			}
 		}
+		let tok = self.lex_next()?;
+		Ok((tok, nl_before))
+	}
 
+	fn lex_next(&mut self) -> Result<Token, Error> {
 		if self.pos == self.src.len() {
 			return Ok(Token {
 				src: self.src.id,
@@ -941,18 +951,35 @@ impl Precedence {
 	}
 }
 
+fn terminates_expr(tag: TokenTag) -> bool {
+	match tag {
+		TokenTag::End => true,
+		TokenTag::Ident => true,
+		TokenTag::Str => true,
+		TokenTag::Num => true,
+		TokenTag::Bool => true,
+		TokenTag::Nil => true,
+		TokenTag::RBrace => true,
+		TokenTag::RBrack => true,
+		TokenTag::RParen => true,
+		_ => false,
+	}
+}
+
 pub struct Parser<'src> {
 	src: &'src Source,
 	toks: Vec<Token>,
+	nl_before: Vec<bool>,
 	pos: usize,
 	chunk: Chunk,
 }
 
 impl<'src> Parser<'src> {
-	pub fn new(src: &'src Source, toks: Vec<Token>) -> Self {
+	pub fn new(src: &'src Source, toks: Vec<Token>, nl_before: Vec<bool>) -> Self {
 		Self {
 			src,
 			toks,
+			nl_before,
 			pos: 0,
 			chunk: Chunk::new(src.id),
 		}
@@ -1113,6 +1140,9 @@ impl<'src> Parser<'src> {
 	fn parse_expr_prec(&mut self, min_prec: Precedence) -> Result<ExprId, Error> {
 		let mut expr_id = self.parse_expr_unit()?;
 		while Precedence::of(self.toks[self.pos].tag) > min_prec {
+			if self.nl_before[self.pos] && terminates_expr(self.toks[self.pos - 1].tag) {
+				break;
+			}
 			expr_id = match self.toks[self.pos].tag {
 				TokenTag::Eq => self.parse_assign_expr(expr_id)?,
 				TokenTag::Or => self.parse_binary_expr(expr_id, BinaryOp::Or, Precedence::OR)?,
