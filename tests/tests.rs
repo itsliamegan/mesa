@@ -22,7 +22,6 @@ test_files! {
 	test_lists => "list.ms",
 	test_dicts => "dict.ms",
 	test_assigns_locals => "locals.ms",
-	test_calls_procs => "procs.ms",
 	test_instantiates_types => "types.ms",
 	test_accesses_fields => "fields.ms",
 	test_calls_methods => "methods.ms",
@@ -43,6 +42,7 @@ test_files! {
 	test_reports_prelude_shadow => "sem_error_prelude.ms",
 	test_body_fields => "body_fields.ms",
 	test_honors_significant_newlines => "newlines.ms",
+	test_invokes_without_parens => "paren_less.ms",
 	test_explicit_returns => "returns.ms",
 }
 

@@ -1,5 +1,4 @@
 #> Unit()
-#> Unit()
 
 type Unit
 	def copy()
@@ -8,6 +7,3 @@ type Unit
 end
 
 $print(Unit().copy())
-
-copy := Unit().copy
-$print(copy())

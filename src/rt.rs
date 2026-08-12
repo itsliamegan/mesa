@@ -1041,7 +1041,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 			Expr::Member(syn::Member(val_id, name)) => {
-				self.eval_member_raw(chunk, expr_id, *val_id, *name)
+				let val = self.eval_member_raw(chunk, expr_id, *val_id, *name)?;
+				self.invoke_or_return(chunk, expr_id, val)
 			}
 			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
@@ -1331,7 +1332,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Some(inst) => Ok(Val::Obj(inst.clone())),
 				None => todo!(),
 			},
-			Expr::Name(Name(name)) => self.eval_name_raw(chunk, expr_id, *name),
+			Expr::Name(Name(name)) => {
+				let val = self.eval_name_raw(chunk, expr_id, *name)?;
+				self.invoke_or_return(chunk, expr_id, val)
+			}
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Print(val_id) => {
 					let val = self.eval_expr(chunk, *val_id)?;
@@ -1420,6 +1424,48 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				)),
 				vec![(String::new(), loc)],
 			))
+		}
+	}
+
+	fn invoke_or_return(
+		&mut self,
+		chunk: &Chunk,
+		expr_id: ExprId,
+		val: Val,
+	) -> Result<Val, Signal> {
+		let Val::Obj(rf) = &val else { return Ok(val) };
+		let rf = rf.clone();
+		let span = chunk.get_expr_span(expr_id);
+
+		let arity = match &*rf.borrow() {
+			Obj::Proc(proc) => proc.params.len(),
+			Obj::Method(Method::User(_, proc)) => proc.borrow().params.len(),
+			Obj::Method(Method::Native(_, _, meth)) => meth.arity,
+			_ => return Ok(val),
+		};
+
+		// Used in an invoking position but requires arguments; error.
+		if arity != 0 {
+			let loc = span.loc(self.pkg);
+			return Err(Signal::Error(
+				Error::ArgumentError(ArgumentError::WrongCount(0, arity)),
+				vec![(String::new(), loc)],
+			));
+		}
+
+		match &*rf.borrow() {
+			Obj::Proc(proc) => self.eval_proc_call(span, proc, None, Vec::new()),
+			Obj::Method(Method::User(inst, proc)) => {
+				self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), Vec::new())
+			}
+			Obj::Method(Method::Native(recv, _name, meth)) => match (meth.call)(recv, Vec::new()) {
+				Ok(val) => Ok(val),
+				Err(err) => {
+					let loc = span.loc(self.pkg);
+					Err(Signal::Error(err, vec![(String::new(), loc)]))
+				}
+			},
+			_ => panic!(),
 		}
 	}
 

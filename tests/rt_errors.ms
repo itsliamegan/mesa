@@ -74,3 +74,13 @@ x := @
 #! rt_errors.ms:76,1: syntax error: unknown builtin '$unknown'
 
 $unknown(1)
+
+#---
+
+#! rt_errors.ms:86,1: runtime error: wrong number of args; have 0, want 1
+#! 	at <main> (rt_errors.ms:86,1)
+
+def one(a)
+	a
+end
+one

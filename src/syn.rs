@@ -1224,19 +1224,21 @@ impl<'src> Parser<'src> {
 			self.take(TokenTag::Ident)?.sym.unwrap()
 		};
 		let mut params = Vec::new();
-		self.take(TokenTag::LParen)?;
-		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
-			let param = self.take(TokenTag::Ident)?.sym.unwrap();
-			params.push(param);
-			match self.tag() {
-				TokenTag::Comma => {
-					self.cur = self.cur.next();
+		if self.tag() == TokenTag::LParen {
+			self.take(TokenTag::LParen)?;
+			while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
+				let param = self.take(TokenTag::Ident)?.sym.unwrap();
+				params.push(param);
+				match self.tag() {
+					TokenTag::Comma => {
+						self.cur = self.cur.next();
+					}
+					TokenTag::RParen => {}
+					_ => return Err(self.unexpected()),
 				}
-				TokenTag::RParen => {}
-				_ => return Err(self.unexpected()),
 			}
+			self.take(TokenTag::RParen)?;
 		}
-		self.take(TokenTag::RParen)?;
 		let mut body = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			let expr_id = self.parse_expr()?;
@@ -1259,19 +1261,21 @@ impl<'src> Parser<'src> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let mut params = Vec::new();
-		self.take(TokenTag::LParen)?;
-		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
-			let param = self.take(TokenTag::Ident)?.sym.unwrap();
-			params.push(param);
-			match self.tag() {
-				TokenTag::Comma => {
-					self.cur = self.cur.next();
+		if self.tag() == TokenTag::LParen {
+			self.take(TokenTag::LParen)?;
+			while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
+				let param = self.take(TokenTag::Ident)?.sym.unwrap();
+				params.push(param);
+				match self.tag() {
+					TokenTag::Comma => {
+						self.cur = self.cur.next();
+					}
+					TokenTag::RParen => {}
+					_ => return Err(self.unexpected()),
 				}
-				TokenTag::RParen => {}
-				_ => return Err(self.unexpected()),
 			}
+			self.take(TokenTag::RParen)?;
 		}
-		self.take(TokenTag::RParen)?;
 		let mut body = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			let expr_id = self.parse_expr()?;
