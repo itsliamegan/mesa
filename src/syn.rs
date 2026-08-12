@@ -40,11 +40,15 @@ impl Display for Error {
 #[derive(Debug)]
 pub struct Package {
 	srcs: Vec<Source>,
+	chunks: Vec<Chunk>,
 }
 
 impl Package {
 	pub fn new() -> Self {
-		Self { srcs: Vec::new() }
+		Self {
+			srcs: Vec::new(),
+			chunks: Vec::new(),
+		}
 	}
 
 	pub fn get_src(&self, id: SourceId) -> &Source {
@@ -55,6 +59,16 @@ impl Package {
 		let id = SourceId(self.srcs.len() as u32);
 		let src = Source { id, file, text };
 		self.srcs.push(src);
+		id
+	}
+
+	pub fn get_chunk(&self, id: ChunkId) -> &Chunk {
+		&self.chunks[id.0 as usize]
+	}
+
+	pub fn add_chunk(&mut self, chunk: Chunk) -> ChunkId {
+		let id = ChunkId(self.chunks.len() as u32);
+		self.chunks.push(chunk);
 		id
 	}
 }

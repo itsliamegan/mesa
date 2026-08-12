@@ -9,9 +9,9 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Def, Each, Expr, ExprId, Lit,
-	Location, ModuleItem, ModuleItemId, Name, Package, Place, Return, Script, Span, TypeItem,
-	Unary, UnaryOp, When,
+	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each, Expr,
+	ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Place, Return, Script, Span,
+	TypeItem, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -360,6 +360,7 @@ struct Proc {
 	name: Sym,
 	params: Vec<Sym>,
 	body: BlockId,
+	chunk: ChunkId,
 	scope: Rc<RefCell<Scope>>,
 }
 
@@ -377,6 +378,7 @@ struct UserType {
 	name: Sym,
 	ctor_fields: Vec<Sym>,
 	body_fields: Vec<(Sym, ExprId)>,
+	chunk: ChunkId,
 	methods: HashMap<Sym, Rc<RefCell<Proc>>>,
 	statics: HashMap<Sym, Static>,
 	scope: Rc<RefCell<Scope>>,
@@ -753,9 +755,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
-	pub fn eval(mut self, chunk: Chunk) -> Result<(), (Error, Vec<(String, Location)>)> {
+	pub fn eval(mut self, chunk_id: ChunkId) -> Result<(), (Error, Vec<(String, Location)>)> {
+		let chunk = self.pkg.get_chunk(chunk_id);
 		for item_id in &chunk.top {
-			match self.eval_module_item(&chunk, *item_id) {
+			match self.eval_module_item(chunk, chunk_id, *item_id) {
 				Ok(()) => {}
 				Err(Signal::Return(_)) => break,
 				Err(Signal::Error(err, trace)) => return Err((err, trace)),
@@ -764,7 +767,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		Ok(())
 	}
 
-	fn eval_module_item(&mut self, chunk: &Chunk, item_id: ModuleItemId) -> Result<(), Signal> {
+	fn eval_module_item(
+		&mut self,
+		chunk: &Chunk,
+		chunk_id: ChunkId,
+		item_id: ModuleItemId,
+	) -> Result<(), Signal> {
 		match chunk.get_module_item(item_id) {
 			ModuleItem::Type(syn::Type(name, ctor_fields, items)) => {
 				let mut methods = HashMap::new();
@@ -780,6 +788,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								name: *name,
 								params: params.to_vec(),
 								body: *body,
+								chunk: chunk_id,
 								scope: self.scope.clone(),
 							}));
 							methods.insert(*name, proc);
@@ -789,6 +798,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								name: *name,
 								params: params.to_vec(),
 								body: *body,
+								chunk: chunk_id,
 								scope: self.scope.clone(),
 							}));
 							statics.insert(*name, Static::Proc(proc));
@@ -799,6 +809,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					name: *name,
 					ctor_fields: ctor_fields.to_vec(),
 					body_fields,
+					chunk: chunk_id,
 					methods,
 					statics,
 					scope: self.scope.clone(),
@@ -814,6 +825,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					name: *name,
 					params: params.to_vec(),
 					body: *body,
+					chunk: chunk_id,
 					scope: self.scope.clone(),
 				});
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
@@ -901,7 +913,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				match self.eval_expr(chunk, *val_id)? {
 					Val::Obj(rf) => match &*rf.borrow() {
-						Obj::Proc(proc) => self.eval_proc_call(chunk, span, proc, None, args),
+						Obj::Proc(proc) => self.eval_proc_call(span, proc, None, args),
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_id) => {
 								let type_id = *type_id;
@@ -922,6 +934,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 								let body_fields = typ.body_fields.clone();
 								let type_scope = typ.scope.clone();
+								let type_chunk = self.pkg.get_chunk(typ.chunk);
 								let inst_rc = Rc::new(RefCell::new(Obj::Instance(Instance {
 									typ: type_id,
 									fields,
@@ -936,7 +949,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										outer: Some(type_scope.clone()),
 										tier: Tier::Local,
 									}));
-									let val = match self.eval_expr(chunk, *init_id) {
+									let val = match self.eval_expr(type_chunk, *init_id) {
 										Ok(val) => val,
 										Err(signal) => {
 											self.scope = saved_scope;
@@ -982,13 +995,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 						},
 						Obj::Method(meth) => match meth {
-							Method::User(inst, proc) => self.eval_proc_call(
-								chunk,
-								span,
-								&proc.borrow(),
-								Some(inst.clone()),
-								args,
-							),
+							Method::User(inst, proc) => {
+								self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), args)
+							}
 							Method::Native(recv, _name, meth) => {
 								if args.len() != meth.arity {
 									let loc = span.loc(self.pkg);
@@ -1385,7 +1394,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_proc_call(
 		&mut self,
-		chunk: &Chunk,
 		span: Span,
 		proc: &Proc,
 		inst: Option<Rc<RefCell<Obj>>>,
@@ -1408,7 +1416,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 		let saved_inst = self.inst.clone();
 		self.inst = inst;
-		let result = self.eval_block(chunk, Rc::new(RefCell::new(scope)), proc.body);
+		let body_chunk = self.pkg.get_chunk(proc.chunk);
+		let result = self.eval_block(body_chunk, Rc::new(RefCell::new(scope)), proc.body);
 		self.inst = saved_inst;
 		match result {
 			Ok(val) => Ok(val),

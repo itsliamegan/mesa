@@ -29,23 +29,26 @@ fn main() {
 	match Lexer::new(&mut syms, src).lex() {
 		Ok(toks) => match Parser::new(src, toks).parse() {
 			Ok(chunk) => match sem::check(&mut syms, &chunk, src) {
-				Ok(()) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
-					Ok(()) => {}
-					Err((err, mut trace)) => {
-						{
-							let mut frame = trace.first_mut().unwrap();
-							eprintln!("{}: runtime error: {}", frame.1, err);
+				Ok(()) => {
+					let chunk_id = pkg.add_chunk(chunk);
+					match Interpreter::new(&mut syms, &pkg).eval(chunk_id) {
+						Ok(()) => {}
+						Err((err, mut trace)) => {
+							{
+								let mut frame = trace.first_mut().unwrap();
+								eprintln!("{}: runtime error: {}", frame.1, err);
+							}
+							{
+								let mut frame = trace.last_mut().unwrap();
+								frame.0.push_str("<main>");
+							}
+							for (proc_name, loc) in trace {
+								eprintln!("\tat {} ({})", proc_name, loc);
+							}
+							process::exit(1);
 						}
-						{
-							let mut frame = trace.last_mut().unwrap();
-							frame.0.push_str("<main>");
-						}
-						for (proc_name, loc) in trace {
-							eprintln!("\tat {} ({})", proc_name, loc);
-						}
-						process::exit(1);
 					}
-				},
+				}
 				Err(err) => {
 					eprintln!("{}", err);
 					process::exit(1);
