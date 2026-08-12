@@ -41,8 +41,8 @@ pub fn check(syms: &mut Interner, chunk: &Chunk, src: &Source) -> Result<(), Err
 			ModuleItem::Expr(_) => continue,
 		};
 		if prelude.contains(&name) {
-			let tok = chunk.get_module_item_tok(*item_id);
-			let loc = src.loc(tok.pos);
+			let span = chunk.get_module_item_span(*item_id);
+			let loc = src.loc(span.start);
 			return Err(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
 		}
 	}

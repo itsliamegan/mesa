@@ -27,7 +27,7 @@ fn main() {
 	let src = pkg.get_src(src_id);
 
 	match Lexer::new(&mut syms, src).lex() {
-		Ok((toks, nl_before)) => match Parser::new(src, toks, nl_before).parse() {
+		Ok(toks) => match Parser::new(src, toks).parse() {
 			Ok(chunk) => match sem::check(&mut syms, &chunk, src) {
 				Ok(()) => match Interpreter::new(&mut syms, &pkg).eval(chunk) {
 					Ok(()) => {}

@@ -10,7 +10,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, Def, Each, Expr, ExprId, Lit,
-	Location, ModuleItem, ModuleItemId, Name, Package, Place, Return, Script, Token, TypeItem,
+	Location, ModuleItem, ModuleItemId, Name, Package, Place, Return, Script, Span, TypeItem,
 	Unary, UnaryOp, When,
 };
 
@@ -856,8 +856,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Ok(Val::Nil(Nil))
 					}
 					obj => {
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
 						Err(Signal::Error(
 							Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
@@ -866,8 +865,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				},
 				val => {
-					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
 						Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
@@ -895,7 +893,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Err(Signal::Return(val))
 			}
 			Expr::Call(Call(val_id, arg_ids)) => {
-				let tok = chunk.get_expr_tok(expr_id);
+				let span = chunk.get_expr_span(expr_id);
 				let mut args = Vec::with_capacity(arg_ids.len());
 				for arg_id in arg_ids {
 					let arg = self.eval_expr(chunk, *arg_id)?;
@@ -903,14 +901,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 				match self.eval_expr(chunk, *val_id)? {
 					Val::Obj(rf) => match &*rf.borrow() {
-						Obj::Proc(proc) => self.eval_proc_call(chunk, &tok, proc, None, args),
+						Obj::Proc(proc) => self.eval_proc_call(chunk, span, proc, None, args),
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_id) => {
 								let type_id = *type_id;
 								let typ = self.types.get_user_type(type_id);
 								if args.len() != typ.ctor_fields.len() {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(tok.pos);
+									let loc = span.loc(self.pkg);
 									return Err(Signal::Error(
 										Error::ArgumentError(ArgumentError::WrongCount(
 											args.len(),
@@ -961,8 +958,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										if args.is_empty() {
 											Ok(new())
 										} else {
-											let src = self.pkg.get_src(chunk.src);
-											let loc = src.loc(tok.pos);
+											let loc = span.loc(self.pkg);
 											Err(Signal::Error(
 												Error::ArgumentError(ArgumentError::WrongCount(
 													args.len(),
@@ -973,8 +969,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										}
 									}
 									None => {
-										let src = self.pkg.get_src(chunk.src);
-										let loc = src.loc(tok.pos);
+										let loc = span.loc(self.pkg);
 										let type_name = self.syms.resolve(typ.name);
 										Err(Signal::Error(
 											Error::TypeError(TypeError::NotCallable(
@@ -989,15 +984,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Obj::Method(meth) => match meth {
 							Method::User(inst, proc) => self.eval_proc_call(
 								chunk,
-								&tok,
+								span,
 								&proc.borrow(),
 								Some(inst.clone()),
 								args,
 							),
 							Method::Native(recv, _name, meth) => {
 								if args.len() != meth.arity {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(tok.pos);
+									let loc = span.loc(self.pkg);
 									Err(Signal::Error(
 										Error::ArgumentError(ArgumentError::WrongCount(
 											args.len(),
@@ -1011,8 +1005,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 						},
 						obj => {
-							let src = self.pkg.get_src(chunk.src);
-							let loc = src.loc(tok.pos);
+							let loc = span.loc(self.pkg);
 							let type_name =
 								self.syms.resolve(self.types.get_type_name(obj.type_id()));
 							Err(Signal::Error(
@@ -1022,8 +1015,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 					},
 					val => {
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(tok.pos);
+						let loc = span.loc(self.pkg);
 						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 						Err(Signal::Error(
 							Error::TypeError(TypeError::NotCallable(type_name.to_string())),
@@ -1039,8 +1031,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Ok(member.get(&self.types))
 				} else {
 					let type_name = self.types.get_type_name(val.namespace_type_id());
-					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 					Err(Signal::Error(
 						Error::MemberError(MemberError::Missing(
 							self.syms.resolve(type_name).to_string(),
@@ -1058,8 +1049,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								if num.0.fract() <= 1e-10 {
 									num.0.trunc() as usize
 								} else {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 									return Err(Signal::Error(
 										Error::IndexError(IndexError::NonIntegral(num.0)),
 										vec![(String::new(), loc)],
@@ -1067,8 +1057,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 							}
 							val => {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								return Err(Signal::Error(
 									Error::TypeError(TypeError::IndexNonNum(rt_print_val(
 										self.syms,
@@ -1092,8 +1081,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 					}
 					obj => {
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
 						Err(Signal::Error(
 							Error::ProtocolError(ProtocolError::NotScriptable(
@@ -1104,8 +1092,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				},
 				val => {
-					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
 						Error::ProtocolError(ProtocolError::NotScriptable(type_name.to_string())),
@@ -1136,8 +1123,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							if let Err(()) = member.set(val.clone()) {
 								let type_name =
 									self.types.get_type_name(target.namespace_type_id());
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
 										self.syms.resolve(type_name).to_string(),
@@ -1149,8 +1135,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							Ok(val)
 						} else {
 							let type_name = self.types.get_type_name(target.namespace_type_id());
-							let src = self.pkg.get_src(chunk.src);
-							let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 							Err(Signal::Error(
 								Error::MemberError(MemberError::Missing(
 									self.syms.resolve(type_name).to_string(),
@@ -1170,8 +1155,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											if num.0.fract() <= 1e-10 {
 												num.0.trunc() as usize
 											} else {
-												let src = self.pkg.get_src(chunk.src);
-												let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+												let loc =
+													chunk.get_expr_span(expr_id).loc(self.pkg);
 												return Err(Signal::Error(
 													Error::IndexError(IndexError::NonIntegral(
 														num.0,
@@ -1181,8 +1166,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											}
 										}
 										val => {
-											let src = self.pkg.get_src(chunk.src);
-											let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+											let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 											return Err(Signal::Error(
 												Error::TypeError(TypeError::IndexNonNum(
 													rt_print_val(self.syms, &self.types, &val),
@@ -1195,8 +1179,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										list.items[idx] = val.clone();
 										Ok(val)
 									} else {
-										let src = self.pkg.get_src(chunk.src);
-										let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+										let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 										Err(Signal::Error(
 											Error::IndexError(IndexError::OutOfRange(idx)),
 											vec![(String::new(), loc)],
@@ -1209,8 +1192,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									Ok(val)
 								}
 								obj => {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 									let type_name =
 										self.syms.resolve(self.types.get_type_name(obj.type_id()));
 									Err(Signal::Error(
@@ -1222,8 +1204,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 							},
 							val => {
-								let src = self.pkg.get_src(chunk.src);
-								let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								let type_name =
 									self.syms.resolve(self.types.get_type_name(val.type_id()));
 								Err(Signal::Error(
@@ -1279,8 +1260,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									_ => panic!(),
 								}))),
 								(lhs, rhs) => {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 									let val = match (&lhs, &rhs) {
 										(Val::Num(_), _) => rhs,
 										(_, Val::Num(_)) => lhs,
@@ -1307,8 +1287,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									_ => panic!(),
 								}))),
 								(lhs, rhs) => {
-									let src = self.pkg.get_src(chunk.src);
-									let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 									let val = match (&lhs, &rhs) {
 										(Val::Num(_), _) => rhs,
 										(_, Val::Num(_)) => lhs,
@@ -1337,8 +1316,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				UnaryOp::Neg => match self.eval_expr(chunk, *val_id)? {
 					Val::Num(num) => Ok(Val::Num(Num(-num.0))),
 					val => {
-						let src = self.pkg.get_src(chunk.src);
-						let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 						Err(Signal::Error(
 							Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
@@ -1362,8 +1340,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				} else if local.is_bound() {
 					Ok(local.get())
 				} else {
-					let src = self.pkg.get_src(chunk.src);
-					let loc = src.loc(chunk.get_expr_tok(expr_id).pos);
+					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 					let name = self.syms.resolve(*name);
 					Err(Signal::Error(
 						Error::NameError(name.to_string()),
@@ -1409,14 +1386,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	fn eval_proc_call(
 		&mut self,
 		chunk: &Chunk,
-		tok: &Token,
+		span: Span,
 		proc: &Proc,
 		inst: Option<Rc<RefCell<Obj>>>,
 		args: Vec<Val>,
 	) -> Result<Val, Signal> {
 		if args.len() != proc.params.len() {
-			let src = self.pkg.get_src(chunk.src);
-			let loc = src.loc(tok.pos);
+			let loc = span.loc(self.pkg);
 			return Err(Signal::Error(
 				Error::ArgumentError(ArgumentError::WrongCount(args.len(), proc.params.len())),
 				vec![(String::new(), loc)],
@@ -1441,8 +1417,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let proc_name = self.syms.resolve(proc.name);
 				trace.last_mut().unwrap().0.push_str(proc_name);
 
-				let src = self.pkg.get_src(chunk.src);
-				let loc = src.loc(tok.pos);
+				let loc = span.loc(self.pkg);
 				trace.push((String::new(), loc));
 				Err(Signal::Error(err, trace))
 			}
