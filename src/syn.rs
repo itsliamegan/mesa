@@ -1417,6 +1417,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_expr_unit(&mut self) -> Result<ExprId, Error> {
 		match self.tag() {
+			TokenTag::LParen => self.parse_group_expr(),
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Return => self.parse_return_expr(),
@@ -1435,6 +1436,13 @@ impl<'src> Parser<'src> {
 			TokenTag::Nil => self.parse_nil_lit_expr(),
 			_ => Err(self.unexpected()),
 		}
+	}
+
+	fn parse_group_expr(&mut self) -> Result<ExprId, Error> {
+		self.take(TokenTag::LParen)?;
+		let expr_id = self.parse_expr_prec(Precedence::NONE)?;
+		self.take(TokenTag::RParen)?;
+		Ok(expr_id)
 	}
 
 	fn parse_each_expr(&mut self) -> Result<ExprId, Error> {
