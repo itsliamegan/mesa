@@ -875,7 +875,7 @@ pub struct Each(pub Sym, pub ExprId, pub BlockId);
 pub struct When(pub ExprId, pub BlockId, pub Option<BlockId>);
 
 #[derive(Debug)]
-pub struct Return(pub ExprId);
+pub struct Return(pub Option<ExprId>);
 
 #[derive(Debug)]
 pub struct Call(pub ExprId, pub Vec<ExprId>);
@@ -1457,7 +1457,11 @@ impl<'src> Parser<'src> {
 
 	fn parse_return_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Return)?;
-		let val_expr_id = self.parse_expr()?;
+		let val_expr_id = if self.toks.nl_before(self.cur) {
+			None
+		} else {
+			Some(self.parse_expr()?)
+		};
 		let expr = Expr::Return(Return(val_expr_id));
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)

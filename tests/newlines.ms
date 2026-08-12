@@ -15,7 +15,17 @@ $print(total)
 
 #---
 
-#! newlines.ms:21,1: syntax error: unexpected token PLUS
+#> nil
+
+def wrapped()
+	return
+	5.23
+end
+$print(wrapped())
+
+#---
+
+#! newlines.ms:31,1: syntax error: unexpected token PLUS
 
 total := 1
 + 2

@@ -43,6 +43,7 @@ test_files! {
 	test_reports_prelude_shadow => "sem_error_prelude.ms",
 	test_body_fields => "body_fields.ms",
 	test_honors_significant_newlines => "newlines.ms",
+	test_explicit_returns => "returns.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {

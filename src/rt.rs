@@ -901,7 +901,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 			Expr::Return(Return(val_expr_id)) => {
-				let val = self.eval_expr(chunk, *val_expr_id)?;
+				let val = if let Some(val_expr_id) = val_expr_id {
+					self.eval_expr(chunk, *val_expr_id)?
+				} else {
+					Val::Nil(Nil)
+				};
 				Err(Signal::Return(val))
 			}
 			Expr::Call(Call(val_id, arg_ids)) => {
