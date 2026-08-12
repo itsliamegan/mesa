@@ -84,3 +84,35 @@ def one(a)
 	a
 end
 one
+
+#---
+
+#! rt_errors.ms:100,9: runtime error: member 'greet' on type Greeter is read-only
+#! 	at <main> (rt_errors.ms:100,9)
+
+type Greeter
+	def greet()
+		"hi"
+	end
+end
+
+g := Greeter()
+g.greet := "nope"
+
+#---
+
+#! rt_errors.ms:114,9: runtime error: member 'greet' on type Greeter is read-only
+#! 	at rename (rt_errors.ms:114,9)
+#! 	at <main> (rt_errors.ms:118,17)
+
+type Greeter
+	def greet()
+		"hi"
+	end
+
+	def rename()
+		greet := "nope"
+	end
+end
+
+Greeter().rename()

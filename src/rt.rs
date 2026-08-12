@@ -623,13 +623,16 @@ impl Member {
 		}
 	}
 
-	fn set(&self, val: Val) -> Result<(), ()> {
+	fn set(&self, val: Val, types: &TypeRegistry) -> Result<(), ()> {
 		match self {
 			Member::Static(_, _) => Err(()),
 			Member::User(inst, name) => {
 				let Obj::Instance(inst) = &mut *inst.borrow_mut() else {
 					panic!()
 				};
+				if types.get_user_type(inst.typ).methods.contains_key(name) {
+					return Err(());
+				}
 				inst.fields.insert(*name, val);
 				Ok(())
 			}
@@ -958,7 +961,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											return Err(signal);
 										}
 									};
-									Member::User(inst_rc.clone(), *name).set(val).unwrap();
+									Member::User(inst_rc.clone(), *name)
+										.set(val, &self.types)
+										.unwrap();
 								}
 								self.scope = saved_scope;
 								self.inst = saved_inst;
@@ -1113,7 +1118,19 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						} else if let Some(rf) = &self.inst
 							&& let Some(member) = Val::Obj(rf.clone()).member(*sym, &self.types)
 						{
-							member.set(val.clone()).unwrap();
+							if let Err(()) = member.set(val.clone(), &self.types) {
+								let type_name = self
+									.types
+									.get_type_name(Val::Obj(rf.clone()).namespace_type_id());
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								return Err(Signal::Error(
+									Error::MemberError(MemberError::ReadOnly(
+										self.syms.resolve(type_name).to_string(),
+										self.syms.resolve(*sym).to_string(),
+									)),
+									vec![(String::new(), loc)],
+								));
+							}
 						} else {
 							local.set(val.clone());
 						}
@@ -1123,7 +1140,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let target = self.eval_expr(chunk, *target_id)?;
 
 						if let Some(member) = target.member(*name, &self.types) {
-							if let Err(()) = member.set(val.clone()) {
+							if let Err(()) = member.set(val.clone(), &self.types) {
 								let type_name =
 									self.types.get_type_name(target.namespace_type_id());
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
