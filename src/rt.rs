@@ -433,6 +433,15 @@ struct NativeMember {
 	call: fn(&Val, Vec<Val>) -> Result<Val, Error>,
 }
 
+impl NativeMember {
+	fn defaults(&self) -> Option<Vec<Val>> {
+		self.params
+			.iter()
+			.map(|param| param.default.map(|default| default()))
+			.collect()
+	}
+}
+
 #[derive(Debug)]
 struct NativeType {
 	name: Sym,
@@ -603,9 +612,6 @@ impl Member {
 						match types.get_native_type(type_id).get_static(*name).unwrap() {
 							Static::Proc(_) => panic!(),
 							Static::Type(_) => panic!(),
-							Static::NativeMember(member) if member.params.is_empty() => {
-								(member.call)(&Val::Obj(type_rf.clone()), Vec::new())
-							}
 							Static::NativeMember(member) => {
 								Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
 									Method::Native(Val::Obj(type_rf.clone()), *name, member),
@@ -637,7 +643,6 @@ impl Member {
 				};
 				let typ = types.get_native_type(type_id);
 				match typ.members.get(name) {
-					Some(member) if member.params.is_empty() => (member.call)(recv, Vec::new()),
 					Some(member) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
 						Method::Native(recv.clone(), *name, member.clone()),
 					))))),
@@ -997,22 +1002,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								Ok(Val::Obj(inst_rc))
 							}
 							TypeId::Native(type_id) => {
-								let args = self.positional_only(span, args)?;
 								let typ = self.types.get_native_type(*type_id);
 								match typ.new {
 									Some(new) => {
-										if args.is_empty() {
-											Ok(new())
-										} else {
-											let loc = span.loc(self.pkg);
-											Err(Signal::Error(
-												Error::ArgumentError(ArgumentError::TooMany(
-													args.len(),
-													0,
-												)),
-												vec![(String::new(), loc)],
-											))
-										}
+										// A native constructor defines no
+										// params by definition, so route
+										// through the usual machinery.
+										self.bind_native_args(span, &[], args)?;
+										Ok(new())
 									}
 									None => {
 										let loc = span.loc(self.pkg);
@@ -1032,26 +1029,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), args)
 							}
 							Method::Native(recv, _name, meth) => {
-								let args = self.positional_only(span, args)?;
-								if args.len() != meth.params.len() {
-									let err = if args.len() > meth.params.len() {
-										ArgumentError::TooMany(args.len(), meth.params.len())
-									} else {
-										let name = meth.params[args.len()].name;
-										ArgumentError::Missing(vec![name.to_string()])
-									};
-									let loc = span.loc(self.pkg);
-									Err(Signal::Error(
-										Error::ArgumentError(err),
-										vec![(String::new(), loc)],
-									))
-								} else {
-									match (meth.call)(recv, args) {
-										Ok(val) => Ok(val),
-										Err(err) => {
-											let loc = span.loc(self.pkg);
-											Err(Signal::Error(err, vec![(String::new(), loc)]))
-										}
+								// Native params carry &'static str names and
+								// fn() -> Val defaults, so they are matched and
+								// filled without an Interner or a scope.
+								let args = self.bind_native_args(span, meth.params, args)?;
+								match (meth.call)(recv, args) {
+									Ok(val) => Ok(val),
+									Err(err) => {
+										let loc = span.loc(self.pkg);
+										Err(Signal::Error(err, vec![(String::new(), loc)]))
 									}
 								}
 							}
@@ -1499,9 +1485,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				.first()
 				.filter(|param| param.1.is_none())
 				.map(|param| self.syms.resolve(param.0).to_string()),
-			Obj::Method(Method::Native(_, _, meth)) => {
-				meth.params.first().map(|param| param.name.to_string())
-			}
+			// Native types are defined in Rust, skipping the
+			// required-before-default ordering check. Use find instead of
+			// filter to ensure we find any required params.
+			Obj::Method(Method::Native(_, _, meth)) => meth
+				.params
+				.iter()
+				.find(|param| param.default.is_none())
+				.map(|param| param.name.to_string()),
 			_ => return Ok(val),
 		};
 
@@ -1519,39 +1510,89 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Obj::Method(Method::User(inst, proc)) => {
 				self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), Vec::new())
 			}
-			Obj::Method(Method::Native(recv, _name, meth)) => match (meth.call)(recv, Vec::new()) {
-				Ok(val) => Ok(val),
-				Err(err) => {
-					let loc = span.loc(self.pkg);
-					Err(Signal::Error(err, vec![(String::new(), loc)]))
+			Obj::Method(Method::Native(recv, _name, meth)) => {
+				match (meth.call)(recv, meth.defaults().unwrap()) {
+					Ok(val) => Ok(val),
+					Err(err) => {
+						let loc = span.loc(self.pkg);
+						Err(Signal::Error(err, vec![(String::new(), loc)]))
+					}
 				}
-			},
+			}
 			_ => panic!(),
 		}
 	}
 
-	// A callee with no named parameters rejects a name rather than binding it
-	// positionally.
-	fn positional_only(
+	fn bind_native_args(
 		&self,
 		span: Span,
+		params: &'static [NativeParam],
 		args: Vec<(Option<Sym>, Val)>,
 	) -> Result<Vec<Val>, Signal> {
-		let mut vals = Vec::with_capacity(args.len());
+		let arg_count = args.len();
+		let mut slots = vec![None; params.len()];
+		let mut next = 0;
 		for (name, val) in args {
-			match name {
+			let index = match name {
 				Some(name) => {
-					let loc = span.loc(self.pkg);
-					let name = self.syms.resolve(name).to_string();
-					return Err(Signal::Error(
-						Error::ArgumentError(ArgumentError::Unknown(name)),
-						vec![(String::new(), loc)],
-					));
+					let name = self.syms.resolve(name);
+					match params.iter().position(|param| param.name == name) {
+						Some(index) => index,
+						None => {
+							let loc = span.loc(self.pkg);
+							return Err(Signal::Error(
+								Error::ArgumentError(ArgumentError::Unknown(name.to_string())),
+								vec![(String::new(), loc)],
+							));
+						}
+					}
 				}
-				None => vals.push(val),
+				None => {
+					if next == params.len() {
+						let loc = span.loc(self.pkg);
+						return Err(Signal::Error(
+							Error::ArgumentError(ArgumentError::TooMany(arg_count, params.len())),
+							vec![(String::new(), loc)],
+						));
+					}
+					let index = next;
+					next += 1;
+					index
+				}
+			};
+			if slots[index].is_some() {
+				let loc = span.loc(self.pkg);
+				let name = params[index].name.to_string();
+				return Err(Signal::Error(
+					Error::ArgumentError(ArgumentError::Duplicate(name)),
+					vec![(String::new(), loc)],
+				));
 			}
+			slots[index] = Some(val);
 		}
-		Ok(vals)
+
+		let missing = params
+			.iter()
+			.zip(&slots)
+			.filter(|(param, slot)| slot.is_none() && param.default.is_none())
+			.map(|(param, _)| param.name.to_string())
+			.collect::<Vec<_>>();
+		if !missing.is_empty() {
+			let loc = span.loc(self.pkg);
+			return Err(Signal::Error(
+				Error::ArgumentError(ArgumentError::Missing(missing)),
+				vec![(String::new(), loc)],
+			));
+		}
+
+		Ok(params
+			.iter()
+			.zip(slots)
+			.map(|(param, slot)| match slot {
+				Some(val) => val,
+				None => (param.default.unwrap())(),
+			})
+			.collect())
 	}
 
 	// Every failure here is the caller's, so the errors carry the call site and

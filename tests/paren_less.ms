@@ -58,3 +58,19 @@ end
 
 $print(Tally().show)
 $print(Tally().n)
+
+#---
+
+#> 2
+#> 2
+#> 3
+#> 3
+#> 1
+#> 1
+
+$print("ab".size)
+$print("ab".size())
+$print([1, 2, 3].size)
+$print([1, 2, 3].size())
+$print({"a": 1}.size)
+$print({"a": 1}.size())
