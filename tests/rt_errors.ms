@@ -24,7 +24,7 @@ num()
 
 #---
 
-#! rt_errors.ms:33,7: runtime error: wrong number of args; have 1, want 2
+#! rt_errors.ms:33,7: runtime error: missing arg 'b'
 #! 	at <main> (rt_errors.ms:33,7)
 
 def either(a, b)
@@ -77,7 +77,7 @@ $unknown(1)
 
 #---
 
-#! rt_errors.ms:86,1: runtime error: wrong number of args; have 0, want 1
+#! rt_errors.ms:86,1: runtime error: missing arg 'a'
 #! 	at <main> (rt_errors.ms:86,1)
 
 def one(a)
@@ -116,3 +116,22 @@ type Greeter
 end
 
 Greeter().rename()
+
+#---
+
+#! rt_errors.ms:128,5: runtime error: too many args; have 3, want at most 2
+#! 	at <main> (rt_errors.ms:128,5)
+
+def pair(a, b)
+	b
+end
+pair(1, 2, 3)
+
+#---
+
+#! rt_errors.ms:137,9: runtime error: missing arg 'unit'
+#! 	at <main> (rt_errors.ms:137,9)
+
+type Distance(amount, unit)
+end
+Distance(45.7)

@@ -34,7 +34,10 @@ pub enum ProtocolError {
 
 #[derive(Debug)]
 pub enum ArgumentError {
-	WrongCount(usize, usize),
+	Missing(String),
+	TooMany(usize, usize),
+	Unknown(String),
+	Duplicate(String),
 }
 
 #[derive(Debug)]
@@ -84,9 +87,12 @@ impl Display for ProtocolError {
 impl Display for ArgumentError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::WrongCount(have, want) => {
-				write!(f, "wrong number of args; have {}, want {}", have, want)
+			Self::Missing(name) => write!(f, "missing arg '{}'", name),
+			Self::TooMany(have, want) => {
+				write!(f, "too many args; have {}, want at most {}", have, want)
 			}
+			Self::Unknown(name) => write!(f, "no param named '{}'", name),
+			Self::Duplicate(name) => write!(f, "arg '{}' given twice", name),
 		}
 	}
 }
@@ -933,12 +939,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								let type_id = *type_id;
 								let typ = self.types.get_user_type(type_id);
 								if args.len() != typ.ctor_fields.len() {
+									let err = if args.len() > typ.ctor_fields.len() {
+										ArgumentError::TooMany(args.len(), typ.ctor_fields.len())
+									} else {
+										let name = *typ.ctor_fields.get_index(args.len()).unwrap();
+										ArgumentError::Missing(self.syms.resolve(name).to_string())
+									};
 									let loc = span.loc(self.pkg);
 									return Err(Signal::Error(
-										Error::ArgumentError(ArgumentError::WrongCount(
-											args.len(),
-											typ.ctor_fields.len(),
-										)),
+										Error::ArgumentError(err),
 										vec![(String::new(), loc)],
 									));
 								}
@@ -989,7 +998,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										} else {
 											let loc = span.loc(self.pkg);
 											Err(Signal::Error(
-												Error::ArgumentError(ArgumentError::WrongCount(
+												Error::ArgumentError(ArgumentError::TooMany(
 													args.len(),
 													0,
 												)),
@@ -1016,12 +1025,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							Method::Native(recv, _name, meth) => {
 								if args.len() != meth.params.len() {
+									let err = if args.len() > meth.params.len() {
+										ArgumentError::TooMany(args.len(), meth.params.len())
+									} else {
+										let name = meth.params[args.len()].name;
+										ArgumentError::Missing(name.to_string())
+									};
 									let loc = span.loc(self.pkg);
 									Err(Signal::Error(
-										Error::ArgumentError(ArgumentError::WrongCount(
-											args.len(),
-											meth.params.len(),
-										)),
+										Error::ArgumentError(err),
 										vec![(String::new(), loc)],
 									))
 								} else {
@@ -1464,18 +1476,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let rf = rf.clone();
 		let span = chunk.get_expr_span(expr_id);
 
-		let arity = match &*rf.borrow() {
-			Obj::Proc(proc) => proc.params.len(),
-			Obj::Method(Method::User(_, proc)) => proc.borrow().params.len(),
-			Obj::Method(Method::Native(_, _, meth)) => meth.params.len(),
+		let missing = match &*rf.borrow() {
+			Obj::Proc(proc) => proc
+				.params
+				.first()
+				.map(|param| self.syms.resolve(*param).to_string()),
+			Obj::Method(Method::User(_, proc)) => proc
+				.borrow()
+				.params
+				.first()
+				.map(|param| self.syms.resolve(*param).to_string()),
+			Obj::Method(Method::Native(_, _, meth)) => {
+				meth.params.first().map(|param| param.name.to_string())
+			}
 			_ => return Ok(val),
 		};
 
 		// Used in an invoking position but requires arguments; error.
-		if arity != 0 {
+		if let Some(name) = missing {
 			let loc = span.loc(self.pkg);
 			return Err(Signal::Error(
-				Error::ArgumentError(ArgumentError::WrongCount(0, arity)),
+				Error::ArgumentError(ArgumentError::Missing(name)),
 				vec![(String::new(), loc)],
 			));
 		}
@@ -1504,9 +1525,15 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		args: Vec<Val>,
 	) -> Result<Val, Signal> {
 		if args.len() != proc.params.len() {
+			let err = if args.len() > proc.params.len() {
+				ArgumentError::TooMany(args.len(), proc.params.len())
+			} else {
+				let name = proc.params[args.len()];
+				ArgumentError::Missing(self.syms.resolve(name).to_string())
+			};
 			let loc = span.loc(self.pkg);
 			return Err(Signal::Error(
-				Error::ArgumentError(ArgumentError::WrongCount(args.len(), proc.params.len())),
+				Error::ArgumentError(err),
 				vec![(String::new(), loc)],
 			));
 		}
