@@ -65,7 +65,7 @@ $print(1 2)
 
 #---
 
-#! rt_errors.ms:70,6: syntax error: unexpected char '@'
+#! rt_errors.ms:70,6: syntax error: unexpected character '@'
 
 x := @
 

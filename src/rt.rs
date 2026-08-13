@@ -160,6 +160,9 @@ impl Bool {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct Char(char);
+
+#[derive(Debug, Clone, Copy)]
 struct Nil;
 
 impl Nil {
@@ -172,6 +175,7 @@ impl Nil {
 enum Val {
 	Num(Num),
 	Bool(Bool),
+	Char(Char),
 	Obj(Rc<RefCell<Obj>>),
 	Nil(Nil),
 }
@@ -181,6 +185,7 @@ impl Val {
 		match self {
 			Val::Num(_) => TypeId::Native(NativeTypeId::NUM),
 			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
+			Val::Char(_) => TypeId::Native(NativeTypeId::CHAR),
 			Val::Obj(rf) => rf.borrow().type_id(),
 			Self::Nil(_) => TypeId::Native(NativeTypeId::NIL),
 		}
@@ -258,6 +263,7 @@ impl PartialEq for Val {
 		match (self, other) {
 			(Self::Num(num), Self::Num(other_num)) => num.0 == other_num.0,
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool.0 == other_bool.0,
+			(Self::Char(char), Self::Char(other_char)) => char.0 == other_char.0,
 			(Self::Obj(rf), Self::Obj(other_rf)) => match (&*rf.borrow(), &*other_rf.borrow()) {
 				(Obj::Str(str), Obj::Str(other_str)) => str.chars == other_str.chars,
 				_ => rf.as_ptr() == other_rf.as_ptr(),
@@ -275,6 +281,7 @@ impl Hash for Val {
 		match self {
 			Self::Num(num) => num.0.to_bits().hash(state),
 			Self::Bool(bool) => bool.0.hash(state),
+			Self::Char(char) => char.0.hash(state),
 			Self::Obj(rf) => match &*rf.borrow() {
 				Obj::Str(str) => str.chars.hash(state),
 				_ => rf.as_ptr().hash(state),
@@ -473,6 +480,7 @@ const CORE_TYPES: &[(
 	("Nil", NativeTypeId::NIL, Some(Nil::new), &[]),
 	("Num", NativeTypeId::NUM, Some(Num::new), &[]),
 	("Bool", NativeTypeId::BOOL, Some(Bool::new), &[]),
+	("Char", NativeTypeId::CHAR, None, &[]),
 	(
 		"Str",
 		NativeTypeId::STR,
@@ -509,11 +517,12 @@ impl NativeTypeId {
 	const NIL: NativeTypeId = NativeTypeId(0);
 	const NUM: NativeTypeId = NativeTypeId(1);
 	const BOOL: NativeTypeId = NativeTypeId(2);
-	const STR: NativeTypeId = NativeTypeId(3);
-	const LIST: NativeTypeId = NativeTypeId(4);
-	const DICT: NativeTypeId = NativeTypeId(5);
-	const PROC: NativeTypeId = NativeTypeId(6);
-	const TYPE: NativeTypeId = NativeTypeId(7);
+	const CHAR: NativeTypeId = NativeTypeId(3);
+	const STR: NativeTypeId = NativeTypeId(4);
+	const LIST: NativeTypeId = NativeTypeId(5);
+	const DICT: NativeTypeId = NativeTypeId(6);
+	const PROC: NativeTypeId = NativeTypeId(7);
+	const TYPE: NativeTypeId = NativeTypeId(8);
 }
 
 struct TypeRegistry {
@@ -1344,6 +1353,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Lit::Str(str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
 					chars: Box::from(str.as_str()),
 				})))),
+				Lit::Char(char) => Val::Char(Char(*char)),
 				Lit::Num(num) => Val::Num(Num(*num)),
 				Lit::Bool(bool) => Val::Bool(Bool(*bool)),
 				Lit::List(item_ids) => {
@@ -1765,6 +1775,7 @@ fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num.0),
 		Val::Bool(bool) => format!("{}", bool.0),
+		Val::Char(char) => format!("{}", char.0),
 		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
 		Val::Nil(_) => String::from("nil"),
 	}
@@ -1863,6 +1874,7 @@ fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 
 fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
+		Val::Char(char) => format!("'{}'", char.0),
 		Val::Obj(rf) => match &*rf.borrow() {
 			Obj::Str(str) => format!("\"{}\"", str.chars),
 			obj => rt_print_obj(syms, types, obj),

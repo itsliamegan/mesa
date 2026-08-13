@@ -8,7 +8,9 @@ pub enum Error {
 	UnexpectedChar(Location, char),
 	UnexpectedToken(Location, TokenTag),
 	UnterminatedStrLit(Location),
-	UnknownStrEsc(Location, char),
+	UnterminatedCharLit(Location),
+	MultiCharLit(Location),
+	UnknownEsc(Location, char),
 	UnknownBuiltin(Location, String),
 	PositionalAfterKeyword(Location),
 }
@@ -19,7 +21,9 @@ impl Error {
 			Self::UnexpectedChar(loc, _) => loc,
 			Self::UnexpectedToken(loc, _) => loc,
 			Self::UnterminatedStrLit(loc) => loc,
-			Self::UnknownStrEsc(loc, _) => loc,
+			Self::UnterminatedCharLit(loc) => loc,
+			Self::MultiCharLit(loc) => loc,
+			Self::UnknownEsc(loc, _) => loc,
 			Self::UnknownBuiltin(loc, _) => loc,
 			Self::PositionalAfterKeyword(loc) => loc,
 		}
@@ -30,13 +34,15 @@ impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		write!(f, "{}: syntax error: ", self.loc())?;
 		match self {
-			Self::UnexpectedChar(_, char) => write!(f, "unexpected char '{}'", char),
+			Self::UnexpectedChar(_, char) => write!(f, "unexpected character '{}'", char),
 			Self::UnexpectedToken(_, tag) => write!(f, "unexpected token {}", tag.name()),
 			Self::UnterminatedStrLit(_) => write!(f, "unterminated string literal"),
-			Self::UnknownStrEsc(_, esc) => write!(f, "unknown escape sequence '\\{}'", esc),
+			Self::UnterminatedCharLit(_) => write!(f, "unterminated character literal"),
+			Self::MultiCharLit(_) => write!(f, "character literal must hold exactly one character"),
+			Self::UnknownEsc(_, esc) => write!(f, "unknown escape sequence '\\{}'", esc),
 			Self::UnknownBuiltin(_, builtin) => write!(f, "unknown builtin '{}'", builtin),
 			Self::PositionalAfterKeyword(_) => {
-				write!(f, "positional arg after keyword arg")
+				write!(f, "positional argument after keyword argument")
 			}
 		}
 	}
@@ -194,6 +200,7 @@ pub enum TokenTag {
 	Ident,
 	Builtin,
 	Str,
+	Char,
 	Num,
 	Bool,
 	Nil,
@@ -252,6 +259,7 @@ impl TokenTag {
 			TokenTag::Ident => "IDENT",
 			TokenTag::Builtin => "BUILTIN",
 			TokenTag::Str => "STR",
+			TokenTag::Char => "CHAR",
 			TokenTag::Num => "NUM",
 			TokenTag::Bool => "BOOL",
 			TokenTag::Nil => "NIL",
@@ -631,6 +639,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				})
 			}
 			b'"' => self.lex_str(),
+			b'\'' => self.lex_char(),
 			b'$' => self.lex_builtin(),
 			char => {
 				if char.is_ascii_alphabetic() || char == b'_' {
@@ -725,6 +734,29 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		Ok(Token {
 			src: self.src.id,
 			tag: TokenTag::Str,
+			sym: None,
+			pos,
+			end: self.pos,
+		})
+	}
+
+	fn lex_char(&mut self) -> Result<Token, Error> {
+		let pos = self.pos;
+		self.pos += 1;
+		while self.pos < self.src.len() && self.src[self.pos] != b'\'' {
+			if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
+				self.pos += 2;
+			} else {
+				self.pos += 1;
+			}
+		}
+		if self.pos == self.src.len() {
+			return Err(Error::UnterminatedCharLit(self.src.loc(pos)));
+		}
+		self.pos += 1;
+		Ok(Token {
+			src: self.src.id,
+			tag: TokenTag::Char,
 			sym: None,
 			pos,
 			end: self.pos,
@@ -950,6 +982,7 @@ pub enum UnaryOp {
 #[derive(Debug)]
 pub enum Lit {
 	Str(String),
+	Char(char),
 	Num(f64),
 	Bool(bool),
 	List(Vec<ExprId>),
@@ -1086,6 +1119,7 @@ fn terminates_expr(tag: TokenTag) -> bool {
 		TokenTag::End => true,
 		TokenTag::Ident => true,
 		TokenTag::Str => true,
+		TokenTag::Char => true,
 		TokenTag::Num => true,
 		TokenTag::Bool => true,
 		TokenTag::Nil => true,
@@ -1453,6 +1487,7 @@ impl<'src> Parser<'src> {
 			TokenTag::Ident => self.parse_name_expr(),
 			TokenTag::Builtin => self.parse_builtin_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),
+			TokenTag::Char => self.parse_char_lit_expr(),
 			TokenTag::Num => self.parse_num_lit_expr(),
 			TokenTag::Bool => self.parse_bool_lit_expr(),
 			TokenTag::LBrack => self.parse_list_lit_expr(),
@@ -1573,20 +1608,41 @@ impl<'src> Parser<'src> {
 
 	fn parse_str_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Str)?;
+		let str = self.unescape_quoted_lit(&tok, b'"')?;
+		let expr = Expr::Lit(Lit::Str(str));
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
+	fn parse_char_lit_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Char)?;
+		let str = self.unescape_quoted_lit(&tok, b'\'')?;
+		let mut chars = str.chars();
+		let char = match chars.next() {
+			Some(char) if chars.next().is_none() => char,
+			_ => return Err(Error::MultiCharLit(self.src.loc(tok.pos))),
+		};
+		let expr = Expr::Lit(Lit::Char(char));
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
+	fn unescape_quoted_lit(&self, tok: &Token, quote: u8) -> Result<String, Error> {
 		let mut pos = tok.pos + 1;
 		let mut str = String::with_capacity(tok.end - tok.pos);
 		let mut chunk_pos = pos;
 		while pos < tok.end - 1 {
 			if self.src[pos] == b'\\' {
 				str.push_str(&self.src[chunk_pos..pos]);
-				match self.src[pos + 1] {
+				let esc = self.src[pos + 1];
+				match esc {
 					b'n' => str.push('\n'),
 					b't' => str.push('\t'),
-					b'"' => str.push('"'),
 					b'\\' => str.push('\\'),
+					esc if esc == quote => str.push(quote as char),
 					_ => {
 						let char = self.src[pos..self.src.len()].chars().next().unwrap();
-						return Err(Error::UnknownStrEsc(self.src.loc(pos), char));
+						return Err(Error::UnknownEsc(self.src.loc(pos), char));
 					}
 				}
 				pos += 2;
@@ -1596,9 +1652,7 @@ impl<'src> Parser<'src> {
 			}
 		}
 		str.push_str(&self.src[chunk_pos..pos]);
-		let expr = Expr::Lit(Lit::Str(str));
-		let expr_id = self.chunk.add_expr(tok.into(), expr);
-		Ok(expr_id)
+		Ok(str)
 	}
 
 	fn parse_num_lit_expr(&mut self) -> Result<ExprId, Error> {
