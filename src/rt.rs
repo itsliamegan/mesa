@@ -333,7 +333,16 @@ impl Str {
 		let Obj::Str(str) = &*rf.borrow() else {
 			panic!()
 		};
-		Ok(Val::Num(Num(str.chars.len() as f64)))
+		Ok(Val::Num(Num(str.chars.chars().count() as f64)))
+	}
+
+	fn chars(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+		let Val::Obj(rf) = val else { panic!() };
+		let Obj::Str(str) = &*rf.borrow() else {
+			panic!()
+		};
+		let items = str.chars.chars().map(|c| Val::Char(Char(c))).collect();
+		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
 	}
 }
 
@@ -485,7 +494,7 @@ const CORE_TYPES: &[(
 		"Str",
 		NativeTypeId::STR,
 		Some(Str::new),
-		&[("size", &[], Str::size)],
+		&[("size", &[], Str::size), ("chars", &[], Str::chars)],
 	),
 	(
 		"List",
