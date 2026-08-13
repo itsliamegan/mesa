@@ -174,3 +174,46 @@ needs()
 type Ctor(a, b: nope)
 end
 Ctor(1)
+
+#---
+
+#! rt_errors.ms:183,17: runtime error: index -1 is out of bounds
+#! 	at <main> (rt_errors.ms:183,17)
+
+$print([1, 2, 3][-1])
+
+#---
+
+#! rt_errors.ms:190,17: runtime error: index 1.7 is not a whole number
+#! 	at <main> (rt_errors.ms:190,17)
+
+$print([1, 2, 3][1.7])
+
+#---
+
+#! rt_errors.ms:197,17: runtime error: index 3 is out of bounds
+#! 	at <main> (rt_errors.ms:197,17)
+
+$print([1, 2, 3][3])
+
+#---
+
+#! rt_errors.ms:205,8: runtime error: index -1 is out of bounds
+#! 	at <main> (rt_errors.ms:205,8)
+
+xs := [1, 2, 3]
+xs[-1] := 0
+
+#---
+
+#! rt_errors.ms:212,17: runtime error: index a is not a number
+#! 	at <main> (rt_errors.ms:212,17)
+
+$print([1, 2, 3]["a"])
+
+#---
+
+#! rt_errors.ms:219,16: runtime error: key "b" not found
+#! 	at <main> (rt_errors.ms:219,16)
+
+$print({"a": 1}["b"])

@@ -57,7 +57,7 @@ pub enum MemberError {
 
 #[derive(Debug)]
 pub enum IndexError {
-	OutOfRange(usize),
+	OutOfRange(f64),
 	NonIntegral(f64),
 }
 
@@ -1069,40 +1069,20 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
-						let idx = match self.eval_expr(chunk, *key_id)? {
-							Val::Num(num) => {
-								if num.0.fract() <= 1e-10 {
-									num.0.trunc() as usize
-								} else {
-									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-									return Err(Signal::Error(
-										Error::IndexError(IndexError::NonIntegral(num.0)),
-										vec![(String::new(), loc)],
-									));
-								}
-							}
-							val => {
-								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-								return Err(Signal::Error(
-									Error::TypeError(TypeError::IndexNonNum(rt_print_val(
-										self.syms,
-										&self.types,
-										&val,
-									))),
-									vec![(String::new(), loc)],
-								));
-							}
-						};
-						match list.items.get(idx) {
-							Some(val) => Ok(val.clone()),
-							None => Ok(Val::Nil(Nil)),
-						}
+						let idx = self.eval_index(chunk, expr_id, *key_id, list.items.len())?;
+						Ok(list.items[idx].clone())
 					}
 					Obj::Dict(dict) => {
 						let key = self.eval_expr(chunk, *key_id)?;
 						match dict.pairs.get(&key) {
 							Some(val) => Ok(val.clone()),
-							None => Ok(Val::Nil(Nil)),
+							None => {
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								Err(Signal::Error(
+									Error::KeyError(rt_debug_val(self.syms, &self.types, &key)),
+									vec![(String::new(), loc)],
+								))
+							}
 						}
 					}
 					obj => {
@@ -1187,41 +1167,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						match &target {
 							Val::Obj(rf) => match &mut *rf.borrow_mut() {
 								Obj::List(list) => {
-									let idx = match self.eval_expr(chunk, *key_id)? {
-										Val::Num(num) => {
-											if num.0.fract() <= 1e-10 {
-												num.0.trunc() as usize
-											} else {
-												let loc =
-													chunk.get_expr_span(expr_id).loc(self.pkg);
-												return Err(Signal::Error(
-													Error::IndexError(IndexError::NonIntegral(
-														num.0,
-													)),
-													vec![(String::new(), loc)],
-												));
-											}
-										}
-										val => {
-											let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-											return Err(Signal::Error(
-												Error::TypeError(TypeError::IndexNonNum(
-													rt_print_val(self.syms, &self.types, &val),
-												)),
-												vec![(String::new(), loc)],
-											));
-										}
-									};
-									if idx < list.items.len() {
-										list.items[idx] = val.clone();
-										Ok(val)
-									} else {
-										let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-										Err(Signal::Error(
-											Error::IndexError(IndexError::OutOfRange(idx)),
-											vec![(String::new(), loc)],
-										))
-									}
+									let idx =
+										self.eval_index(chunk, expr_id, *key_id, list.items.len())?;
+									list.items[idx] = val.clone();
+									Ok(val)
 								}
 								Obj::Dict(dict) => {
 									let key = self.eval_expr(chunk, *key_id)?;
@@ -1459,6 +1408,47 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				vec![(String::new(), loc)],
 			))
 		}
+	}
+
+	fn eval_index(
+		&mut self,
+		chunk: &Chunk,
+		expr_id: ExprId,
+		key_id: ExprId,
+		len: usize,
+	) -> Result<usize, Signal> {
+		let num = match self.eval_expr(chunk, key_id)? {
+			Val::Num(num) => num.0,
+			val => {
+				let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+				return Err(Signal::Error(
+					Error::TypeError(TypeError::IndexNonNum(rt_print_val(
+						self.syms,
+						&self.types,
+						&val,
+					))),
+					vec![(String::new(), loc)],
+				));
+			}
+		};
+
+		if num != num.trunc() {
+			let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+			return Err(Signal::Error(
+				Error::IndexError(IndexError::NonIntegral(num)),
+				vec![(String::new(), loc)],
+			));
+		}
+
+		if num < 0.0 || num >= len as f64 {
+			let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+			return Err(Signal::Error(
+				Error::IndexError(IndexError::OutOfRange(num)),
+				vec![(String::new(), loc)],
+			));
+		}
+
+		Ok(num as usize)
 	}
 
 	fn invoke_or_return(
