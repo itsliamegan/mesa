@@ -46,6 +46,7 @@ test_files! {
 	test_explicit_returns => "returns.ms",
 	test_keyword_args_and_defaults => "kwargs.ms",
 	test_reports_syntax_errors => "syn_errors.ms",
+	test_reports_param_order => "sem_error_params.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {
