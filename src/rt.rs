@@ -1485,15 +1485,19 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let rf = rf.clone();
 		let span = chunk.get_expr_span(expr_id);
 
+		// Required params precede defaulted ones, so the first param alone says
+		// whether this needs any arguments.
 		let missing = match &*rf.borrow() {
 			Obj::Proc(proc) => proc
 				.params
 				.first()
+				.filter(|param| param.1.is_none())
 				.map(|param| self.syms.resolve(param.0).to_string()),
 			Obj::Method(Method::User(_, proc)) => proc
 				.borrow()
 				.params
 				.first()
+				.filter(|param| param.1.is_none())
 				.map(|param| self.syms.resolve(param.0).to_string()),
 			Obj::Method(Method::Native(_, _, meth)) => {
 				meth.params.first().map(|param| param.name.to_string())

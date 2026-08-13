@@ -33,3 +33,28 @@ $print(six)
 b := Box(9)
 $print(b.get)
 $print(b.get())
+
+#---
+
+#> 7
+#> 7
+#> 20
+#> 12
+#> 12
+
+def defaulted(a: 7)
+	a
+end
+
+$print(defaulted)
+$print(defaulted())
+$print(defaulted(20))
+
+type Tally(n: 12)
+	def show(by: 0)
+		n + by
+	end
+end
+
+$print(Tally().show)
+$print(Tally().n)
