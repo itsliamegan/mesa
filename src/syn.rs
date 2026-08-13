@@ -805,10 +805,13 @@ pub enum ModuleItem {
 }
 
 #[derive(Debug)]
-pub struct Type(pub Sym, pub Vec<Sym>, pub Vec<TypeItemId>);
+pub struct Type(pub Sym, pub Vec<Param>, pub Vec<TypeItemId>);
 
 #[derive(Debug)]
-pub struct Def(pub Sym, pub Vec<Sym>, pub BlockId);
+pub struct Def(pub Sym, pub Vec<Param>, pub BlockId);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Param(pub Sym, pub Option<ExprId>);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TypeItemId(u32);
@@ -1155,22 +1158,7 @@ impl<'src> Parser<'src> {
 				last as char,
 			));
 		}
-		let mut fields = Vec::new();
-		if self.tag() == TokenTag::LParen {
-			self.take(TokenTag::LParen)?;
-			while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
-				let field = self.take(TokenTag::Ident)?.sym.unwrap();
-				fields.push(field);
-				match self.tag() {
-					TokenTag::Comma => {
-						self.cur = self.cur.next();
-					}
-					TokenTag::RParen => {}
-					_ => return Err(self.unexpected()),
-				}
-			}
-			self.take(TokenTag::RParen)?;
-		}
+		let fields = self.parse_params()?;
 		let mut items = Vec::new();
 		let mut seen_method = false;
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
@@ -1223,22 +1211,7 @@ impl<'src> Parser<'src> {
 		} else {
 			self.take(TokenTag::Ident)?.sym.unwrap()
 		};
-		let mut params = Vec::new();
-		if self.tag() == TokenTag::LParen {
-			self.take(TokenTag::LParen)?;
-			while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
-				let param = self.take(TokenTag::Ident)?.sym.unwrap();
-				params.push(param);
-				match self.tag() {
-					TokenTag::Comma => {
-						self.cur = self.cur.next();
-					}
-					TokenTag::RParen => {}
-					_ => return Err(self.unexpected()),
-				}
-			}
-			self.take(TokenTag::RParen)?;
-		}
+		let params = self.parse_params()?;
 		let mut body = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			let expr_id = self.parse_expr()?;
@@ -1260,22 +1233,7 @@ impl<'src> Parser<'src> {
 	fn parse_def_decl(&mut self) -> Result<ModuleItemId, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
-		let mut params = Vec::new();
-		if self.tag() == TokenTag::LParen {
-			self.take(TokenTag::LParen)?;
-			while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
-				let param = self.take(TokenTag::Ident)?.sym.unwrap();
-				params.push(param);
-				match self.tag() {
-					TokenTag::Comma => {
-						self.cur = self.cur.next();
-					}
-					TokenTag::RParen => {}
-					_ => return Err(self.unexpected()),
-				}
-			}
-			self.take(TokenTag::RParen)?;
-		}
+		let params = self.parse_params()?;
 		let mut body = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			let expr_id = self.parse_expr()?;
@@ -1286,6 +1244,27 @@ impl<'src> Parser<'src> {
 		let item = ModuleItem::Def(Def(name, params, block));
 		let item_id = self.chunk.add_module_item(tok.into(), item);
 		Ok(item_id)
+	}
+
+	fn parse_params(&mut self) -> Result<Vec<Param>, Error> {
+		let mut params = Vec::new();
+		if self.tag() != TokenTag::LParen {
+			return Ok(params);
+		}
+		self.take(TokenTag::LParen)?;
+		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
+			let name = self.take(TokenTag::Ident)?.sym.unwrap();
+			params.push(Param(name, None));
+			match self.tag() {
+				TokenTag::Comma => {
+					self.cur = self.cur.next();
+				}
+				TokenTag::RParen => {}
+				_ => return Err(self.unexpected()),
+			}
+		}
+		self.take(TokenTag::RParen)?;
+		Ok(params)
 	}
 
 	fn parse_expr(&mut self) -> Result<ExprId, Error> {

@@ -5,14 +5,14 @@ use std::fmt::{self, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use ordermap::{OrderMap, OrderSet};
+use ordermap::OrderMap;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each, Expr,
-	ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Place, Return, Script, Span,
-	TypeItem, Unary, UnaryOp, When,
+	ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Param, Place, Return, Script,
+	Span, TypeItem, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -365,7 +365,7 @@ impl Dict {
 #[derive(Debug)]
 struct Proc {
 	name: Sym,
-	params: Vec<Sym>,
+	params: Vec<Param>,
 	body: BlockId,
 	chunk: ChunkId,
 	scope: Rc<RefCell<Scope>>,
@@ -383,7 +383,7 @@ struct UserTypeId(u32);
 #[derive(Debug)]
 struct UserType {
 	name: Sym,
-	ctor_fields: OrderSet<Sym, FxBuildHasher>,
+	ctor_fields: Vec<Param>,
 	body_fields: OrderMap<Sym, ExprId, FxBuildHasher>,
 	chunk: ChunkId,
 	methods: FxHashMap<Sym, Rc<RefCell<Proc>>>,
@@ -393,7 +393,7 @@ struct UserType {
 
 impl UserType {
 	fn has_member(&self, name: Sym) -> bool {
-		self.ctor_fields.contains(&name)
+		self.ctor_fields.iter().any(|param| param.0 == name)
 			|| self.body_fields.contains_key(&name)
 			|| self.methods.contains_key(&name)
 	}
@@ -781,11 +781,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			ModuleItem::Type(syn::Type(name, ctor_field_names, items)) => {
 				let mut methods = FxHashMap::default();
 				let mut statics = FxHashMap::default();
-				let mut ctor_fields =
-					OrderSet::with_capacity_and_hasher(ctor_field_names.len(), FxBuildHasher);
-				for field in ctor_field_names {
-					ctor_fields.insert(*field);
-				}
+				let ctor_fields = ctor_field_names.to_vec();
 				let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
 				for item_id in items {
 					match chunk.get_type_item(*item_id) {
@@ -942,7 +938,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									let err = if args.len() > typ.ctor_fields.len() {
 										ArgumentError::TooMany(args.len(), typ.ctor_fields.len())
 									} else {
-										let name = *typ.ctor_fields.get_index(args.len()).unwrap();
+										let name = typ.ctor_fields[args.len()].0;
 										ArgumentError::Missing(self.syms.resolve(name).to_string())
 									};
 									let loc = span.loc(self.pkg);
@@ -953,7 +949,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 								let mut fields = FxHashMap::default();
 								for (field, val) in typ.ctor_fields.iter().zip(args) {
-									fields.insert(*field, val);
+									fields.insert(field.0, val);
 								}
 								let body_fields = typ.body_fields.clone();
 								let type_scope = typ.scope.clone();
@@ -1480,12 +1476,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Obj::Proc(proc) => proc
 				.params
 				.first()
-				.map(|param| self.syms.resolve(*param).to_string()),
+				.map(|param| self.syms.resolve(param.0).to_string()),
 			Obj::Method(Method::User(_, proc)) => proc
 				.borrow()
 				.params
 				.first()
-				.map(|param| self.syms.resolve(*param).to_string()),
+				.map(|param| self.syms.resolve(param.0).to_string()),
 			Obj::Method(Method::Native(_, _, meth)) => {
 				meth.params.first().map(|param| param.name.to_string())
 			}
@@ -1528,7 +1524,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			let err = if args.len() > proc.params.len() {
 				ArgumentError::TooMany(args.len(), proc.params.len())
 			} else {
-				let name = proc.params[args.len()];
+				let name = proc.params[args.len()].0;
 				ArgumentError::Missing(self.syms.resolve(name).to_string())
 			};
 			let loc = span.loc(self.pkg);
@@ -1543,7 +1539,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			tier: Tier::Local,
 		};
 		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-			scope.locals.insert(*param, arg);
+			scope.locals.insert(param.0, arg);
 		}
 		let saved_inst = self.inst.clone();
 		self.inst = inst;
@@ -1640,7 +1636,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 				let mut res = String::new();
 				res.push_str(&format!("type {}(", name));
 				for (i, field) in typ.ctor_fields.iter().enumerate() {
-					let field = syms.resolve(*field);
+					let field = syms.resolve(field.0);
 					res.push_str(field);
 					if i + 1 != typ.ctor_fields.len() {
 						res.push_str(", ");
@@ -1660,8 +1656,8 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let name = syms.resolve(typ.name);
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
-			for (i, name) in typ.ctor_fields.iter().enumerate() {
-				let val = inst.fields.get(name).unwrap();
+			for (i, field) in typ.ctor_fields.iter().enumerate() {
+				let val = inst.fields.get(&field.0).unwrap();
 				res.push_str(&rt_print_val(syms, types, val));
 				if i + 1 != typ.ctor_fields.len() {
 					res.push_str(", ");
@@ -1684,7 +1680,7 @@ fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	let name = syms.resolve(proc.name);
 	res.push_str(&format!("def {}(", name));
 	for (i, param) in proc.params.iter().enumerate() {
-		let param = syms.resolve(*param);
+		let param = syms.resolve(param.0);
 		res.push_str(param);
 		if i + 1 != proc.params.len() {
 			res.push_str(", ");
