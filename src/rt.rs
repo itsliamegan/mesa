@@ -34,7 +34,7 @@ pub enum ProtocolError {
 
 #[derive(Debug)]
 pub enum ArgumentError {
-	Missing(String),
+	Missing(Vec<String>),
 	TooMany(usize, usize),
 	Unknown(String),
 	Duplicate(String),
@@ -87,7 +87,15 @@ impl Display for ProtocolError {
 impl Display for ArgumentError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::Missing(name) => write!(f, "missing arg '{}'", name),
+			Self::Missing(names) => {
+				let noun = if names.len() == 1 { "arg" } else { "args" };
+				let names = names
+					.iter()
+					.map(|name| format!("'{}'", name))
+					.collect::<Vec<_>>()
+					.join(", ");
+				write!(f, "missing {} {}", noun, names)
+			}
 			Self::TooMany(have, want) => {
 				write!(f, "too many args; have {}, want at most {}", have, want)
 			}
@@ -916,9 +924,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Call(Call(val_id, arg_nodes)) => {
 				let span = chunk.get_expr_span(expr_id);
 				let mut args = Vec::with_capacity(arg_nodes.len());
-				for Arg(_, arg_id) in arg_nodes {
+				for Arg(name, arg_id) in arg_nodes {
 					let arg = self.eval_expr(chunk, *arg_id)?;
-					args.push(arg);
+					args.push((*name, arg));
 				}
 				let callee = match chunk.get_expr(*val_id) {
 					Expr::Name(Name(name)) => self.eval_name_raw(chunk, *val_id, *name)?,
@@ -933,13 +941,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_id) => {
 								let type_id = *type_id;
+								let args = self.positional_only(span, args)?;
 								let typ = self.types.get_user_type(type_id);
 								if args.len() != typ.ctor_fields.len() {
 									let err = if args.len() > typ.ctor_fields.len() {
 										ArgumentError::TooMany(args.len(), typ.ctor_fields.len())
 									} else {
 										let name = typ.ctor_fields[args.len()].0;
-										ArgumentError::Missing(self.syms.resolve(name).to_string())
+										ArgumentError::Missing(vec![
+											self.syms.resolve(name).to_string(),
+										])
 									};
 									let loc = span.loc(self.pkg);
 									return Err(Signal::Error(
@@ -986,6 +997,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								Ok(Val::Obj(inst_rc))
 							}
 							TypeId::Native(type_id) => {
+								let args = self.positional_only(span, args)?;
 								let typ = self.types.get_native_type(*type_id);
 								match typ.new {
 									Some(new) => {
@@ -1020,12 +1032,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), args)
 							}
 							Method::Native(recv, _name, meth) => {
+								let args = self.positional_only(span, args)?;
 								if args.len() != meth.params.len() {
 									let err = if args.len() > meth.params.len() {
 										ArgumentError::TooMany(args.len(), meth.params.len())
 									} else {
 										let name = meth.params[args.len()].name;
-										ArgumentError::Missing(name.to_string())
+										ArgumentError::Missing(vec![name.to_string()])
 									};
 									let loc = span.loc(self.pkg);
 									Err(Signal::Error(
@@ -1492,7 +1505,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		if let Some(name) = missing {
 			let loc = span.loc(self.pkg);
 			return Err(Signal::Error(
-				Error::ArgumentError(ArgumentError::Missing(name)),
+				Error::ArgumentError(ArgumentError::Missing(vec![name])),
 				vec![(String::new(), loc)],
 			));
 		}
@@ -1513,38 +1526,147 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
+	// A callee with no named parameters rejects a name rather than binding it
+	// positionally.
+	fn positional_only(
+		&self,
+		span: Span,
+		args: Vec<(Option<Sym>, Val)>,
+	) -> Result<Vec<Val>, Signal> {
+		let mut vals = Vec::with_capacity(args.len());
+		for (name, val) in args {
+			match name {
+				Some(name) => {
+					let loc = span.loc(self.pkg);
+					let name = self.syms.resolve(name).to_string();
+					return Err(Signal::Error(
+						Error::ArgumentError(ArgumentError::Unknown(name)),
+						vec![(String::new(), loc)],
+					));
+				}
+				None => vals.push(val),
+			}
+		}
+		Ok(vals)
+	}
+
+	// Every failure here is the caller's, so the errors carry the call site and
+	// no callee frame.
+	fn slot_args(
+		&self,
+		span: Span,
+		params: &[Param],
+		args: Vec<(Option<Sym>, Val)>,
+	) -> Result<Vec<Option<Val>>, Signal> {
+		let arg_count = args.len();
+		let mut slots = vec![None; params.len()];
+		let mut next = 0;
+		for (name, val) in args {
+			let index = match name {
+				Some(name) => match params.iter().position(|param| param.0 == name) {
+					Some(index) => index,
+					None => {
+						let loc = span.loc(self.pkg);
+						let name = self.syms.resolve(name).to_string();
+						return Err(Signal::Error(
+							Error::ArgumentError(ArgumentError::Unknown(name)),
+							vec![(String::new(), loc)],
+						));
+					}
+				},
+				None => {
+					if next == params.len() {
+						let loc = span.loc(self.pkg);
+						return Err(Signal::Error(
+							Error::ArgumentError(ArgumentError::TooMany(arg_count, params.len())),
+							vec![(String::new(), loc)],
+						));
+					}
+					let index = next;
+					next += 1;
+					index
+				}
+			};
+			if slots[index].is_some() {
+				let loc = span.loc(self.pkg);
+				let name = self.syms.resolve(params[index].0).to_string();
+				return Err(Signal::Error(
+					Error::ArgumentError(ArgumentError::Duplicate(name)),
+					vec![(String::new(), loc)],
+				));
+			}
+			slots[index] = Some(val);
+		}
+
+		// Every unfilled parameter is found here, before bind_args runs any
+		// default, so a call that cannot succeed evaluates none of them.
+		let missing = params
+			.iter()
+			.zip(&slots)
+			.filter(|(param, slot)| slot.is_none() && param.1.is_none())
+			.map(|(param, _)| self.syms.resolve(param.0).to_string())
+			.collect::<Vec<_>>();
+		if !missing.is_empty() {
+			let loc = span.loc(self.pkg);
+			return Err(Signal::Error(
+				Error::ArgumentError(ArgumentError::Missing(missing)),
+				vec![(String::new(), loc)],
+			));
+		}
+		Ok(slots)
+	}
+
+	// Fills the frame in declaration order, so a default sees every parameter
+	// to its left. A default that raises does so inside the callee.
+	fn bind_args(
+		&mut self,
+		chunk_id: ChunkId,
+		params: &[Param],
+		slots: Vec<Option<Val>>,
+		scope: &Rc<RefCell<Scope>>,
+	) -> Result<(), Signal> {
+		let saved_scope = self.scope.clone();
+		self.scope = scope.clone();
+		for (param, slot) in params.iter().zip(slots) {
+			let val = match slot {
+				Some(val) => val,
+				None => {
+					let chunk = self.pkg.get_chunk(chunk_id);
+					match self.eval_expr(chunk, param.1.unwrap()) {
+						Ok(val) => val,
+						Err(signal) => {
+							self.scope = saved_scope;
+							return Err(signal);
+						}
+					}
+				}
+			};
+			scope.borrow_mut().locals.insert(param.0, val);
+		}
+		self.scope = saved_scope;
+		Ok(())
+	}
+
 	fn eval_proc_call(
 		&mut self,
 		span: Span,
 		proc: &Proc,
 		inst: Option<Rc<RefCell<Obj>>>,
-		args: Vec<Val>,
+		args: Vec<(Option<Sym>, Val)>,
 	) -> Result<Val, Signal> {
-		if args.len() != proc.params.len() {
-			let err = if args.len() > proc.params.len() {
-				ArgumentError::TooMany(args.len(), proc.params.len())
-			} else {
-				let name = proc.params[args.len()].0;
-				ArgumentError::Missing(self.syms.resolve(name).to_string())
-			};
-			let loc = span.loc(self.pkg);
-			return Err(Signal::Error(
-				Error::ArgumentError(err),
-				vec![(String::new(), loc)],
-			));
-		}
-		let mut scope = Scope {
+		let slots = self.slot_args(span, &proc.params, args)?;
+		let scope = Rc::new(RefCell::new(Scope {
 			locals: FxHashMap::default(),
 			outer: Some(proc.scope.clone()),
 			tier: Tier::Local,
-		};
-		for (arg, param) in args.into_iter().zip(proc.params.iter()) {
-			scope.locals.insert(param.0, arg);
-		}
+		}));
 		let saved_inst = self.inst.clone();
 		self.inst = inst;
 		let body_chunk = self.pkg.get_chunk(proc.chunk);
-		let result = self.eval_block(body_chunk, Rc::new(RefCell::new(scope)), proc.body);
+		let result = match self.bind_args(proc.chunk, &proc.params, slots, &scope) {
+			Ok(()) => self.eval_block(body_chunk, scope, proc.body),
+			Err(signal) => Err(signal),
+		};
 		self.inst = saved_inst;
 		match result {
 			Ok(val) => Ok(val),
