@@ -834,6 +834,7 @@ impl NodeId for TypeItemId {
 #[derive(Debug)]
 pub enum TypeItem {
 	Field(Field),
+	Type(Type),
 	Method(Method),
 }
 
@@ -1143,7 +1144,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_module_item(&mut self) -> Result<ModuleItemId, Error> {
 		match self.tag() {
-			TokenTag::Type => self.parse_type_decl(),
+			TokenTag::Type => self.parse_type_in_module(),
 			TokenTag::Def => self.parse_def_decl(),
 			_ => {
 				let expr_id = self.parse_expr()?;
@@ -1155,7 +1156,21 @@ impl<'src> Parser<'src> {
 		}
 	}
 
-	fn parse_type_decl(&mut self) -> Result<ModuleItemId, Error> {
+	fn parse_type_in_module(&mut self) -> Result<ModuleItemId, Error> {
+		let (type_, span) = self.parse_type()?;
+		let item = ModuleItem::Type(type_);
+		let item_id = self.chunk.add_module_item(span, item);
+		Ok(item_id)
+	}
+
+	fn parse_type_in_type(&mut self) -> Result<TypeItemId, Error> {
+		let (type_, span) = self.parse_type()?;
+		let item = TypeItem::Type(type_);
+		let item_id = self.chunk.add_type_item(span, item);
+		Ok(item_id)
+	}
+
+	fn parse_type(&mut self) -> Result<(Type, Span), Error> {
 		let tok = self.take(TokenTag::Type)?;
 		let ident = self.take(TokenTag::Ident)?;
 		let name = ident.sym.unwrap();
@@ -1185,14 +1200,12 @@ impl<'src> Parser<'src> {
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		let item = ModuleItem::Type(Type(name, fields, items));
-		let item_id = self.chunk.add_module_item(tok.into(), item);
-		Ok(item_id)
+		Ok((Type(name, fields, items), tok.into()))
 	}
 
 	fn parse_type_item(&mut self) -> Result<TypeItemId, Error> {
 		match self.tag() {
-			TokenTag::Type => todo!(),
+			TokenTag::Type => self.parse_type_in_type(),
 			TokenTag::Def => self.parse_method_decl(),
 			TokenTag::Ident => self.parse_field_decl(),
 			_ => Err(self.unexpected()),

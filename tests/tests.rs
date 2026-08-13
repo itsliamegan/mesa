@@ -37,6 +37,7 @@ test_files! {
 	test_shadows_fields => "shadow.ms",
 	test_bang_and_huh_names => "names.ms",
 	test_calls_static_methods => "statics.ms",
+	test_local_types => "local_types.ms",
 	test_prelude_names => "prelude.ms",
 	test_reports_runtime_errors => "rt_errors.ms",
 	test_reports_prelude_shadow => "sem_error_prelude.ms",

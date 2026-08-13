@@ -46,22 +46,13 @@ pub fn check(syms: &mut Interner, chunk: &Chunk, src: &Source) -> Result<(), Err
 	for item_id in &chunk.top {
 		let span = chunk.get_module_item_span(*item_id);
 		let name = match chunk.get_module_item(*item_id) {
-			ModuleItem::Type(Type(name, fields, items)) => {
-				ensure_required_precede_defaults(syms, src, span, fields)?;
-				for item_id in items {
-					let span = chunk.get_type_item_span(*item_id);
-					let params = match chunk.get_type_item(*item_id) {
-						TypeItem::Method(Method::Instance(Def(_, params, _))) => params,
-						TypeItem::Method(Method::Static(Def(_, params, _))) => params,
-						TypeItem::Field(_) => continue,
-					};
-					ensure_required_precede_defaults(syms, src, span, params)?;
-				}
-				*name
+			ModuleItem::Type(type_) => {
+				check_type(syms, chunk, src, span, type_)?;
+				type_.0
 			}
-			ModuleItem::Def(Def(name, params, _)) => {
-				ensure_required_precede_defaults(syms, src, span, params)?;
-				*name
+			ModuleItem::Def(def) => {
+				check_def(syms, src, span, def)?;
+				def.0
 			}
 			ModuleItem::Expr(_) => continue,
 		};
@@ -70,6 +61,40 @@ pub fn check(syms: &mut Interner, chunk: &Chunk, src: &Source) -> Result<(), Err
 			return Err(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
 		}
 	}
+	Ok(())
+}
+
+fn check_type(
+	syms: &Interner,
+	chunk: &Chunk,
+	src: &Source,
+	span: Span,
+	Type(_, fields, items): &Type,
+) -> Result<(), Error> {
+	ensure_required_precede_defaults(syms, src, span, fields)?;
+	for item_id in items {
+		let span = chunk.get_type_item_span(*item_id);
+		match chunk.get_type_item(*item_id) {
+			TypeItem::Field(_) => continue,
+			TypeItem::Type(inner_type) => check_type(syms, chunk, src, span, inner_type)?,
+			TypeItem::Method(Method::Instance(def)) => {
+				check_def(syms, src, span, def)?;
+			}
+			TypeItem::Method(Method::Static(def)) => {
+				check_def(syms, src, span, def)?;
+			}
+		}
+	}
+	Ok(())
+}
+
+fn check_def(
+	syms: &Interner,
+	src: &Source,
+	span: Span,
+	Def(_, params, _): &Def,
+) -> Result<(), Error> {
+	ensure_required_precede_defaults(syms, src, span, params)?;
 	Ok(())
 }
 

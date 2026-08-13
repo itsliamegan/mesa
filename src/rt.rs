@@ -791,51 +791,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		item_id: ModuleItemId,
 	) -> Result<(), Signal> {
 		match chunk.get_module_item(item_id) {
-			ModuleItem::Type(syn::Type(name, ctor_field_names, items)) => {
-				let mut methods = FxHashMap::default();
-				let mut statics = FxHashMap::default();
-				let ctor_fields = ctor_field_names.to_vec();
-				let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
-				for item_id in items {
-					match chunk.get_type_item(*item_id) {
-						TypeItem::Field(syn::Field(name, init)) => {
-							body_fields.insert(*name, *init);
-						}
-						TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
-							let proc = Rc::new(RefCell::new(Proc {
-								name: *name,
-								params: params.to_vec(),
-								body: *body,
-								chunk: chunk_id,
-								scope: self.scope.clone(),
-							}));
-							methods.insert(*name, proc);
-						}
-						TypeItem::Method(syn::Method::Static(Def(name, params, body))) => {
-							let proc = Rc::new(RefCell::new(Proc {
-								name: *name,
-								params: params.to_vec(),
-								body: *body,
-								chunk: chunk_id,
-								scope: self.scope.clone(),
-							}));
-							statics.insert(*name, Static::Proc(proc));
-						}
-					}
-				}
-				let typ = UserType {
-					name: *name,
-					ctor_fields,
-					body_fields,
-					chunk: chunk_id,
-					methods,
-					statics,
-					scope: self.scope.clone(),
-				};
-				let id = self.types.add_user_type(typ);
-				let obj = Obj::Type(TypeId::User(id));
-				let val = Val::Obj(Rc::new(RefCell::new(obj)));
-				self.scope.borrow_mut().locals.insert(*name, val);
+			ModuleItem::Type(typ) => {
+				let name = typ.0;
+				let val = self.eval_type_decl(chunk, chunk_id, typ)?;
+				self.scope.borrow_mut().locals.insert(name, val);
 				Ok(())
 			}
 			ModuleItem::Def(Def(name, params, body)) => {
@@ -855,6 +814,61 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Ok(())
 			}
 		}
+	}
+
+	fn eval_type_decl(
+		&mut self,
+		chunk: &Chunk,
+		chunk_id: ChunkId,
+		syn::Type(name, ctor_field_names, items): &syn::Type,
+	) -> Result<Val, Signal> {
+		let mut methods = FxHashMap::default();
+		let mut statics = FxHashMap::default();
+		let ctor_fields = ctor_field_names.to_vec();
+		let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
+		for item_id in items {
+			match chunk.get_type_item(*item_id) {
+				TypeItem::Field(syn::Field(name, init)) => {
+					body_fields.insert(*name, *init);
+				}
+				TypeItem::Type(inner_type) => {
+					let val = self.eval_type_decl(chunk, chunk_id, inner_type)?;
+					statics.insert(inner_type.0, Static::Type(val));
+				}
+				TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
+					let proc = Rc::new(RefCell::new(Proc {
+						name: *name,
+						params: params.to_vec(),
+						body: *body,
+						chunk: chunk_id,
+						scope: self.scope.clone(),
+					}));
+					methods.insert(*name, proc);
+				}
+				TypeItem::Method(syn::Method::Static(Def(name, params, body))) => {
+					let proc = Rc::new(RefCell::new(Proc {
+						name: *name,
+						params: params.to_vec(),
+						body: *body,
+						chunk: chunk_id,
+						scope: self.scope.clone(),
+					}));
+					statics.insert(*name, Static::Proc(proc));
+				}
+			}
+		}
+		let type_ = UserType {
+			name: *name,
+			ctor_fields,
+			body_fields,
+			chunk: chunk_id,
+			methods,
+			statics,
+			scope: self.scope.clone(),
+		};
+		let id = self.types.add_user_type(type_);
+		let obj = Obj::Type(TypeId::User(id));
+		Ok(Val::Obj(Rc::new(RefCell::new(obj))))
 	}
 
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
