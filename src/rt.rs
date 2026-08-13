@@ -10,7 +10,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each, Expr,
+	self, Arg, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each, Expr,
 	ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Param, Place, Return, Script,
 	Span, TypeItem, Unary, UnaryOp, When,
 };
@@ -913,10 +913,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				};
 				Err(Signal::Return(val))
 			}
-			Expr::Call(Call(val_id, arg_ids)) => {
+			Expr::Call(Call(val_id, arg_nodes)) => {
 				let span = chunk.get_expr_span(expr_id);
-				let mut args = Vec::with_capacity(arg_ids.len());
-				for arg_id in arg_ids {
+				let mut args = Vec::with_capacity(arg_nodes.len());
+				for Arg(_, arg_id) in arg_nodes {
 					let arg = self.eval_expr(chunk, *arg_id)?;
 					args.push(arg);
 				}

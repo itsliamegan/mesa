@@ -881,7 +881,10 @@ pub struct When(pub ExprId, pub BlockId, pub Option<BlockId>);
 pub struct Return(pub Option<ExprId>);
 
 #[derive(Debug)]
-pub struct Call(pub ExprId, pub Vec<ExprId>);
+pub struct Call(pub ExprId, pub Vec<Arg>);
+
+#[derive(Debug, Clone, Copy)]
+pub struct Arg(pub Option<Sym>, pub ExprId);
 
 #[derive(Debug, Clone)]
 pub struct Member(pub ExprId, pub Sym);
@@ -1342,7 +1345,7 @@ impl<'src> Parser<'src> {
 		let mut args = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
 			let arg = self.parse_expr()?;
-			args.push(arg);
+			args.push(Arg(None, arg));
 			match self.tag() {
 				TokenTag::Comma => {
 					self.cur = self.cur.next();
