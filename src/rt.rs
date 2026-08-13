@@ -10,8 +10,8 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Arg, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each, Expr,
-	ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Param, Place, Return, Script,
+	self, Access, Arg, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each,
+	Expr, ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Param, Place, Return,
 	Span, TypeItem, Unary, UnaryOp, When,
 };
 
@@ -29,7 +29,7 @@ pub enum Error {
 #[derive(Debug)]
 pub enum ProtocolError {
 	NotIterable(String),
-	NotScriptable(String),
+	NotAccessible(String),
 }
 
 #[derive(Debug)]
@@ -79,7 +79,7 @@ impl Display for ProtocolError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
 			Self::NotIterable(type_name) => write!(f, "type {} is not iterable", type_name),
-			Self::NotScriptable(type_name) => write!(f, "type {} is not scriptable", type_name),
+			Self::NotAccessible(type_name) => write!(f, "type {} is not accessible", type_name),
 		}
 	}
 }
@@ -1066,7 +1066,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				let val = self.eval_member_raw(chunk, expr_id, *val_id, *name)?;
 				self.invoke_or_return(chunk, expr_id, val)
 			}
-			Expr::Script(Script(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
+			Expr::Access(Access(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						let idx = self.eval_index(chunk, expr_id, *key_id, list.items.len())?;
@@ -1089,7 +1089,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotScriptable(
+							Error::ProtocolError(ProtocolError::NotAccessible(
 								type_name.to_string(),
 							)),
 							vec![(String::new(), loc)],
@@ -1100,7 +1100,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotScriptable(type_name.to_string())),
+						Error::ProtocolError(ProtocolError::NotAccessible(type_name.to_string())),
 						vec![(String::new(), loc)],
 					))
 				}
@@ -1162,7 +1162,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							))
 						}
 					}
-					Place::Script(syn::Script(target_id, key_id)) => {
+					Place::Access(syn::Access(target_id, key_id)) => {
 						let target = self.eval_expr(chunk, *target_id)?;
 						match &target {
 							Val::Obj(rf) => match &mut *rf.borrow_mut() {
@@ -1182,7 +1182,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									let type_name =
 										self.syms.resolve(self.types.get_type_name(obj.type_id()));
 									Err(Signal::Error(
-										Error::ProtocolError(ProtocolError::NotScriptable(
+										Error::ProtocolError(ProtocolError::NotAccessible(
 											type_name.to_string(),
 										)),
 										vec![(String::new(), loc)],
@@ -1194,7 +1194,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								let type_name =
 									self.syms.resolve(self.types.get_type_name(val.type_id()));
 								Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotScriptable(
+									Error::ProtocolError(ProtocolError::NotAccessible(
 										type_name.to_string(),
 									)),
 									vec![(String::new(), loc)],

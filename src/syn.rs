@@ -867,7 +867,7 @@ pub enum Expr {
 	Self_,
 	Call(Call),
 	Member(Member),
-	Script(Script),
+	Access(Access),
 	Assign(Assign),
 	Binary(Binary),
 	Unary(Unary),
@@ -895,7 +895,7 @@ pub struct Arg(pub Option<Sym>, pub ExprId);
 pub struct Member(pub ExprId, pub Sym);
 
 #[derive(Debug, Clone)]
-pub struct Script(pub ExprId, pub ExprId);
+pub struct Access(pub ExprId, pub ExprId);
 
 #[derive(Debug)]
 pub struct Assign(pub Place, pub ExprId);
@@ -904,7 +904,7 @@ pub struct Assign(pub Place, pub ExprId);
 pub enum Place {
 	Name(Name),
 	Member(Member),
-	Script(Script),
+	Access(Access),
 }
 
 #[derive(Debug, Clone)]
@@ -1055,7 +1055,7 @@ impl Precedence {
 	const NEG: Precedence = Precedence(8);
 	const CALL: Precedence = Precedence(9);
 	const MEMBER: Precedence = Precedence(9);
-	const SCRIPT: Precedence = Precedence(9);
+	const ACCESS: Precedence = Precedence(9);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
@@ -1074,7 +1074,7 @@ impl Precedence {
 			TokenTag::Slash => Precedence::DIV,
 			TokenTag::LParen => Precedence::CALL,
 			TokenTag::Dot => Precedence::MEMBER,
-			TokenTag::LBrack => Precedence::SCRIPT,
+			TokenTag::LBrack => Precedence::ACCESS,
 			_ => Precedence::NONE,
 		}
 	}
@@ -1327,7 +1327,7 @@ impl<'src> Parser<'src> {
 				}
 				TokenTag::LParen => self.parse_call_expr(expr_id)?,
 				TokenTag::Dot => self.parse_member_expr(expr_id)?,
-				TokenTag::LBrack => self.parse_script_expr(expr_id)?,
+				TokenTag::LBrack => self.parse_access_expr(expr_id)?,
 				_ => break,
 			};
 		}
@@ -1342,11 +1342,11 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
-	fn parse_script_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
+	fn parse_access_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::LBrack)?;
 		let key_id = self.parse_expr()?;
 		self.take(TokenTag::RBrack)?;
-		let expr = Expr::Script(Script(val_id, key_id));
+		let expr = Expr::Access(Access(val_id, key_id));
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1390,7 +1390,7 @@ impl<'src> Parser<'src> {
 		let place = match self.chunk.get_expr(val_id) {
 			Expr::Name(name) => Place::Name(name.clone()),
 			Expr::Member(member) => Place::Member(member.clone()),
-			Expr::Script(script) => Place::Script(script.clone()),
+			Expr::Access(access) => Place::Access(access.clone()),
 			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok.tag)),
 		};
 		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
