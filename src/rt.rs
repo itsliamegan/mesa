@@ -941,30 +941,30 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_id) => {
 								let type_id = *type_id;
-								let args = self.positional_only(span, args)?;
 								let typ = self.types.get_user_type(type_id);
-								if args.len() != typ.ctor_fields.len() {
-									let err = if args.len() > typ.ctor_fields.len() {
-										ArgumentError::TooMany(args.len(), typ.ctor_fields.len())
-									} else {
-										let name = typ.ctor_fields[args.len()].0;
-										ArgumentError::Missing(vec![
-											self.syms.resolve(name).to_string(),
-										])
-									};
-									let loc = span.loc(self.pkg);
-									return Err(Signal::Error(
-										Error::ArgumentError(err),
-										vec![(String::new(), loc)],
-									));
-								}
-								let mut fields = FxHashMap::default();
-								for (field, val) in typ.ctor_fields.iter().zip(args) {
-									fields.insert(field.0, val);
-								}
+								let ctor_fields = typ.ctor_fields.clone();
 								let body_fields = typ.body_fields.clone();
 								let type_scope = typ.scope.clone();
-								let type_chunk = self.pkg.get_chunk(typ.chunk);
+								let type_chunk_id = typ.chunk;
+
+								let slots = self.slot_args(span, &ctor_fields, args)?;
+								let scope = Rc::new(RefCell::new(Scope {
+									locals: FxHashMap::default(),
+									outer: Some(type_scope.clone()),
+									tier: Tier::Local,
+								}));
+								// The instance does not exist yet, so a ctor default sees the
+								// fields to its left and the module, never self.
+								let outer_inst = self.inst.take();
+								let bound =
+									self.bind_args(type_chunk_id, &ctor_fields, slots, &scope);
+								self.inst = outer_inst;
+								bound?;
+								// The scope was just used for initialization, nothing else holds
+								// a reference to it.
+								let fields = Rc::try_unwrap(scope).unwrap().into_inner().locals;
+
+								let type_chunk = self.pkg.get_chunk(type_chunk_id);
 								let inst_rc = Rc::new(RefCell::new(Obj::Instance(Instance {
 									typ: type_id,
 									fields,
