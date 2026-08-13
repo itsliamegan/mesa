@@ -44,6 +44,8 @@ test_files! {
 	test_honors_significant_newlines => "newlines.ms",
 	test_invokes_without_parens => "paren_less.ms",
 	test_explicit_returns => "returns.ms",
+	test_keyword_args_and_defaults => "kwargs.ms",
+	test_reports_syntax_errors => "syn_errors.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {

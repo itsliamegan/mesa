@@ -135,3 +135,42 @@ pair(1, 2, 3)
 type Distance(amount, unit)
 end
 Distance(45.7)
+
+#---
+
+#! rt_errors.ms:147,6: runtime error: no param named 'x'
+#! 	at <main> (rt_errors.ms:147,6)
+
+def named(a, b: 1)
+	a
+end
+named(1, x: 2)
+
+#---
+
+#! rt_errors.ms:157,6: runtime error: arg 'a' given twice
+#! 	at <main> (rt_errors.ms:157,6)
+
+def twice(a, b: 1)
+	a
+end
+twice(1, a: 2)
+
+#---
+
+#! rt_errors.ms:167,6: runtime error: missing args 'a', 'b'
+#! 	at <main> (rt_errors.ms:167,6)
+
+def needs(a, b, c: 1)
+	a
+end
+needs()
+
+#---
+
+#! rt_errors.ms:174,17: runtime error: name 'nope' is not defined
+#! 	at <main> (rt_errors.ms:174,17)
+
+type Ctor(a, b: nope)
+end
+Ctor(1)

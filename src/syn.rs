@@ -10,6 +10,7 @@ pub enum Error {
 	UnterminatedStrLit(Location),
 	UnknownStrEsc(Location, char),
 	UnknownBuiltin(Location, String),
+	PositionalAfterKeyword(Location),
 }
 
 impl Error {
@@ -20,6 +21,7 @@ impl Error {
 			Self::UnterminatedStrLit(loc) => loc,
 			Self::UnknownStrEsc(loc, _) => loc,
 			Self::UnknownBuiltin(loc, _) => loc,
+			Self::PositionalAfterKeyword(loc) => loc,
 		}
 	}
 }
@@ -33,6 +35,9 @@ impl Display for Error {
 			Self::UnterminatedStrLit(_) => write!(f, "unterminated string literal"),
 			Self::UnknownStrEsc(_, esc) => write!(f, "unknown escape sequence '\\{}'", esc),
 			Self::UnknownBuiltin(_, builtin) => write!(f, "unknown builtin '{}'", builtin),
+			Self::PositionalAfterKeyword(_) => {
+				write!(f, "positional arg after keyword arg")
+			}
 		}
 	}
 }
@@ -1257,7 +1262,13 @@ impl<'src> Parser<'src> {
 		self.take(TokenTag::LParen)?;
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
 			let name = self.take(TokenTag::Ident)?.sym.unwrap();
-			params.push(Param(name, None));
+			let default = if self.tag() == TokenTag::Colon {
+				self.take(TokenTag::Colon)?;
+				Some(self.parse_expr()?)
+			} else {
+				None
+			};
+			params.push(Param(name, default));
 			match self.tag() {
 				TokenTag::Comma => {
 					self.cur = self.cur.next();
@@ -1343,9 +1354,23 @@ impl<'src> Parser<'src> {
 	fn parse_call_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::LParen)?;
 		let mut args = Vec::new();
+		let mut seen_keyword = false;
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::RParen {
+			let name = if self.tag() == TokenTag::Ident
+				&& self.toks.tag(self.cur.next()) == TokenTag::Colon
+			{
+				let name = self.take(TokenTag::Ident)?.sym.unwrap();
+				self.take(TokenTag::Colon)?;
+				seen_keyword = true;
+				Some(name)
+			} else if seen_keyword {
+				let loc = self.src.loc(self.toks.start(self.cur));
+				return Err(Error::PositionalAfterKeyword(loc));
+			} else {
+				None
+			};
 			let arg = self.parse_expr()?;
-			args.push(Arg(None, arg));
+			args.push(Arg(name, arg));
 			match self.tag() {
 				TokenTag::Comma => {
 					self.cur = self.cur.next();
