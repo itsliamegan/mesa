@@ -407,9 +407,15 @@ enum Static {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeTypeId(u32);
 
+#[derive(Debug)]
+struct NativeParam {
+	name: &'static str,
+	default: Option<fn() -> Val>,
+}
+
 #[derive(Debug, Clone)]
 struct NativeMember {
-	arity: usize,
+	params: &'static [NativeParam],
 	call: fn(&Val, Vec<Val>) -> Result<Val, Error>,
 }
 
@@ -435,7 +441,11 @@ const CORE_TYPES: &[(
 	&str,
 	NativeTypeId,
 	Option<fn() -> Val>,
-	&[(&str, usize, fn(&Val, Vec<Val>) -> Result<Val, Error>)],
+	&[(
+		&str,
+		&[NativeParam],
+		fn(&Val, Vec<Val>) -> Result<Val, Error>,
+	)],
 )] = &[
 	("Nil", NativeTypeId::NIL, Some(Nil::new), &[]),
 	("Num", NativeTypeId::NUM, Some(Num::new), &[]),
@@ -444,19 +454,19 @@ const CORE_TYPES: &[(
 		"Str",
 		NativeTypeId::STR,
 		Some(Str::new),
-		&[("size", 0, Str::size)],
+		&[("size", &[], Str::size)],
 	),
 	(
 		"List",
 		NativeTypeId::LIST,
 		Some(List::new),
-		&[("size", 0, List::size)],
+		&[("size", &[], List::size)],
 	),
 	(
 		"Dict",
 		NativeTypeId::DICT,
 		Some(Dict::new),
-		&[("size", 0, Dict::size)],
+		&[("size", &[], Dict::size)],
 	),
 	("Proc", NativeTypeId::PROC, None, &[]),
 	("Type", NativeTypeId::TYPE, None, &[]),
@@ -494,11 +504,11 @@ impl TypeRegistry {
 
 		for (name, _id, new, member_pairs) in CORE_TYPES {
 			let mut members = HashMap::with_capacity_and_hasher(member_pairs.len(), FxBuildHasher);
-			for (name, arity, call) in *member_pairs {
+			for (name, params, call) in *member_pairs {
 				members.insert(
 					syms.intern(name),
 					NativeMember {
-						arity: *arity,
+						params,
 						call: *call,
 					},
 				);
@@ -579,7 +589,7 @@ impl Member {
 						match types.get_native_type(type_id).get_static(*name).unwrap() {
 							Static::Proc(_) => panic!(),
 							Static::Type(_) => panic!(),
-							Static::NativeMember(member) if member.arity == 0 => {
+							Static::NativeMember(member) if member.params.is_empty() => {
 								(member.call)(&Val::Obj(type_rf.clone()), Vec::new())
 							}
 							Static::NativeMember(member) => {
@@ -613,7 +623,7 @@ impl Member {
 				};
 				let typ = types.get_native_type(type_id);
 				match typ.members.get(name) {
-					Some(member) if member.arity == 0 => (member.call)(recv, Vec::new()),
+					Some(member) if member.params.is_empty() => (member.call)(recv, Vec::new()),
 					Some(member) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
 						Method::Native(recv.clone(), *name, member.clone()),
 					))))),
@@ -1005,12 +1015,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), args)
 							}
 							Method::Native(recv, _name, meth) => {
-								if args.len() != meth.arity {
+								if args.len() != meth.params.len() {
 									let loc = span.loc(self.pkg);
 									Err(Signal::Error(
 										Error::ArgumentError(ArgumentError::WrongCount(
 											args.len(),
-											meth.arity,
+											meth.params.len(),
 										)),
 										vec![(String::new(), loc)],
 									))
@@ -1457,7 +1467,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let arity = match &*rf.borrow() {
 			Obj::Proc(proc) => proc.params.len(),
 			Obj::Method(Method::User(_, proc)) => proc.borrow().params.len(),
-			Obj::Method(Method::Native(_, _, meth)) => meth.arity,
+			Obj::Method(Method::Native(_, _, meth)) => meth.params.len(),
 			_ => return Ok(val),
 		};
 
