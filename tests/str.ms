@@ -15,6 +15,18 @@ $print(str)
 
 #---
 
+#> true
+#> true
+#> true
+#> true
+
+$print("apple" < "zebra")
+$print("apple" <= "apple")
+$print("zebra" > "apple")
+$print("zebra" >= "zebra")
+
+#---
+
 #> ['H', 'e', 'l', 'l', 'o']
 #> ['H', 'e', 'l', 'l', 'o']
 #> b

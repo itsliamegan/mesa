@@ -18,6 +18,7 @@ macro_rules! test_files {
 
 test_files! {
 	test_parses_literals => "lits.ms",
+	test_chars => "char.ms",
 	test_strs => "str.ms",
 	test_lists => "list.ms",
 	test_dicts => "dict.ms",

@@ -31,6 +31,7 @@ pub enum ProtocolError {
 	NotIterable(String),
 	NotAccessible(String),
 	NotAppendable(String),
+	NotOrderable(String),
 }
 
 #[derive(Debug)]
@@ -48,7 +49,6 @@ pub enum TypeError {
 	ConcatNonStr(String),
 	NotCallable(String),
 	NotInvokable(String),
-	NotOrderable(String),
 }
 
 #[derive(Debug)]
@@ -83,6 +83,7 @@ impl Display for ProtocolError {
 			Self::NotIterable(type_name) => write!(f, "type {} is not iterable", type_name),
 			Self::NotAccessible(type_name) => write!(f, "type {} is not accessible", type_name),
 			Self::NotAppendable(type_name) => write!(f, "type {} is not appendable", type_name),
+			Self::NotOrderable(type_name) => write!(f, "type {} is not orderable", type_name),
 		}
 	}
 }
@@ -118,7 +119,6 @@ impl Display for TypeError {
 			Self::ConcatNonStr(type_name) => write!(f, "type {} cannot be concatenated", type_name),
 			Self::NotCallable(type_name) => write!(f, "type {} is not callable", type_name),
 			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
-			Self::NotOrderable(type_name) => write!(f, "type {} is not orderable", type_name),
 		}
 	}
 }
@@ -1300,6 +1300,20 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									BinaryOp::GtEq => lhs.0 >= rhs.0,
 									_ => panic!(),
 								}))),
+								(Val::Str(lhs), Val::Str(rhs)) => Ok(Val::Bool(Bool(match op {
+									BinaryOp::Lt => lhs.text < rhs.text,
+									BinaryOp::Gt => lhs.text > rhs.text,
+									BinaryOp::LtEq => lhs.text <= rhs.text,
+									BinaryOp::GtEq => lhs.text >= rhs.text,
+									_ => panic!(),
+								}))),
+								(Val::Char(lhs), Val::Char(rhs)) => Ok(Val::Bool(Bool(match op {
+									BinaryOp::Lt => lhs.0 < rhs.0,
+									BinaryOp::Gt => lhs.0 > rhs.0,
+									BinaryOp::LtEq => lhs.0 <= rhs.0,
+									BinaryOp::GtEq => lhs.0 >= rhs.0,
+									_ => panic!(),
+								}))),
 								(lhs, rhs) => {
 									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 									let val = match (&lhs, &rhs) {
@@ -1310,7 +1324,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									let type_name =
 										self.syms.resolve(self.types.get_type_name(val.type_id()));
 									Err(Signal::Error(
-										Error::TypeError(TypeError::NotOrderable(
+										Error::ProtocolError(ProtocolError::NotOrderable(
 											type_name.to_string(),
 										)),
 										vec![(String::new(), loc)],
