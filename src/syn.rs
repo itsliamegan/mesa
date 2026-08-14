@@ -225,6 +225,7 @@ pub enum TokenTag {
 	Slash,
 
 	Amp,
+	LtLt,
 
 	LBrace,
 	RBrace,
@@ -282,6 +283,7 @@ impl TokenTag {
 			TokenTag::Slash => "SLASH",
 
 			TokenTag::Amp => "AMP",
+			TokenTag::LtLt => "LTLT",
 
 			TokenTag::LBrace => "LBRACE",
 			TokenTag::RBrace => "RBRACE",
@@ -486,6 +488,15 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 					Ok(Token {
 						src: self.src.id,
 						tag: TokenTag::LtEq,
+						sym: None,
+						pos: self.pos - 2,
+						end: self.pos,
+					})
+				} else if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'<' {
+					self.pos += 2;
+					Ok(Token {
+						src: self.src.id,
+						tag: TokenTag::LtLt,
 						sym: None,
 						pos: self.pos - 2,
 						end: self.pos,
@@ -971,6 +982,8 @@ pub struct Binary(pub BinaryOp, pub ExprId, pub ExprId);
 
 #[derive(Debug)]
 pub enum BinaryOp {
+	Append,
+
 	Or,
 	And,
 
@@ -1100,15 +1113,16 @@ impl Precedence {
 	const AND: Precedence = Precedence(3);
 	const NOT: Precedence = Precedence(4);
 	const COMPARE: Precedence = Precedence(5);
-	const ADD: Precedence = Precedence(6);
-	const SUB: Precedence = Precedence(6);
-	const MUL: Precedence = Precedence(7);
-	const DIV: Precedence = Precedence(7);
-	const NEG: Precedence = Precedence(8);
-	const MENTION: Precedence = Precedence(8);
-	const CALL: Precedence = Precedence(9);
-	const MEMBER: Precedence = Precedence(9);
-	const ACCESS: Precedence = Precedence(9);
+	const APPEND: Precedence = Precedence(6);
+	const ADD: Precedence = Precedence(7);
+	const SUB: Precedence = Precedence(7);
+	const MUL: Precedence = Precedence(8);
+	const DIV: Precedence = Precedence(8);
+	const NEG: Precedence = Precedence(9);
+	const MENTION: Precedence = Precedence(9);
+	const CALL: Precedence = Precedence(10);
+	const MEMBER: Precedence = Precedence(10);
+	const ACCESS: Precedence = Precedence(10);
 
 	fn of(tag: TokenTag) -> Self {
 		match tag {
@@ -1121,6 +1135,7 @@ impl Precedence {
 			TokenTag::Gt => Precedence::COMPARE,
 			TokenTag::LtEq => Precedence::COMPARE,
 			TokenTag::GtEq => Precedence::COMPARE,
+			TokenTag::LtLt => Precedence::APPEND,
 			TokenTag::Plus => Precedence::ADD,
 			TokenTag::Minus => Precedence::SUB,
 			TokenTag::Star => Precedence::MUL,
@@ -1159,6 +1174,7 @@ fn continues_expr(tag: TokenTag) -> bool {
 		TokenTag::Gt => true,
 		TokenTag::LtEq => true,
 		TokenTag::GtEq => true,
+		TokenTag::LtLt => true,
 		TokenTag::Plus => true,
 		TokenTag::Star => true,
 		TokenTag::Slash => true,
@@ -1399,6 +1415,9 @@ impl<'src> Parser<'src> {
 				}
 				TokenTag::GtEq => {
 					self.parse_binary_expr(expr_id, BinaryOp::GtEq, Precedence::COMPARE)?
+				}
+				TokenTag::LtLt => {
+					self.parse_binary_expr(expr_id, BinaryOp::Append, Precedence::APPEND)?
 				}
 				TokenTag::Plus => {
 					self.parse_binary_expr(expr_id, BinaryOp::Add, Precedence::ADD)?

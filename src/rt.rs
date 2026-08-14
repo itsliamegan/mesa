@@ -30,6 +30,7 @@ pub enum Error {
 pub enum ProtocolError {
 	NotIterable(String),
 	NotAccessible(String),
+	NotAppendable(String),
 }
 
 #[derive(Debug)]
@@ -80,6 +81,7 @@ impl Display for ProtocolError {
 		match self {
 			Self::NotIterable(type_name) => write!(f, "type {} is not iterable", type_name),
 			Self::NotAccessible(type_name) => write!(f, "type {} is not accessible", type_name),
+			Self::NotAppendable(type_name) => write!(f, "type {} is not appendable", type_name),
 		}
 	}
 }
@@ -1257,6 +1259,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				| BinaryOp::Gt
 				| BinaryOp::LtEq
 				| BinaryOp::GtEq
+				| BinaryOp::Append
 				| BinaryOp::Add
 				| BinaryOp::Sub
 				| BinaryOp::Mul
@@ -1292,6 +1295,33 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									))
 								}
 							}
+						}
+						BinaryOp::Append => {
+							let Val::Obj(rf) = lhs.clone() else {
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								let type_name =
+									self.syms.resolve(self.types.get_type_name(lhs.type_id()));
+								return Err(Signal::Error(
+									Error::ProtocolError(ProtocolError::NotAppendable(
+										type_name.to_string(),
+									)),
+									vec![(String::new(), loc)],
+								));
+							};
+							let Obj::List(list) = &mut *rf.borrow_mut() else {
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								let type_name = self
+									.syms
+									.resolve(self.types.get_type_name(rf.borrow().type_id()));
+								return Err(Signal::Error(
+									Error::ProtocolError(ProtocolError::NotAppendable(
+										type_name.to_string(),
+									)),
+									vec![(String::new(), loc)],
+								));
+							};
+							list.items.push(rhs);
+							Ok(lhs)
 						}
 						BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
 							match (lhs, rhs) {

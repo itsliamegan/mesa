@@ -220,7 +220,14 @@ $print({"a": 1}["b"])
 
 #---
 
-#! rt_errors.ms:226,8: runtime error: type Num is not invokable
-#! 	at <main> (rt_errors.ms:226,8)
+#! rt_errors.ms:226,13: runtime error: type Dict is not appendable
+#! 	at <main> (rt_errors.ms:226,13)
+
+{"id": 105} << "name"
+
+#---
+
+#! rt_errors.ms:233,8: runtime error: type Num is not invokable
+#! 	at <main> (rt_errors.ms:233,8)
 
 $print(&1)
