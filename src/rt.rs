@@ -743,7 +743,7 @@ pub struct Interpreter<'syms, 'pkg> {
 	pkg: &'pkg Package,
 	types: TypeRegistry,
 	scope: Rc<RefCell<Scope>>,
-	inst: Option<Rc<RefCell<Obj>>>,
+	receiver: Option<Val>,
 }
 
 enum Signal {
@@ -781,7 +781,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			pkg,
 			types,
 			scope,
-			inst: None,
+			receiver: None,
 		}
 	}
 
@@ -1010,24 +1010,24 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}));
 								// The instance does not exist yet, so a ctor default sees the
 								// fields to its left and the module, never self.
-								let outer_inst = self.inst.take();
+								let outer_receiver = self.receiver.take();
 								let bound =
 									self.bind_args(type_chunk_id, &ctor_fields, slots, &scope);
-								self.inst = outer_inst;
+								self.receiver = outer_receiver;
 								bound?;
 								// The scope was just used for initialization, nothing else holds
 								// a reference to it.
 								let fields = Rc::try_unwrap(scope).unwrap().into_inner().locals;
 
 								let type_chunk = self.pkg.get_chunk(type_chunk_id);
-								let inst_rc = Rc::new(RefCell::new(Obj::Instance(Instance {
+								let inst_rf = Rc::new(RefCell::new(Obj::Instance(Instance {
 									typ: type_id,
 									fields,
 								})));
 
 								let saved_scope = self.scope.clone();
-								let saved_inst = self.inst.clone();
-								self.inst = Some(inst_rc.clone());
+								let saved_receiver = self.receiver.clone();
+								self.receiver = Some(Val::Obj(inst_rf.clone()));
 								for (name, init_id) in &body_fields {
 									self.scope = Rc::new(RefCell::new(Scope {
 										locals: FxHashMap::default(),
@@ -1038,18 +1038,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										Ok(val) => val,
 										Err(signal) => {
 											self.scope = saved_scope;
-											self.inst = saved_inst;
+											self.receiver = saved_receiver;
 											return Err(signal);
 										}
 									};
-									Member::User(inst_rc.clone(), *name)
+									Member::User(inst_rf.clone(), *name)
 										.set(val, &self.types)
 										.unwrap();
 								}
 								self.scope = saved_scope;
-								self.inst = saved_inst;
+								self.receiver = saved_receiver;
 
-								Ok(Val::Obj(inst_rc))
+								Ok(Val::Obj(inst_rf))
 							}
 							TypeId::Native(type_id) => {
 								let typ = self.types.get_native_type(*type_id);
@@ -1075,9 +1075,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 						},
 						Obj::Method(meth) => match meth {
-							Method::User(inst, proc) => {
-								self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), args)
-							}
+							Method::User(inst, proc) => self.eval_proc_call(
+								span,
+								&proc.borrow(),
+								Some(Val::Obj(inst.clone())),
+								args,
+							),
 							Method::Native(recv, _name, meth) => {
 								// Native params carry &'static str names and
 								// fn() -> Val defaults, so they are matched and
@@ -1166,13 +1169,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						let local = Scope::local(&self.scope, *sym);
 						if local.is_bound() && local.tier == Tier::Local {
 							local.set(val.clone());
-						} else if let Some(rf) = &self.inst
-							&& let Some(member) = Val::Obj(rf.clone()).member(*sym, &self.types)
+						} else if let Some(receiver) = &self.receiver
+							&& let Some(member) = receiver.member(*sym, &self.types)
 						{
 							if let Err(()) = member.set(val.clone(), &self.types) {
-								let type_name = self
-									.types
-									.get_type_name(Val::Obj(rf.clone()).namespace_type_id());
+								let type_name =
+									self.types.get_type_name(receiver.namespace_type_id());
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
@@ -1434,8 +1436,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				},
 			},
-			Expr::Self_ => match &self.inst {
-				Some(inst) => Ok(Val::Obj(inst.clone())),
+			Expr::Self_ => match &self.receiver {
+				Some(receiver) => Ok(receiver.clone()),
 				None => todo!(),
 			},
 			Expr::Name(Name(name)) => {
@@ -1492,8 +1494,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let local = Scope::local(&self.scope, name);
 		if local.is_bound() && local.tier == Tier::Local {
 			Ok(local.get())
-		} else if let Some(rf) = &self.inst
-			&& let Some(member) = Val::Obj(rf.clone()).member(name, &self.types)
+		} else if let Some(receiver) = &self.receiver
+			&& let Some(member) = receiver.member(name, &self.types)
 		{
 			match member.get(&self.types) {
 				Ok(val) => Ok(val),
@@ -1652,9 +1654,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 		match &*rf.borrow() {
 			Obj::Proc(proc) => self.eval_proc_call(span, proc, None, Vec::new()),
-			Obj::Method(Method::User(inst, proc)) => {
-				self.eval_proc_call(span, &proc.borrow(), Some(inst.clone()), Vec::new())
-			}
+			Obj::Method(Method::User(inst, proc)) => self.eval_proc_call(
+				span,
+				&proc.borrow(),
+				Some(Val::Obj(inst.clone())),
+				Vec::new(),
+			),
 			Obj::Method(Method::Native(recv, _name, meth)) => {
 				match (meth.call)(recv, meth.defaults().unwrap()) {
 					Ok(val) => Ok(val),
@@ -1841,7 +1846,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		&mut self,
 		span: Span,
 		proc: &Proc,
-		inst: Option<Rc<RefCell<Obj>>>,
+		receiver: Option<Val>,
 		args: Vec<(Option<Sym>, Val)>,
 	) -> Result<Val, Signal> {
 		let slots = self.slot_args(span, &proc.params, args)?;
@@ -1850,14 +1855,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			outer: Some(proc.scope.clone()),
 			tier: Tier::Local,
 		}));
-		let saved_inst = self.inst.clone();
-		self.inst = inst;
+		let saved_receiver = self.receiver.clone();
+		self.receiver = receiver;
 		let body_chunk = self.pkg.get_chunk(proc.chunk);
 		let result = match self.bind_args(proc.chunk, &proc.params, slots, &scope) {
 			Ok(()) => self.eval_block(body_chunk, scope, proc.body),
 			Err(signal) => Err(signal),
 		};
-		self.inst = saved_inst;
+		self.receiver = saved_receiver;
 		match result {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
