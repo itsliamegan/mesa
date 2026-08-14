@@ -1149,6 +1149,24 @@ fn terminates_expr(tag: TokenTag) -> bool {
 	}
 }
 
+fn continues_expr(tag: TokenTag) -> bool {
+	match tag {
+		TokenTag::Or => true,
+		TokenTag::And => true,
+		TokenTag::EqEq => true,
+		TokenTag::NotEq => true,
+		TokenTag::Lt => true,
+		TokenTag::Gt => true,
+		TokenTag::LtEq => true,
+		TokenTag::GtEq => true,
+		TokenTag::Plus => true,
+		TokenTag::Star => true,
+		TokenTag::Slash => true,
+		TokenTag::Dot => true,
+		_ => false,
+	}
+}
+
 pub struct Parser<'src> {
 	src: &'src Source,
 	toks: Tokens,
@@ -1354,7 +1372,10 @@ impl<'src> Parser<'src> {
 	fn parse_expr_prec(&mut self, min_prec: Precedence) -> Result<ExprId, Error> {
 		let mut expr_id = self.parse_expr_unit()?;
 		while Precedence::of(self.tag()) > min_prec {
-			if self.toks.nl_before(self.cur) && terminates_expr(self.toks.tag(self.cur.prev())) {
+			if self.toks.nl_before(self.cur)
+				&& terminates_expr(self.toks.tag(self.cur.prev()))
+				&& !continues_expr(self.tag())
+			{
 				break;
 			}
 			expr_id = match self.tag() {

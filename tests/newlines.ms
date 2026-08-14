@@ -25,7 +25,42 @@ $print(wrapped())
 
 #---
 
-#! newlines.ms:31,1: syntax error: unexpected token PLUS
+#> 1
 
 total := 1
-+ 2
+- 2
+$print(total)
+
+#---
+
+#> 9
+
+total := 1
+	+ 2 * 4
+$print(total)
+
+#---
+
+#> 2
+
+s := "ab"
+y := s
+	.size
+$print(y)
+
+#---
+
+#> true
+
+ready := true
+count := 5
+result := ready
+	and count > 0
+$print(result)
+
+#---
+
+#! newlines.ms:66,1: syntax error: unexpected token EQ
+
+x
+:= 5
