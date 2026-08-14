@@ -77,8 +77,8 @@ $print({"a": 1}.size())
 
 #---
 
-#> def five()
-#> def get()
+#> def five
+#> def get
 #> 5
 #> def id(val)
 

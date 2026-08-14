@@ -1996,7 +1996,10 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	let mut res = String::new();
 	let name = syms.resolve(proc.name);
-	res.push_str(&format!("def {}(", name));
+	res.push_str(&format!("def {}", name));
+	if !proc.params.is_empty() {
+		res.push('(');
+	}
 	for (i, param) in proc.params.iter().enumerate() {
 		let param = syms.resolve(param.0);
 		res.push_str(param);
@@ -2004,7 +2007,9 @@ fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 			res.push_str(", ");
 		}
 	}
-	res.push(')');
+	if !proc.params.is_empty() {
+		res.push(')');
+	}
 	res
 }
 
