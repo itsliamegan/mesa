@@ -7,6 +7,18 @@ $print(str.size)
 
 #---
 
+#> H
+#> e
+#> l
+#> l
+#> o
+
+each char in "Hello" do
+	$print(char)
+end
+
+#---
+
 #> Hello, world!
 
 str := "Hello, world"

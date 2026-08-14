@@ -888,6 +888,25 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
 			Expr::Each(Each(name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
+				Val::Str(str) => {
+					for char in str.text.chars() {
+						let scope = Rc::new(RefCell::new(Scope {
+							locals: FxHashMap::default(),
+							outer: Some(self.scope.clone()),
+							tier: Tier::Local,
+						}));
+						scope
+							.borrow_mut()
+							.locals
+							.insert(*name, Val::Char(Char(char)));
+						match self.eval_block(chunk, scope, *body_id) {
+							Ok(_) => {}
+							Err(Signal::Break(val)) => return Ok(val),
+							Err(signal) => return Err(signal),
+						}
+					}
+					Ok(Val::Nil(Nil))
+				}
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
 						for item in &list.items {
@@ -897,7 +916,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								tier: Tier::Local,
 							}));
 							scope.borrow_mut().locals.insert(*name, item.clone());
-							match self.eval_block(chunk, scope.clone(), *body_id) {
+							match self.eval_block(chunk, scope, *body_id) {
 								Ok(_) => {}
 								Err(Signal::Break(val)) => return Ok(val),
 								Err(signal) => return Err(signal),
@@ -913,7 +932,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								tier: Tier::Local,
 							}));
 							scope.borrow_mut().locals.insert(*name, key.clone());
-							match self.eval_block(chunk, scope.clone(), *body_id) {
+							match self.eval_block(chunk, scope, *body_id) {
 								Ok(_) => {}
 								Err(Signal::Break(val)) => return Ok(val),
 								Err(signal) => return Err(signal),
