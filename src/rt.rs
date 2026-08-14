@@ -164,6 +164,30 @@ impl Bool {
 #[derive(Debug, Clone, Copy)]
 struct Char(char);
 
+#[derive(Debug)]
+struct Str {
+	text: Box<str>
+}
+
+impl Str {
+	fn new() -> Val {
+		Val::Str(Rc::new(Str {
+			text: Box::from(""),
+		}))
+	}
+
+	fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+		let Val::Str(str) = val else { panic!() };
+		Ok(Val::Num(Num(str.text.chars().count() as f64)))
+	}
+
+	fn chars(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+		let Val::Str(str) = val else { panic!() };
+		let items = str.text.chars().map(|c| Val::Char(Char(c))).collect();
+		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
+	}
+}
+
 #[derive(Debug, Clone, Copy)]
 struct Nil;
 
@@ -178,6 +202,7 @@ enum Val {
 	Num(Num),
 	Bool(Bool),
 	Char(Char),
+	Str(Rc<Str>),
 	Obj(Rc<RefCell<Obj>>),
 	Nil(Nil),
 }
@@ -188,6 +213,7 @@ impl Val {
 			Val::Num(_) => TypeId::Native(NativeTypeId::NUM),
 			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
 			Val::Char(_) => TypeId::Native(NativeTypeId::CHAR),
+			Val::Str(_) => TypeId::Native(NativeTypeId::STR),
 			Val::Obj(rf) => rf.borrow().type_id(),
 			Self::Nil(_) => TypeId::Native(NativeTypeId::NIL),
 		}
@@ -266,10 +292,8 @@ impl PartialEq for Val {
 			(Self::Num(num), Self::Num(other_num)) => num.0 == other_num.0,
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool.0 == other_bool.0,
 			(Self::Char(char), Self::Char(other_char)) => char.0 == other_char.0,
-			(Self::Obj(rf), Self::Obj(other_rf)) => match (&*rf.borrow(), &*other_rf.borrow()) {
-				(Obj::Str(str), Obj::Str(other_str)) => str.chars == other_str.chars,
-				_ => rf.as_ptr() == other_rf.as_ptr(),
-			},
+			(Self::Str(str), Self::Str(other_str)) => str.text == other_str.text,
+			(Self::Obj(rf), Self::Obj(other_rf)) => rf.as_ptr() == other_rf.as_ptr(),
 			(Self::Nil(_), Self::Nil(_)) => true,
 			_ => false,
 		}
@@ -284,10 +308,8 @@ impl Hash for Val {
 			Self::Num(num) => num.0.to_bits().hash(state),
 			Self::Bool(bool) => bool.0.hash(state),
 			Self::Char(char) => char.0.hash(state),
-			Self::Obj(rf) => match &*rf.borrow() {
-				Obj::Str(str) => str.chars.hash(state),
-				_ => rf.as_ptr().hash(state),
-			},
+			Self::Str(str) => str.text.hash(state),
+			Self::Obj(rf) => rf.as_ptr().hash(state),
 			Self::Nil(_) => 0_u8.hash(state),
 		}
 	}
@@ -295,7 +317,6 @@ impl Hash for Val {
 
 #[derive(Debug)]
 enum Obj {
-	Str(Str),
 	List(List),
 	Dict(Dict),
 	Proc(Proc),
@@ -307,7 +328,6 @@ enum Obj {
 impl Obj {
 	fn type_id(&self) -> TypeId {
 		match self {
-			Self::Str(_) => TypeId::Native(NativeTypeId::STR),
 			Self::List(_) => TypeId::Native(NativeTypeId::LIST),
 			Self::Dict(_) => TypeId::Native(NativeTypeId::DICT),
 			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
@@ -315,36 +335,6 @@ impl Obj {
 			Self::Instance(inst) => TypeId::User(inst.typ),
 			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
 		}
-	}
-}
-
-#[derive(Debug)]
-struct Str {
-	chars: Box<str>,
-}
-
-impl Str {
-	fn new() -> Val {
-		Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
-			chars: Box::from(""),
-		}))))
-	}
-
-	fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Obj(rf) = val else { panic!() };
-		let Obj::Str(str) = &*rf.borrow() else {
-			panic!()
-		};
-		Ok(Val::Num(Num(str.chars.chars().count() as f64)))
-	}
-
-	fn chars(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Obj(rf) = val else { panic!() };
-		let Obj::Str(str) = &*rf.borrow() else {
-			panic!()
-		};
-		let items = str.chars.chars().map(|c| Val::Char(Char(c))).collect();
-		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
 	}
 }
 
@@ -1417,9 +1407,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
-				Lit::Str(str) => Val::Obj(Rc::new(RefCell::new(Obj::Str(Str {
-					chars: Box::from(str.as_str()),
-				})))),
+				Lit::Str(str) => Val::Str(Rc::new(Str {
+					text: Box::from(str.as_str()),
+				})),
 				Lit::Char(char) => Val::Char(Char(*char)),
 				Lit::Num(num) => Val::Num(Num(*num)),
 				Lit::Bool(bool) => Val::Bool(Bool(*bool)),
@@ -1879,6 +1869,7 @@ fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 		Val::Num(num) => format!("{}", num.0),
 		Val::Bool(bool) => format!("{}", bool.0),
 		Val::Char(char) => format!("{}", char.0),
+		Val::Str(str) => format!("{}", str.text),
 		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
 		Val::Nil(_) => String::from("nil"),
 	}
@@ -1886,7 +1877,6 @@ fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 
 fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	match obj {
-		Obj::Str(str) => format!("{}", str.chars),
 		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
@@ -1978,10 +1968,8 @@ fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	match val {
 		Val::Char(char) => format!("'{}'", char.0),
-		Val::Obj(rf) => match &*rf.borrow() {
-			Obj::Str(str) => format!("\"{}\"", str.chars),
-			obj => rt_print_obj(syms, types, obj),
-		},
+		Val::Str(str) => format!("\"{}\"", str.text),
+		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
 		val => rt_print_val(syms, types, val),
 	}
 }
