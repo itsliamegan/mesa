@@ -186,6 +186,7 @@ pub enum TokenTag {
 	Eof,
 
 	Type,
+	Case,
 	Def,
 	Each,
 	Loop,
@@ -247,6 +248,7 @@ impl TokenTag {
 			TokenTag::Eof => "EOF",
 
 			TokenTag::Type => "TYPE",
+			TokenTag::Case => "CASE",
 			TokenTag::Def => "DEF",
 			TokenTag::Each => "EACH",
 			TokenTag::Loop => "LOOP",
@@ -707,6 +709,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		let sym = self.syms.intern(span);
 		let tag = match sym {
 			Sym::TYPE => TokenTag::Type,
+			Sym::CASE => TokenTag::Case,
 			Sym::DEF => TokenTag::Def,
 			Sym::EACH => TokenTag::Each,
 			Sym::LOOP => TokenTag::Loop,
@@ -896,6 +899,7 @@ impl NodeId for TypeItemId {
 
 #[derive(Debug)]
 pub enum TypeItem {
+	Case(Type),
 	Field(Field),
 	Type(Type),
 	Method(Method),
@@ -1283,21 +1287,31 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_type_in_module(&mut self) -> Result<ModuleItemId, Error> {
-		let (type_, span) = self.parse_type()?;
+		let (type_, span) = self.parse_type(TokenTag::Type, true)?;
 		let item = ModuleItem::Type(type_);
 		let item_id = self.chunk.add_module_item(span, item);
 		Ok(item_id)
 	}
 
 	fn parse_type_in_type(&mut self) -> Result<TypeItemId, Error> {
-		let (type_, span) = self.parse_type()?;
+		let (type_, span) = self.parse_type(TokenTag::Type, true)?;
 		let item = TypeItem::Type(type_);
 		let item_id = self.chunk.add_type_item(span, item);
 		Ok(item_id)
 	}
 
-	fn parse_type(&mut self) -> Result<(Type, Span), Error> {
-		let tok = self.take(TokenTag::Type)?;
+	fn parse_case_in_type(&mut self) -> Result<TypeItemId, Error> {
+		let (type_, span) = self.parse_type(TokenTag::Case, false)?;
+		let item = TypeItem::Case(type_);
+		let item_id = self.chunk.add_type_item(span, item);
+		Ok(item_id)
+	}
+
+	// A case clause is field-for-field a type, so both parse here. Cases nest
+	// one level only: inside a case, `case` falls through to parse_type_item's
+	// catch-all.
+	fn parse_type(&mut self, open: TokenTag, allow_cases: bool) -> Result<(Type, Span), Error> {
+		let tok = self.take(open)?;
 		let ident = self.take(TokenTag::Ident)?;
 		let name = ident.sym.unwrap();
 		let last = self.src[ident.end - 1];
@@ -1309,19 +1323,30 @@ impl<'src> Parser<'src> {
 		}
 		let fields = self.parse_params()?;
 		let mut items = Vec::new();
+		let mut seen_field = false;
 		let mut seen_method = false;
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
-			let item_id = self.parse_type_item()?;
-			if let TypeItem::Field(..) = self.chunk.get_type_item(item_id) {
-				if seen_method {
-					let span = self.chunk.get_type_item_span(item_id);
-					return Err(Error::UnexpectedToken(
-						self.src.loc(span.start),
-						TokenTag::Ident,
-					));
+			let item_id = self.parse_type_item(allow_cases)?;
+			let span = self.chunk.get_type_item_span(item_id);
+			match self.chunk.get_type_item(item_id) {
+				TypeItem::Case(..) => {
+					if seen_field || seen_method {
+						return Err(Error::UnexpectedToken(
+							self.src.loc(span.start),
+							TokenTag::Case,
+						));
+					}
 				}
-			} else {
-				seen_method = true;
+				TypeItem::Field(..) => {
+					if seen_method {
+						return Err(Error::UnexpectedToken(
+							self.src.loc(span.start),
+							TokenTag::Ident,
+						));
+					}
+					seen_field = true;
+				}
+				TypeItem::Type(..) | TypeItem::Method(..) => seen_method = true,
 			}
 			items.push(item_id);
 		}
@@ -1329,8 +1354,9 @@ impl<'src> Parser<'src> {
 		Ok((Type(name, fields, items), tok.into()))
 	}
 
-	fn parse_type_item(&mut self) -> Result<TypeItemId, Error> {
+	fn parse_type_item(&mut self, allow_cases: bool) -> Result<TypeItemId, Error> {
 		match self.tag() {
+			TokenTag::Case if allow_cases => self.parse_case_in_type(),
 			TokenTag::Type => self.parse_type_in_type(),
 			TokenTag::Def => self.parse_method_decl(),
 			TokenTag::Ident => self.parse_field_decl(),

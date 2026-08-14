@@ -5,8 +5,8 @@ use crate::intern::{Interner, Sym};
 use crate::rt::CORE_TYPE_NAMES;
 use crate::syn::{
 	Access, Arg, Assign, Binary, Block, BlockId, Break, Builtin, Call, Chunk, Def, Each, Expr,
-	ExprId, Lit, Location, Loop, Member, Mention, Method, ModuleItem, Param, Place, Return, Source,
-	Span, Type, TypeItem, Unary, When,
+	ExprId, Field, Lit, Location, Loop, Member, Mention, Method, ModuleItem, Param, Place, Return,
+	Source, Span, Type, TypeItem, Unary, When,
 };
 
 #[derive(Debug)]
@@ -14,6 +14,8 @@ pub enum Error {
 	PreludeShadowed(Location, String),
 	RequiredAfterDefault(Location, String, String),
 	BreakOutsideLoop(Location),
+	ParamsOnCaseParent(Location, String),
+	FieldOnCaseParent(Location, String, String),
 }
 
 impl Error {
@@ -22,6 +24,8 @@ impl Error {
 			Self::PreludeShadowed(loc, _) => loc,
 			Self::RequiredAfterDefault(loc, ..) => loc,
 			Self::BreakOutsideLoop(loc) => loc,
+			Self::ParamsOnCaseParent(loc, _) => loc,
+			Self::FieldOnCaseParent(loc, ..) => loc,
 		}
 	}
 }
@@ -41,6 +45,12 @@ impl Display for Error {
 				)
 			}
 			Self::BreakOutsideLoop(_) => write!(f, "'break' outside a loop"),
+			Self::ParamsOnCaseParent(_, name) => {
+				write!(f, "case type '{}' cannot declare params", name)
+			}
+			Self::FieldOnCaseParent(_, name, field) => {
+				write!(f, "case type '{}' cannot declare field '{}'", name, field)
+			}
 		}
 	}
 }
@@ -79,13 +89,40 @@ fn check_type(
 	chunk: &Chunk,
 	src: &Source,
 	span: Span,
-	Type(_, fields, items): &Type,
+	Type(name, fields, items): &Type,
 ) -> Result<(), Error> {
 	ensure_required_precede_defaults(syms, src, span, fields)?;
+
+	// A case type's parent is non-constructible, so it can hold neither params
+	// nor body fields — there is no instance to evaluate them against.
+	let has_cases = items
+		.iter()
+		.any(|item_id| match chunk.get_type_item(*item_id) {
+			TypeItem::Case(..) => true,
+			_ => false,
+		});
+	if has_cases && !fields.is_empty() {
+		let loc = src.loc(span.start);
+		return Err(Error::ParamsOnCaseParent(
+			loc,
+			syms.resolve(*name).to_string(),
+		));
+	}
+
 	for item_id in items {
 		let span = chunk.get_type_item_span(*item_id);
 		match chunk.get_type_item(*item_id) {
-			TypeItem::Field(_) => continue,
+			TypeItem::Case(variant) => check_type(syms, chunk, src, span, variant)?,
+			TypeItem::Field(Field(field, _)) => {
+				if has_cases {
+					let loc = src.loc(span.start);
+					return Err(Error::FieldOnCaseParent(
+						loc,
+						syms.resolve(*name).to_string(),
+						syms.resolve(*field).to_string(),
+					));
+				}
+			}
 			TypeItem::Type(inner_type) => check_type(syms, chunk, src, span, inner_type)?,
 			TypeItem::Method(Method::Instance(def)) => {
 				check_def(syms, chunk, src, span, def)?;

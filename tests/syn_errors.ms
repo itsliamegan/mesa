@@ -20,3 +20,20 @@ $print('a)
 #! syn_errors.ms:22,4: syntax error: unexpected token EQ
 
 &x := 1
+#---
+#! syn_errors.ms:28,2: syntax error: unexpected token CASE
+
+type Expr
+	seen := false
+	case Ident(name)
+	end
+end
+#---
+#! syn_errors.ms:36,3: syntax error: unexpected token CASE
+
+type Expr
+	case Ident(name)
+		case Inner(x)
+		end
+	end
+end

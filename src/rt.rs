@@ -48,6 +48,7 @@ pub enum TypeError {
 	ArithNonNum(String),
 	ConcatNonStr(String),
 	NotCallable(String),
+	NotConstructible(String),
 	NotInvokable(String),
 }
 
@@ -118,6 +119,9 @@ impl Display for TypeError {
 			}
 			Self::ConcatNonStr(type_name) => write!(f, "type {} cannot be concatenated", type_name),
 			Self::NotCallable(type_name) => write!(f, "type {} is not callable", type_name),
+			Self::NotConstructible(type_name) => {
+				write!(f, "type {} cannot be constructed", type_name)
+			}
 			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
 		}
 	}
@@ -280,7 +284,9 @@ impl Val {
 					let Val::Obj(rf) = self else {
 						panic!();
 					};
-					if types.get_user_type(id).has_member(name) {
+					if types.get_user_type(id).has_field(name)
+						|| types.user_method(id, name).is_some()
+					{
 						Some(Member::User(rf.clone(), name))
 					} else {
 						None
@@ -416,18 +422,29 @@ struct UserType {
 	chunk: ChunkId,
 	methods: FxHashMap<Sym, Rc<RefCell<Proc>>>,
 	statics: FxHashMap<Sym, Static>,
+	// Scope this type was declared in.
 	scope: Rc<RefCell<Scope>>,
+	// Type this type was declared in; None if at the module level.
+	enclosing: Option<UserTypeId>,
+	// Variants of this type; None if this type is itself a variant.
+	variants: Option<Vec<UserTypeId>>,
 }
 
 impl UserType {
-	fn has_member(&self, name: Sym) -> bool {
-		self.ctor_fields.iter().any(|param| param.0 == name)
-			|| self.body_fields.contains_key(&name)
-			|| self.methods.contains_key(&name)
+	fn has_field(&self, name: Sym) -> bool {
+		self.ctor_fields.iter().any(|param| param.0 == name) || self.body_fields.contains_key(&name)
 	}
 
 	fn get_static(&self, name: Sym) -> Option<Static> {
 		self.statics.get(&name).cloned()
+	}
+
+	fn is_variant(&self) -> bool {
+		self.variants.is_none()
+	}
+
+	fn variants(&self) -> &[UserTypeId] {
+		self.variants.as_deref().unwrap_or(&[])
 	}
 }
 
@@ -572,10 +589,20 @@ impl TypeRegistry {
 		}
 	}
 
-	fn get_type_name(&self, id: TypeId) -> Sym {
+	// Get a type's *qualified* name (including all lexical nesting).
+	fn type_name(&self, syms: &Interner, id: TypeId) -> String {
 		match id {
-			TypeId::User(id) => self.get_user_type(id).name,
-			TypeId::Native(id) => self.get_native_type(id).name,
+			TypeId::User(id) => {
+				let typ = self.get_user_type(id);
+				match typ.enclosing {
+					Some(outer) => {
+						let outer = self.type_name(syms, TypeId::User(outer));
+						format!("{}.{}", outer, syms.resolve(typ.name))
+					}
+					None => syms.resolve(typ.name).to_string(),
+				}
+			}
+			TypeId::Native(id) => syms.resolve(self.get_native_type(id).name).to_string(),
 		}
 	}
 
@@ -587,6 +614,24 @@ impl TypeRegistry {
 		let id = UserTypeId(self.user.len() as u32);
 		self.user.push(typ);
 		id
+	}
+
+	fn get_user_type_mut(&mut self, id: UserTypeId) -> &mut UserType {
+		&mut self.user[id.0 as usize]
+	}
+
+	// Get a method by name for a type. Looks up one level to the type's parent
+	// if it is a variant and has no matching method.
+	fn user_method(&self, id: UserTypeId, name: Sym) -> Option<Rc<RefCell<Proc>>> {
+		let typ = self.get_user_type(id);
+		if let Some(proc_rf) = typ.methods.get(&name) {
+			return Some(proc_rf.clone());
+		}
+		if typ.is_variant() {
+			let parent = self.get_user_type(typ.enclosing.unwrap());
+			return parent.methods.get(&name).cloned();
+		}
+		None
 	}
 
 	fn get_native_type(&self, id: NativeTypeId) -> &NativeType {
@@ -647,13 +692,12 @@ impl Member {
 				let Obj::Instance(inst) = &*inst_rf.borrow() else {
 					panic!()
 				};
-				let typ = types.get_user_type(inst.typ);
 				if let Some(val) = inst.fields.get(name) {
 					Ok(val.clone())
-				} else if let Some(proc_rf) = typ.methods.get(name) {
+				} else if let Some(proc_rf) = types.user_method(inst.typ, *name) {
 					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
 						inst_rf.clone(),
-						proc_rf.clone(),
+						proc_rf,
 					))))))
 				} else {
 					panic!();
@@ -681,7 +725,7 @@ impl Member {
 				let Obj::Instance(inst) = &mut *inst.borrow_mut() else {
 					panic!()
 				};
-				if types.get_user_type(inst.typ).methods.contains_key(name) {
+				if types.user_method(inst.typ, *name).is_some() {
 					return Err(());
 				}
 				inst.fields.insert(*name, val);
@@ -817,7 +861,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		match chunk.get_module_item(item_id) {
 			ModuleItem::Type(typ) => {
 				let name = typ.0;
-				let val = self.eval_type_decl(chunk, chunk_id, typ)?;
+				let val = self.eval_type_decl(chunk, chunk_id, typ, None, false)?;
 				self.scope.borrow_mut().locals.insert(name, val);
 				Ok(())
 			}
@@ -845,18 +889,40 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		chunk: &Chunk,
 		chunk_id: ChunkId,
 		syn::Type(name, ctor_field_names, items): &syn::Type,
+		enclosing: Option<UserTypeId>,
+		is_case: bool,
 	) -> Result<Val, Signal> {
+		let id = self.types.add_user_type(UserType {
+			name: *name,
+			ctor_fields: ctor_field_names.to_vec(),
+			body_fields: OrderMap::with_hasher(FxBuildHasher),
+			chunk: chunk_id,
+			methods: FxHashMap::default(),
+			statics: FxHashMap::default(),
+			scope: self.scope.clone(),
+			enclosing,
+			variants: None,
+		});
 		let mut methods = FxHashMap::default();
 		let mut statics = FxHashMap::default();
-		let ctor_fields = ctor_field_names.to_vec();
 		let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
+		let mut variants = if is_case { None } else { Some(Vec::new()) };
 		for item_id in items {
 			match chunk.get_type_item(*item_id) {
 				TypeItem::Field(syn::Field(name, init)) => {
 					body_fields.insert(*name, *init);
 				}
+				TypeItem::Case(variant) => {
+					let val = self.eval_type_decl(chunk, chunk_id, variant, Some(id), true)?;
+					let Val::Obj(rf) = &val else { panic!() };
+					let Obj::Type(TypeId::User(variant_id)) = *rf.borrow() else {
+						panic!()
+					};
+					statics.insert(variant.0, Static::Type(val));
+					variants.as_mut().unwrap().push(variant_id);
+				}
 				TypeItem::Type(inner_type) => {
-					let val = self.eval_type_decl(chunk, chunk_id, inner_type)?;
+					let val = self.eval_type_decl(chunk, chunk_id, inner_type, Some(id), false)?;
 					statics.insert(inner_type.0, Static::Type(val));
 				}
 				TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
@@ -881,16 +947,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 		}
-		let type_ = UserType {
-			name: *name,
-			ctor_fields,
-			body_fields,
-			chunk: chunk_id,
-			methods,
-			statics,
-			scope: self.scope.clone(),
-		};
-		let id = self.types.add_user_type(type_);
+		let typ = self.types.get_user_type_mut(id);
+		typ.body_fields = body_fields;
+		typ.methods = methods;
+		typ.statics = statics;
+		typ.variants = variants;
 		let obj = Obj::Type(TypeId::User(id));
 		Ok(Val::Obj(Rc::new(RefCell::new(obj))))
 	}
@@ -952,18 +1013,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					obj => {
 						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
+						let type_name = self.types.type_name(self.syms, obj.type_id());
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
+							Error::ProtocolError(ProtocolError::NotIterable(type_name)),
 							vec![(String::new(), loc)],
 						))
 					}
 				},
 				val => {
 					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
+					let type_name = self.types.type_name(self.syms, val.type_id());
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
+						Error::ProtocolError(ProtocolError::NotIterable(type_name)),
 						vec![(String::new(), loc)],
 					))
 				}
@@ -1026,6 +1087,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							TypeId::User(type_id) => {
 								let type_id = *type_id;
 								let typ = self.types.get_user_type(type_id);
+								// A type with variants cannot itself be constructed.
+								if !typ.variants().is_empty() {
+									let loc = span.loc(self.pkg);
+									let type_name =
+										self.types.type_name(self.syms, TypeId::User(type_id));
+									return Err(Signal::Error(
+										Error::TypeError(TypeError::NotConstructible(type_name)),
+										vec![(String::new(), loc)],
+									));
+								}
 								let ctor_fields = typ.ctor_fields.clone();
 								let body_fields = typ.body_fields.clone();
 								let type_scope = typ.scope.clone();
@@ -1094,7 +1165,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										let loc = span.loc(self.pkg);
 										let type_name = self.syms.resolve(typ.name);
 										Err(Signal::Error(
-											Error::TypeError(TypeError::NotCallable(
+											Error::TypeError(TypeError::NotConstructible(
 												type_name.to_string(),
 											)),
 											vec![(String::new(), loc)],
@@ -1126,19 +1197,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						},
 						obj => {
 							let loc = span.loc(self.pkg);
-							let type_name =
-								self.syms.resolve(self.types.get_type_name(obj.type_id()));
+							let type_name = self.types.type_name(self.syms, obj.type_id());
 							Err(Signal::Error(
-								Error::TypeError(TypeError::NotCallable(type_name.to_string())),
+								Error::TypeError(TypeError::NotCallable(type_name)),
 								vec![(String::new(), loc)],
 							))
 						}
 					},
 					val => {
 						let loc = span.loc(self.pkg);
-						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
+						let type_name = self.types.type_name(self.syms, val.type_id());
 						Err(Signal::Error(
-							Error::TypeError(TypeError::NotCallable(type_name.to_string())),
+							Error::TypeError(TypeError::NotCallable(type_name)),
 							vec![(String::new(), loc)],
 						))
 					}
@@ -1169,20 +1239,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					obj => {
 						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-						let type_name = self.syms.resolve(self.types.get_type_name(obj.type_id()));
+						let type_name = self.types.type_name(self.syms, obj.type_id());
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotAccessible(
-								type_name.to_string(),
-							)),
+							Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
 							vec![(String::new(), loc)],
 						))
 					}
 				},
 				val => {
 					let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-					let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
+					let type_name = self.types.type_name(self.syms, val.type_id());
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotAccessible(type_name.to_string())),
+						Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
 						vec![(String::new(), loc)],
 					))
 				}
@@ -1202,12 +1270,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							&& let Some(member) = receiver.member(*sym, &self.types)
 						{
 							if let Err(()) = member.set(val.clone(), &self.types) {
-								let type_name =
-									self.types.get_type_name(receiver.namespace_type_id());
+								let type_name = self
+									.types
+									.type_name(self.syms, receiver.namespace_type_id());
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
-										self.syms.resolve(type_name).to_string(),
+										type_name.to_string(),
 										self.syms.resolve(*sym).to_string(),
 									)),
 									vec![(String::new(), loc)],
@@ -1224,11 +1293,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						if let Some(member) = target.member(*name, &self.types) {
 							if let Err(()) = member.set(val.clone(), &self.types) {
 								let type_name =
-									self.types.get_type_name(target.namespace_type_id());
+									self.types.type_name(self.syms, target.namespace_type_id());
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
-										self.syms.resolve(type_name).to_string(),
+										type_name.to_string(),
 										self.syms.resolve(*name).to_string(),
 									)),
 									vec![(String::new(), loc)],
@@ -1236,11 +1305,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							Ok(val)
 						} else {
-							let type_name = self.types.get_type_name(target.namespace_type_id());
+							let type_name =
+								self.types.type_name(self.syms, target.namespace_type_id());
 							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 							Err(Signal::Error(
 								Error::MemberError(MemberError::Missing(
-									self.syms.resolve(type_name).to_string(),
+									type_name.to_string(),
 									self.syms.resolve(*name).to_string(),
 								)),
 								vec![(String::new(), loc)],
@@ -1264,11 +1334,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 								obj => {
 									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-									let type_name =
-										self.syms.resolve(self.types.get_type_name(obj.type_id()));
+									let type_name = self.types.type_name(self.syms, obj.type_id());
 									Err(Signal::Error(
 										Error::ProtocolError(ProtocolError::NotAccessible(
-											type_name.to_string(),
+											type_name,
 										)),
 										vec![(String::new(), loc)],
 									))
@@ -1276,12 +1345,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							},
 							val => {
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-								let type_name =
-									self.syms.resolve(self.types.get_type_name(val.type_id()));
+								let type_name = self.types.type_name(self.syms, val.type_id());
 								Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotAccessible(
-										type_name.to_string(),
-									)),
+									Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -1352,11 +1418,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										(_, Val::Num(_)) => lhs,
 										_ => lhs,
 									};
-									let type_name =
-										self.syms.resolve(self.types.get_type_name(val.type_id()));
+									let type_name = self.types.type_name(self.syms, val.type_id());
 									Err(Signal::Error(
 										Error::ProtocolError(ProtocolError::NotOrderable(
-											type_name.to_string(),
+											type_name,
 										)),
 										vec![(String::new(), loc)],
 									))
@@ -1366,24 +1431,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						BinaryOp::Append => {
 							let Val::Obj(rf) = lhs.clone() else {
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-								let type_name =
-									self.syms.resolve(self.types.get_type_name(lhs.type_id()));
+								let type_name = self.types.type_name(self.syms, lhs.type_id());
 								return Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotAppendable(
-										type_name.to_string(),
-									)),
+									Error::ProtocolError(ProtocolError::NotAppendable(type_name)),
 									vec![(String::new(), loc)],
 								));
 							};
 							let Obj::List(list) = &mut *rf.borrow_mut() else {
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-								let type_name = self
-									.syms
-									.resolve(self.types.get_type_name(rf.borrow().type_id()));
+								let type_name =
+									self.types.type_name(self.syms, rf.borrow().type_id());
 								return Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotAppendable(
-										type_name.to_string(),
-									)),
+									Error::ProtocolError(ProtocolError::NotAppendable(type_name)),
 									vec![(String::new(), loc)],
 								));
 							};
@@ -1404,21 +1463,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							(Val::Str(_), rhs) => {
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-								let type_name =
-									self.syms.resolve(self.types.get_type_name(rhs.type_id()));
+								let type_name = self.types.type_name(self.syms, rhs.type_id());
 								Err(Signal::Error(
-									Error::TypeError(TypeError::ConcatNonStr(
-										type_name.to_string(),
-									)),
+									Error::TypeError(TypeError::ConcatNonStr(type_name)),
 									vec![(String::new(), loc)],
 								))
 							}
 							(_, rhs) => {
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-								let type_name =
-									self.syms.resolve(self.types.get_type_name(rhs.type_id()));
+								let type_name = self.types.type_name(self.syms, rhs.type_id());
 								Err(Signal::Error(
-									Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
+									Error::TypeError(TypeError::ArithNonNum(type_name)),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -1437,10 +1492,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									(_, Val::Num(_)) => lhs,
 									_ => lhs,
 								};
-								let type_name =
-									self.syms.resolve(self.types.get_type_name(val.type_id()));
+								let type_name = self.types.type_name(self.syms, val.type_id());
 								Err(Signal::Error(
-									Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
+									Error::TypeError(TypeError::ArithNonNum(type_name)),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -1458,9 +1512,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Val::Num(num) => Ok(Val::Num(Num(-num.0))),
 					val => {
 						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-						let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
+						let type_name = self.types.type_name(self.syms, val.type_id());
 						Err(Signal::Error(
-							Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
+							Error::TypeError(TypeError::ArithNonNum(type_name)),
 							vec![(String::new(), loc)],
 						))
 					}
@@ -1565,11 +1619,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 		} else {
-			let type_name = self.types.get_type_name(val.namespace_type_id());
+			let type_name = self.types.type_name(self.syms, val.namespace_type_id());
 			let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 			Err(Signal::Error(
 				Error::MemberError(MemberError::Missing(
-					self.syms.resolve(type_name).to_string(),
+					type_name.to_string(),
 					self.syms.resolve(name).to_string(),
 				)),
 				vec![(String::new(), loc)],
@@ -1632,9 +1686,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 
 		let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-		let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
+		let type_name = self.types.type_name(self.syms, val.type_id());
 		Err(Signal::Error(
-			Error::TypeError(TypeError::NotInvokable(type_name.to_string())),
+			Error::TypeError(TypeError::NotInvokable(type_name)),
 			vec![(String::new(), loc)],
 		))
 	}
@@ -1986,7 +2040,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 		Obj::Type(type_id) => match type_id {
 			TypeId::User(type_id) => {
 				let typ = types.get_user_type(*type_id);
-				let name = syms.resolve(typ.name);
+				let name = types.type_name(syms, TypeId::User(*type_id));
 				let mut res = String::new();
 				res.push_str(&format!("type {}(", name));
 				for (i, field) in typ.ctor_fields.iter().enumerate() {
@@ -2007,7 +2061,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 		},
 		Obj::Instance(inst) => {
 			let typ = types.get_user_type(inst.typ);
-			let name = syms.resolve(typ.name);
+			let name = types.type_name(syms, TypeId::User(inst.typ));
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
 			for (i, field) in typ.ctor_fields.iter().enumerate() {

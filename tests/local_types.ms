@@ -32,3 +32,10 @@ end
 
 c := A.B.C(9)
 $print(c.val)
+
+# A nested type names itself qualified, since the bare name cannot be typed.
+#> LinkedList.Iter(0)
+#> A.B.C(9)
+
+$print(LinkedList.Iter(0))
+$print(c)

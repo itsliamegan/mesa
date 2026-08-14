@@ -52,6 +52,10 @@ test_files! {
 	test_reports_param_order => "sem_error_params.ms",
 	test_reports_break_outside_loop => "sem_error_break.ms",
 	test_mentions_without_invoking => "procs.ms",
+	test_case_types => "case_types.ms",
+	test_case_types_nested => "case_types_nested.ms",
+	test_reports_case_errors => "case_errors.ms",
+	test_reports_case_parent_shape => "sem_error_case.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {

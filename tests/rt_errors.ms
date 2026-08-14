@@ -238,3 +238,10 @@ $print(&1)
 #! 	at <main> (rt_errors.ms:240,14)
 
 $print("str" + 5.1)
+
+#---
+
+#! rt_errors.ms:247,5: runtime error: type Char cannot be constructed
+#! 	at <main> (rt_errors.ms:247,5)
+
+Char()
