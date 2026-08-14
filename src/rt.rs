@@ -45,6 +45,7 @@ pub enum ArgumentError {
 pub enum TypeError {
 	IndexNonNum(String),
 	ArithNonNum(String),
+	ConcatNonStr(String),
 	NotCallable(String),
 	NotInvokable(String),
 	NotOrderable(String),
@@ -114,6 +115,7 @@ impl Display for TypeError {
 			Self::ArithNonNum(type_name) => {
 				write!(f, "type {} cannot be used in arithmetic", type_name)
 			}
+			Self::ConcatNonStr(type_name) => write!(f, "type {} cannot be concatenated", type_name),
 			Self::NotCallable(type_name) => write!(f, "type {} is not callable", type_name),
 			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
 			Self::NotOrderable(type_name) => write!(f, "type {} is not orderable", type_name),
@@ -166,7 +168,7 @@ struct Char(char);
 
 #[derive(Debug)]
 struct Str {
-	text: Box<str>
+	text: Box<str>,
 }
 
 impl Str {
@@ -1343,33 +1345,60 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							list.items.push(rhs);
 							Ok(lhs)
 						}
-						BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-							match (lhs, rhs) {
-								(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
-									BinaryOp::Add => lhs.0 + rhs.0,
-									BinaryOp::Sub => lhs.0 - rhs.0,
-									BinaryOp::Mul => lhs.0 * rhs.0,
-									BinaryOp::Div => lhs.0 / rhs.0,
-									_ => panic!(),
-								}))),
-								(lhs, rhs) => {
-									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
-									let val = match (&lhs, &rhs) {
-										(Val::Num(_), _) => rhs,
-										(_, Val::Num(_)) => lhs,
-										_ => lhs,
-									};
-									let type_name =
-										self.syms.resolve(self.types.get_type_name(val.type_id()));
-									Err(Signal::Error(
-										Error::TypeError(TypeError::ArithNonNum(
-											type_name.to_string(),
-										)),
-										vec![(String::new(), loc)],
-									))
-								}
+						BinaryOp::Add => match (lhs, rhs) {
+							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(lhs.0 + rhs.0))),
+							(Val::Str(lhs), Val::Str(rhs)) => {
+								let mut text =
+									String::with_capacity(lhs.text.len() + rhs.text.len());
+								text.push_str(&lhs.text);
+								text.push_str(&rhs.text);
+								Ok(Val::Str(Rc::new(Str {
+									text: Box::from(text.as_str()),
+								})))
 							}
-						}
+							(Val::Str(_), rhs) => {
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								let type_name =
+									self.syms.resolve(self.types.get_type_name(rhs.type_id()));
+								Err(Signal::Error(
+									Error::TypeError(TypeError::ConcatNonStr(
+										type_name.to_string(),
+									)),
+									vec![(String::new(), loc)],
+								))
+							}
+							(_, rhs) => {
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								let type_name =
+									self.syms.resolve(self.types.get_type_name(rhs.type_id()));
+								Err(Signal::Error(
+									Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
+									vec![(String::new(), loc)],
+								))
+							}
+						},
+						BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => match (lhs, rhs) {
+							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
+								BinaryOp::Sub => lhs.0 - rhs.0,
+								BinaryOp::Mul => lhs.0 * rhs.0,
+								BinaryOp::Div => lhs.0 / rhs.0,
+								_ => panic!(),
+							}))),
+							(lhs, rhs) => {
+								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+								let val = match (&lhs, &rhs) {
+									(Val::Num(_), _) => rhs,
+									(_, Val::Num(_)) => lhs,
+									_ => lhs,
+								};
+								let type_name =
+									self.syms.resolve(self.types.get_type_name(val.type_id()));
+								Err(Signal::Error(
+									Error::TypeError(TypeError::ArithNonNum(type_name.to_string())),
+									vec![(String::new(), loc)],
+								))
+							}
+						},
 						BinaryOp::Or | BinaryOp::And => panic!(),
 					}
 				}

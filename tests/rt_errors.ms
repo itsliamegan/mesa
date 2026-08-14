@@ -231,3 +231,10 @@ $print({"a": 1}["b"])
 #! 	at <main> (rt_errors.ms:233,8)
 
 $print(&1)
+
+#---
+
+#! rt_errors.ms:240,14: runtime error: type Num cannot be concatenated
+#! 	at <main> (rt_errors.ms:240,14)
+
+$print("str" + 5.1)

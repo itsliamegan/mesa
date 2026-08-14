@@ -4,7 +4,17 @@
 str := "Hello, world!"
 $print(str)
 $print(str.size)
+
 #---
+
+#> Hello, world!
+
+str := "Hello, world"
+str := str + "!"
+$print(str)
+
+#---
+
 #> ['H', 'e', 'l', 'l', 'o']
 #> ['H', 'e', 'l', 'l', 'o']
 #> b
@@ -14,7 +24,9 @@ $print("Hello".chars)
 $print("Hello".chars())
 $print("abc".chars[1])
 $print("Hello".chars.size)
+
 #---
+
 #> 5
 #> 5
 
