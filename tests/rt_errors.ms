@@ -217,3 +217,10 @@ $print([1, 2, 3]["a"])
 #! 	at <main> (rt_errors.ms:219,16)
 
 $print({"a": 1}["b"])
+
+#---
+
+#! rt_errors.ms:226,8: runtime error: type Num is not invokable
+#! 	at <main> (rt_errors.ms:226,8)
+
+$print(&1)

@@ -16,3 +16,7 @@ $print('')
 #! syn_errors.ms:18,8: syntax error: unterminated character literal
 
 $print('a)
+#---
+#! syn_errors.ms:22,4: syntax error: unexpected token EQ
+
+&x := 1

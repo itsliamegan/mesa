@@ -224,6 +224,8 @@ pub enum TokenTag {
 	Star,
 	Slash,
 
+	Amp,
+
 	LBrace,
 	RBrace,
 	LBrack,
@@ -278,6 +280,8 @@ impl TokenTag {
 			TokenTag::Minus => "MINUS",
 			TokenTag::Star => "STAR",
 			TokenTag::Slash => "SLASH",
+
+			TokenTag::Amp => "AMP",
 
 			TokenTag::LBrace => "LBRACE",
 			TokenTag::RBrace => "RBRACE",
@@ -553,6 +557,16 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				Ok(Token {
 					src: self.src.id,
 					tag: TokenTag::Slash,
+					sym: None,
+					pos: self.pos - 1,
+					end: self.pos,
+				})
+			}
+			b'&' => {
+				self.pos += 1;
+				Ok(Token {
+					src: self.src.id,
+					tag: TokenTag::Amp,
 					sym: None,
 					pos: self.pos - 1,
 					end: self.pos,
@@ -901,6 +915,7 @@ pub enum Expr {
 	Call(Call),
 	Member(Member),
 	Access(Access),
+	Mention(Mention),
 	Assign(Assign),
 	Binary(Binary),
 	Unary(Unary),
@@ -929,6 +944,9 @@ pub struct Member(pub ExprId, pub Sym);
 
 #[derive(Debug, Clone)]
 pub struct Access(pub ExprId, pub ExprId);
+
+#[derive(Debug)]
+pub struct Mention(pub ExprId);
 
 #[derive(Debug)]
 pub struct Assign(pub Place, pub ExprId);
@@ -1087,6 +1105,7 @@ impl Precedence {
 	const MUL: Precedence = Precedence(7);
 	const DIV: Precedence = Precedence(7);
 	const NEG: Precedence = Precedence(8);
+	const MENTION: Precedence = Precedence(8);
 	const CALL: Precedence = Precedence(9);
 	const MEMBER: Precedence = Precedence(9);
 	const ACCESS: Precedence = Precedence(9);
@@ -1473,6 +1492,14 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
+	fn parse_mention_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Amp)?;
+		let val_id = self.parse_expr_prec(Precedence::MENTION)?;
+		let expr = Expr::Mention(Mention(val_id));
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
 	fn parse_expr_unit(&mut self) -> Result<ExprId, Error> {
 		match self.tag() {
 			TokenTag::LParen => self.parse_group_expr(),
@@ -1484,6 +1511,7 @@ impl<'src> Parser<'src> {
 			TokenTag::Minus => {
 				self.parse_unary_expr(TokenTag::Minus, UnaryOp::Neg, Precedence::NEG)
 			}
+			TokenTag::Amp => self.parse_mention_expr(),
 			TokenTag::Ident => self.parse_name_expr(),
 			TokenTag::Builtin => self.parse_builtin_expr(),
 			TokenTag::Str => self.parse_str_lit_expr(),

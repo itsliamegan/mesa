@@ -74,3 +74,34 @@ $print([1, 2, 3].size)
 $print([1, 2, 3].size())
 $print({"a": 1}.size)
 $print({"a": 1}.size())
+
+#---
+
+#> def five()
+#> def get()
+#> 5
+#> def id(val)
+
+def five()
+	5
+end
+
+$print(&five)
+
+type Box(n)
+	def get()
+		n
+	end
+end
+
+b := Box(9)
+$print(&b.get)
+
+f := &five
+$print(f())
+
+def id(val)
+	&val
+end
+
+$print(id(&id))

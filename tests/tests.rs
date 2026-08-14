@@ -48,6 +48,7 @@ test_files! {
 	test_keyword_args_and_defaults => "kwargs.ms",
 	test_reports_syntax_errors => "syn_errors.ms",
 	test_reports_param_order => "sem_error_params.ms",
+	test_mentions_without_invoking => "procs.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {

@@ -11,8 +11,8 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use crate::intern::{Interner, Sym};
 use crate::syn::{
 	self, Access, Arg, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each,
-	Expr, ExprId, Lit, Location, ModuleItem, ModuleItemId, Name, Package, Param, Place, Return,
-	Span, TypeItem, Unary, UnaryOp, When,
+	Expr, ExprId, Lit, Location, Mention, ModuleItem, ModuleItemId, Name, Package, Param, Place,
+	Return, Span, TypeItem, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -965,13 +965,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let arg = self.eval_expr(chunk, *arg_id)?;
 					args.push((*name, arg));
 				}
-				let callee = match chunk.get_expr(*val_id) {
-					Expr::Name(Name(name)) => self.eval_name_raw(chunk, *val_id, *name)?,
-					Expr::Member(syn::Member(target_id, name)) => {
-						self.eval_member_raw(chunk, *val_id, *target_id, *name)?
-					}
-					_ => self.eval_expr(chunk, *val_id)?,
-				};
+				let callee = self.eval_expr_raw(chunk, *val_id)?;
 				match callee {
 					Val::Obj(rf) => match &*rf.borrow() {
 						Obj::Proc(proc) => self.eval_proc_call(span, proc, None, args),
@@ -1137,6 +1131,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					))
 				}
 			},
+			Expr::Mention(Mention(val_id)) => {
+				let val = self.eval_expr_raw(chunk, *val_id)?;
+				self.expect_invocable(chunk, expr_id, val)
+			}
 			Expr::Assign(Assign(place, val_expr_id)) => {
 				let val = self.eval_expr(chunk, *val_expr_id)?;
 				match place {
@@ -1387,6 +1385,16 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
+	fn eval_expr_raw(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
+		match chunk.get_expr(expr_id) {
+			Expr::Name(Name(name)) => self.eval_name_raw(chunk, expr_id, *name),
+			Expr::Member(syn::Member(target_id, name)) => {
+				self.eval_member_raw(chunk, expr_id, *target_id, *name)
+			}
+			_ => self.eval_expr(chunk, expr_id),
+		}
+	}
+
 	fn eval_name_raw(&mut self, chunk: &Chunk, expr_id: ExprId, name: Sym) -> Result<Val, Signal> {
 		let local = Scope::local(&self.scope, name);
 		if local.is_bound() && local.tier == Tier::Local {
@@ -1482,6 +1490,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 
 		Ok(num as usize)
+	}
+
+	fn expect_invocable(
+		&mut self,
+		chunk: &Chunk,
+		expr_id: ExprId,
+		val: Val,
+	) -> Result<Val, Signal> {
+		if let Val::Obj(rf) = &val {
+			match &*rf.borrow() {
+				Obj::Proc(_) | Obj::Method(_) => return Ok(val.clone()),
+				_ => {}
+			}
+		}
+
+		let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
+		let type_name = self.syms.resolve(self.types.get_type_name(val.type_id()));
+		Err(Signal::Error(
+			Error::TypeError(TypeError::NotInvokable(type_name.to_string())),
+			vec![(String::new(), loc)],
+		))
 	}
 
 	fn invoke_or_return(
