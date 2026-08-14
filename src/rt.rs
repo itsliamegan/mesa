@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::{Eq, PartialEq};
 use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
@@ -169,18 +169,28 @@ struct Char(char);
 #[derive(Debug)]
 struct Str {
 	text: Box<str>,
+	size: Cell<Option<f64>>,
 }
 
 impl Str {
 	fn new() -> Val {
 		Val::Str(Rc::new(Str {
 			text: Box::from(""),
+			size: Cell::new(None),
 		}))
 	}
 
 	fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
 		let Val::Str(str) = val else { panic!() };
-		Ok(Val::Num(Num(str.text.chars().count() as f64)))
+		let size = match str.size.get() {
+			Some(size) => size,
+			None => {
+				let size = str.text.chars().count() as f64;
+				str.size.set(Some(size));
+				size
+			}
+		};
+		Ok(Val::Num(Num(size)))
 	}
 
 	fn chars(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
@@ -1389,6 +1399,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								text.push_str(&rhs.text);
 								Ok(Val::Str(Rc::new(Str {
 									text: Box::from(text.as_str()),
+									size: Cell::new(None),
 								})))
 							}
 							(Val::Str(_), rhs) => {
@@ -1473,6 +1484,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Lit(lit) => Ok(match lit {
 				Lit::Str(str) => Val::Str(Rc::new(Str {
 					text: Box::from(str.as_str()),
+					size: Cell::new(None),
 				})),
 				Lit::Char(char) => Val::Char(Char(*char)),
 				Lit::Num(num) => Val::Num(Num(*num)),
