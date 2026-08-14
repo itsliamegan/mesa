@@ -10,9 +10,9 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Arg, Assign, Binary, BinaryOp, BlockId, Builtin, Call, Chunk, ChunkId, Def, Each,
-	Expr, ExprId, Lit, Location, Mention, ModuleItem, ModuleItemId, Name, Package, Param, Place,
-	Return, Span, TypeItem, Unary, UnaryOp, When,
+	self, Access, Arg, Assign, Binary, BinaryOp, BlockId, Break, Builtin, Call, Chunk, ChunkId,
+	Def, Each, Expr, ExprId, Lit, Location, Loop, Mention, ModuleItem, ModuleItemId, Name, Package,
+	Param, Place, Return, Span, TypeItem, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -756,6 +756,7 @@ pub struct Interpreter<'syms, 'pkg> {
 
 enum Signal {
 	Return(Val),
+	Break(Val),
 	Error(Error, Vec<(String, Location)>),
 }
 
@@ -798,6 +799,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			match self.eval_module_item(chunk, chunk_id, *item_id) {
 				Ok(()) => {}
 				Err(Signal::Return(_)) => break,
+				Err(Signal::Break(_)) => panic!(),
 				Err(Signal::Error(err, trace)) => return Err((err, trace)),
 			}
 		}
@@ -903,19 +905,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								tier: Tier::Local,
 							}));
 							scope.borrow_mut().locals.insert(*name, item.clone());
-							self.eval_block(chunk, scope.clone(), *body_id)?;
+							match self.eval_block(chunk, scope.clone(), *body_id) {
+								Ok(_) => {}
+								Err(Signal::Break(val)) => return Ok(val),
+								Err(signal) => return Err(signal),
+							}
 						}
 						Ok(Val::Nil(Nil))
 					}
 					Obj::Dict(dict) => {
-						let scope = Rc::new(RefCell::new(Scope {
-							locals: FxHashMap::default(),
-							outer: Some(self.scope.clone()),
-							tier: Tier::Local,
-						}));
 						for key in dict.pairs.keys() {
+							let scope = Rc::new(RefCell::new(Scope {
+								locals: FxHashMap::default(),
+								outer: Some(self.scope.clone()),
+								tier: Tier::Local,
+							}));
 							scope.borrow_mut().locals.insert(*name, key.clone());
-							self.eval_block(chunk, scope.clone(), *body_id)?;
+							match self.eval_block(chunk, scope.clone(), *body_id) {
+								Ok(_) => {}
+								Err(Signal::Break(val)) => return Ok(val),
+								Err(signal) => return Err(signal),
+							}
 						}
 						Ok(Val::Nil(Nil))
 					}
@@ -935,6 +945,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Error::ProtocolError(ProtocolError::NotIterable(type_name.to_string())),
 						vec![(String::new(), loc)],
 					))
+				}
+			},
+			Expr::Loop(Loop(body_id)) => loop {
+				let scope = Rc::new(RefCell::new(Scope {
+					locals: FxHashMap::default(),
+					outer: Some(self.scope.clone()),
+					tier: Tier::Local,
+				}));
+				match self.eval_block(chunk, scope, *body_id) {
+					Ok(_) => {}
+					Err(Signal::Break(val)) => return Ok(val),
+					Err(signal) => return Err(signal),
 				}
 			},
 			Expr::When(When(cond, then_branch, else_branch)) => {
@@ -959,6 +981,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Val::Nil(Nil)
 				};
 				Err(Signal::Return(val))
+			}
+			Expr::Break(Break(val_expr_id)) => {
+				let val = if let Some(val_expr_id) = val_expr_id {
+					self.eval_expr(chunk, *val_expr_id)?
+				} else {
+					Val::Nil(Nil)
+				};
+				Err(Signal::Break(val))
 			}
 			Expr::Call(Call(val_id, arg_nodes)) => {
 				let span = chunk.get_expr_span(expr_id);
@@ -1798,6 +1828,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		match result {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
+			Err(Signal::Break(_)) => panic!(),
 			Err(Signal::Error(err, mut trace)) => {
 				let proc_name = self.syms.resolve(proc.name);
 				trace.last_mut().unwrap().0.push_str(proc_name);
@@ -1827,6 +1858,10 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Err(Signal::Return(val)) => {
 					self.scope = saved;
 					return Err(Signal::Return(val));
+				}
+				Err(Signal::Break(val)) => {
+					self.scope = saved;
+					return Err(Signal::Break(val));
 				}
 				Err(Signal::Error(err, loc)) => {
 					self.scope = saved;

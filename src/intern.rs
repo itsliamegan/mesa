@@ -9,26 +9,29 @@ impl Sym {
 	pub const TYPE: Sym = Sym(0);
 	pub const DEF: Sym = Sym(1);
 	pub const EACH: Sym = Sym(2);
-	pub const IN: Sym = Sym(3);
-	pub const DO: Sym = Sym(4);
-	pub const WHEN: Sym = Sym(5);
-	pub const THEN: Sym = Sym(6);
-	pub const ELSE: Sym = Sym(7);
-	pub const END: Sym = Sym(8);
-	pub const RETURN: Sym = Sym(9);
-	pub const AND: Sym = Sym(10);
-	pub const OR: Sym = Sym(11);
-	pub const NOT: Sym = Sym(12);
-	pub const SELF: Sym = Sym(13);
-	pub const TRUE: Sym = Sym(14);
-	pub const FALSE: Sym = Sym(15);
-	pub const NIL: Sym = Sym(16);
+	pub const LOOP: Sym = Sym(3);
+	pub const IN: Sym = Sym(4);
+	pub const DO: Sym = Sym(5);
+	pub const WHEN: Sym = Sym(6);
+	pub const THEN: Sym = Sym(7);
+	pub const ELSE: Sym = Sym(8);
+	pub const END: Sym = Sym(9);
+	pub const RETURN: Sym = Sym(10);
+	pub const BREAK: Sym = Sym(11);
+	pub const AND: Sym = Sym(12);
+	pub const OR: Sym = Sym(13);
+	pub const NOT: Sym = Sym(14);
+	pub const SELF: Sym = Sym(15);
+	pub const TRUE: Sym = Sym(16);
+	pub const FALSE: Sym = Sym(17);
+	pub const NIL: Sym = Sym(18);
 }
 
 const KEYWORDS: &[(&str, Sym)] = &[
 	("type", Sym::TYPE),
 	("def", Sym::DEF),
 	("each", Sym::EACH),
+	("loop", Sym::LOOP),
 	("in", Sym::IN),
 	("do", Sym::DO),
 	("when", Sym::WHEN),
@@ -36,6 +39,7 @@ const KEYWORDS: &[(&str, Sym)] = &[
 	("else", Sym::ELSE),
 	("end", Sym::END),
 	("return", Sym::RETURN),
+	("break", Sym::BREAK),
 	("and", Sym::AND),
 	("or", Sym::OR),
 	("not", Sym::NOT),

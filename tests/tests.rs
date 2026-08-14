@@ -31,6 +31,7 @@ test_files! {
 	test_performs_comparisons => "cmp.ms",
 	test_performs_boolean_logic => "bool.ms",
 	test_iterates => "each.ms",
+	test_loops => "loop.ms",
 	test_branches => "when.ms",
 	test_escapes_strings => "escapes.ms",
 	test_walks_scope => "scope.ms",
@@ -48,6 +49,7 @@ test_files! {
 	test_keyword_args_and_defaults => "kwargs.ms",
 	test_reports_syntax_errors => "syn_errors.ms",
 	test_reports_param_order => "sem_error_params.ms",
+	test_reports_break_outside_loop => "sem_error_break.ms",
 	test_mentions_without_invoking => "procs.ms",
 }
 

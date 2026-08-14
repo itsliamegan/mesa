@@ -188,6 +188,7 @@ pub enum TokenTag {
 	Type,
 	Def,
 	Each,
+	Loop,
 	Do,
 	In,
 	When,
@@ -195,6 +196,7 @@ pub enum TokenTag {
 	Else,
 	End,
 	Return,
+	Break,
 
 	Self_,
 	Ident,
@@ -247,6 +249,7 @@ impl TokenTag {
 			TokenTag::Type => "TYPE",
 			TokenTag::Def => "DEF",
 			TokenTag::Each => "EACH",
+			TokenTag::Loop => "LOOP",
 			TokenTag::Do => "DO",
 			TokenTag::In => "IN",
 			TokenTag::When => "WHEN",
@@ -254,6 +257,7 @@ impl TokenTag {
 			TokenTag::Else => "ELSE",
 			TokenTag::End => "END",
 			TokenTag::Return => "RETURN",
+			TokenTag::Break => "BREAK",
 			TokenTag::Or => "OR",
 			TokenTag::And => "AND",
 			TokenTag::Not => "NOT",
@@ -705,6 +709,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			Sym::TYPE => TokenTag::Type,
 			Sym::DEF => TokenTag::Def,
 			Sym::EACH => TokenTag::Each,
+			Sym::LOOP => TokenTag::Loop,
 			Sym::DO => TokenTag::Do,
 			Sym::IN => TokenTag::In,
 			Sym::WHEN => TokenTag::When,
@@ -712,6 +717,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			Sym::ELSE => TokenTag::Else,
 			Sym::END => TokenTag::End,
 			Sym::RETURN => TokenTag::Return,
+			Sym::BREAK => TokenTag::Break,
 			Sym::AND => TokenTag::And,
 			Sym::OR => TokenTag::Or,
 			Sym::NOT => TokenTag::Not,
@@ -920,8 +926,10 @@ impl NodeId for ExprId {
 #[derive(Debug)]
 pub enum Expr {
 	Each(Each),
+	Loop(Loop),
 	When(When),
 	Return(Return),
+	Break(Break),
 	Self_,
 	Call(Call),
 	Member(Member),
@@ -939,10 +947,16 @@ pub enum Expr {
 pub struct Each(pub Sym, pub ExprId, pub BlockId);
 
 #[derive(Debug)]
+pub struct Loop(pub BlockId);
+
+#[derive(Debug)]
 pub struct When(pub ExprId, pub BlockId, pub Option<BlockId>);
 
 #[derive(Debug)]
 pub struct Return(pub Option<ExprId>);
+
+#[derive(Debug)]
+pub struct Break(pub Option<ExprId>);
 
 #[derive(Debug)]
 pub struct Call(pub ExprId, pub Vec<Arg>);
@@ -1160,6 +1174,31 @@ fn terminates_expr(tag: TokenTag) -> bool {
 		TokenTag::RBrace => true,
 		TokenTag::RBrack => true,
 		TokenTag::RParen => true,
+		_ => false,
+	}
+}
+
+fn starts_expr(tag: TokenTag) -> bool {
+	match tag {
+		TokenTag::LParen => true,
+		TokenTag::When => true,
+		TokenTag::Each => true,
+		TokenTag::Loop => true,
+		TokenTag::Return => true,
+		TokenTag::Break => true,
+		TokenTag::Self_ => true,
+		TokenTag::Not => true,
+		TokenTag::Minus => true,
+		TokenTag::Amp => true,
+		TokenTag::Ident => true,
+		TokenTag::Builtin => true,
+		TokenTag::Str => true,
+		TokenTag::Char => true,
+		TokenTag::Num => true,
+		TokenTag::Bool => true,
+		TokenTag::LBrack => true,
+		TokenTag::LBrace => true,
+		TokenTag::Nil => true,
 		_ => false,
 	}
 }
@@ -1545,7 +1584,9 @@ impl<'src> Parser<'src> {
 			TokenTag::LParen => self.parse_group_expr(),
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
+			TokenTag::Loop => self.parse_loop_expr(),
 			TokenTag::Return => self.parse_return_expr(),
+			TokenTag::Break => self.parse_break_expr(),
 			TokenTag::Self_ => self.parse_self_expr(),
 			TokenTag::Not => self.parse_unary_expr(TokenTag::Not, UnaryOp::Not, Precedence::NOT),
 			TokenTag::Minus => {
@@ -1590,14 +1631,41 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
+	fn parse_loop_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Loop)?;
+		self.take(TokenTag::Do)?;
+		let mut body = Vec::new();
+		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
+			let expr_id = self.parse_expr()?;
+			body.push(expr_id);
+		}
+		self.take(TokenTag::End)?;
+		let block = self.chunk.add_block(Block(body));
+		let expr = Expr::Loop(Loop(block));
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
 	fn parse_return_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Return)?;
-		let val_expr_id = if self.toks.nl_before(self.cur) {
+		let val_expr_id = if self.toks.nl_before(self.cur) || !starts_expr(self.tag()) {
 			None
 		} else {
 			Some(self.parse_expr()?)
 		};
 		let expr = Expr::Return(Return(val_expr_id));
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
+	fn parse_break_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Break)?;
+		let val_expr_id = if self.toks.nl_before(self.cur) || !starts_expr(self.tag()) {
+			None
+		} else {
+			Some(self.parse_expr()?)
+		};
+		let expr = Expr::Break(Break(val_expr_id));
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
