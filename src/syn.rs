@@ -883,16 +883,31 @@ pub enum ModuleItem {
 }
 
 #[derive(Debug)]
-pub struct Type(pub Sym, pub Vec<Param>, pub Vec<Sym>, pub Vec<TypeItemId>);
+pub struct Type {
+	pub name: Sym,
+	pub params: Vec<Param>,
+	pub impls: Vec<Sym>,
+	pub items: Vec<TypeItemId>,
+}
 
 #[derive(Debug)]
-pub struct Proto(pub Sym, pub Vec<ProtoItemId>);
+pub struct Proto {
+	pub name: Sym,
+	pub items: Vec<ProtoItemId>,
+}
 
 #[derive(Debug)]
-pub struct Def(pub Sym, pub Vec<Param>, pub BlockId);
+pub struct Def {
+	pub name: Sym,
+	pub params: Vec<Param>,
+	pub body: BlockId,
+}
 
 #[derive(Debug, Clone, Copy)]
-pub struct Param(pub Sym, pub Option<ExprId>);
+pub struct Param {
+	pub name: Sym,
+	pub default: Option<ExprId>,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TypeItemId(u32);
@@ -916,7 +931,10 @@ pub enum TypeItem {
 }
 
 #[derive(Debug)]
-pub struct Field(pub Sym, pub ExprId);
+pub struct Field {
+	pub name: Sym,
+	pub init: ExprId,
+}
 
 #[derive(Debug)]
 pub enum Method {
@@ -938,7 +956,9 @@ impl NodeId for ProtoItemId {
 }
 
 #[derive(Debug)]
-pub struct ProtoItem(pub Def);
+pub struct ProtoItem {
+	pub def: Def,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ExprId(u32);
@@ -975,43 +995,81 @@ pub enum Expr {
 }
 
 #[derive(Debug)]
-pub struct Each(pub Sym, pub ExprId, pub BlockId);
+pub struct Each {
+	pub item: Sym,
+	pub iter: ExprId,
+	pub body: BlockId,
+}
 
 #[derive(Debug)]
-pub struct Loop(pub BlockId);
+pub struct Loop {
+	pub body: BlockId,
+}
 
 #[derive(Debug)]
-pub struct When(pub ExprId, pub BlockId, pub Option<BlockId>);
+pub struct When {
+	pub cond: ExprId,
+	pub then_branch: BlockId,
+	pub else_branch: Option<BlockId>,
+}
 
 #[derive(Debug)]
-pub struct Match(pub ExprId, pub Vec<Arm>, pub Option<BlockId>);
+pub struct Match {
+	pub scrutinee: ExprId,
+	pub arms: Vec<Arm>,
+	pub else_branch: Option<BlockId>,
+}
 
 #[derive(Debug)]
-pub struct Arm(pub ExprId, pub BlockId);
+pub struct Arm {
+	pub path: ExprId,
+	pub body: BlockId,
+}
 
 #[derive(Debug)]
-pub struct Return(pub Option<ExprId>);
+pub struct Return {
+	pub val: Option<ExprId>,
+}
 
 #[derive(Debug)]
-pub struct Break(pub Option<ExprId>);
+pub struct Break {
+	pub val: Option<ExprId>,
+}
 
 #[derive(Debug)]
-pub struct Call(pub ExprId, pub Vec<Arg>);
+pub struct Call {
+	pub callee: ExprId,
+	pub args: Vec<Arg>,
+}
 
 #[derive(Debug, Clone, Copy)]
-pub struct Arg(pub Option<Sym>, pub ExprId);
+pub struct Arg {
+	pub name: Option<Sym>,
+	pub val: ExprId,
+}
 
 #[derive(Debug, Clone)]
-pub struct Member(pub ExprId, pub Sym);
+pub struct Member {
+	pub receiver: ExprId,
+	pub name: Sym,
+}
 
 #[derive(Debug, Clone)]
-pub struct Access(pub ExprId, pub ExprId);
+pub struct Access {
+	pub receiver: ExprId,
+	pub key: ExprId,
+}
 
 #[derive(Debug)]
-pub struct Mention(pub ExprId);
+pub struct Mention {
+	pub val: ExprId,
+}
 
 #[derive(Debug)]
-pub struct Assign(pub Place, pub ExprId);
+pub struct Assign {
+	pub place: Place,
+	pub val: ExprId,
+}
 
 #[derive(Debug, Clone)]
 pub enum Place {
@@ -1021,15 +1079,21 @@ pub enum Place {
 }
 
 #[derive(Debug, Clone)]
-pub struct Name(pub Sym);
+pub struct Name {
+	pub sym: Sym,
+}
 
 #[derive(Debug, Clone)]
 pub enum Builtin {
-	Print(ExprId),
+	Print { val: ExprId },
 }
 
 #[derive(Debug)]
-pub struct Binary(pub BinaryOp, pub ExprId, pub ExprId);
+pub struct Binary {
+	pub op: BinaryOp,
+	pub lhs: ExprId,
+	pub rhs: ExprId,
+}
 
 #[derive(Debug)]
 pub enum BinaryOp {
@@ -1053,7 +1117,10 @@ pub enum BinaryOp {
 }
 
 #[derive(Debug)]
-pub struct Unary(pub UnaryOp, pub ExprId);
+pub struct Unary {
+	pub op: UnaryOp,
+	pub val: ExprId,
+}
 
 #[derive(Debug)]
 pub enum UnaryOp {
@@ -1076,7 +1143,9 @@ pub enum Lit {
 pub struct BlockId(u32);
 
 #[derive(Debug)]
-pub struct Block(pub Vec<ExprId>);
+pub struct Block {
+	pub exprs: Vec<ExprId>,
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ChunkId(u32);
@@ -1389,7 +1458,15 @@ impl<'src> Parser<'src> {
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok((Type(name, fields, protos, items), tok.into()))
+		Ok((
+			Type {
+				name,
+				params: fields,
+				impls: protos,
+				items,
+			},
+			tok.into(),
+		))
 	}
 
 	fn parse_type_item(&mut self, allow_cases: bool) -> Result<TypeItemId, Error> {
@@ -1407,7 +1484,10 @@ impl<'src> Parser<'src> {
 		let name = tok.sym.unwrap();
 		self.take(TokenTag::Eq)?;
 		let expr_id = self.parse_expr()?;
-		let item = TypeItem::Field(Field(name, expr_id));
+		let item = TypeItem::Field(Field {
+			name,
+			init: expr_id,
+		});
 		let item_id = self.chunk.add_type_item(tok.into(), item);
 		Ok(item_id)
 	}
@@ -1424,7 +1504,11 @@ impl<'src> Parser<'src> {
 		};
 		let params = self.parse_params()?;
 		let block = self.parse_body_block()?;
-		let def = Def(name, params, block);
+		let def = Def {
+			name,
+			params,
+			body: block,
+		};
 		let method = if is_static {
 			Method::Static(def)
 		} else {
@@ -1444,7 +1528,7 @@ impl<'src> Parser<'src> {
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		let item = ModuleItem::Proto(Proto(name, items));
+		let item = ModuleItem::Proto(Proto { name, items });
 		let item_id = self.chunk.add_module_item(tok.into(), item);
 		Ok(item_id)
 	}
@@ -1454,7 +1538,13 @@ impl<'src> Parser<'src> {
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let params = self.parse_params()?;
 		let block = self.parse_body_block()?;
-		let item = ProtoItem(Def(name, params, block));
+		let item = ProtoItem {
+			def: Def {
+				name,
+				params,
+				body: block,
+			},
+		};
 		let item_id = self.chunk.add_proto_item(tok.into(), item);
 		Ok(item_id)
 	}
@@ -1464,7 +1554,11 @@ impl<'src> Parser<'src> {
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let params = self.parse_params()?;
 		let block = self.parse_body_block()?;
-		let item = ModuleItem::Def(Def(name, params, block));
+		let item = ModuleItem::Def(Def {
+			name,
+			params,
+			body: block,
+		});
 		let item_id = self.chunk.add_module_item(tok.into(), item);
 		Ok(item_id)
 	}
@@ -1489,7 +1583,7 @@ impl<'src> Parser<'src> {
 			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok(self.chunk.add_block(Block(body)))
+		Ok(self.chunk.add_block(Block { exprs: body }))
 	}
 
 	fn parse_impl_line(&mut self) -> Result<Vec<Sym>, Error> {
@@ -1520,7 +1614,7 @@ impl<'src> Parser<'src> {
 			} else {
 				None
 			};
-			params.push(Param(name, default));
+			params.push(Param { name, default });
 			match self.tag() {
 				TokenTag::Comma => {
 					self.cur = self.cur.next();
@@ -1595,7 +1689,10 @@ impl<'src> Parser<'src> {
 	fn parse_member_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Dot)?;
 		let field = self.take(TokenTag::Ident)?.sym.unwrap();
-		let expr = Expr::Member(Member(val_id, field));
+		let expr = Expr::Member(Member {
+			receiver: val_id,
+			name: field,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1604,7 +1701,10 @@ impl<'src> Parser<'src> {
 		let tok = self.take(TokenTag::LBrack)?;
 		let key_id = self.parse_expr()?;
 		self.take(TokenTag::RBrack)?;
-		let expr = Expr::Access(Access(val_id, key_id));
+		let expr = Expr::Access(Access {
+			receiver: val_id,
+			key: key_id,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1628,7 +1728,7 @@ impl<'src> Parser<'src> {
 				None
 			};
 			let arg = self.parse_expr()?;
-			args.push(Arg(name, arg));
+			args.push(Arg { name, val: arg });
 			match self.tag() {
 				TokenTag::Comma => {
 					self.cur = self.cur.next();
@@ -1638,7 +1738,10 @@ impl<'src> Parser<'src> {
 			}
 		}
 		self.take(TokenTag::RParen)?;
-		let expr = Expr::Call(Call(val_id, args));
+		let expr = Expr::Call(Call {
+			callee: val_id,
+			args,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1652,7 +1755,10 @@ impl<'src> Parser<'src> {
 			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.pos), tok.tag)),
 		};
 		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
-		let expr = Expr::Assign(Assign(place, val_expr_id));
+		let expr = Expr::Assign(Assign {
+			place,
+			val: val_expr_id,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1666,7 +1772,11 @@ impl<'src> Parser<'src> {
 		let tok = self.tok(self.cur);
 		self.cur = self.cur.next();
 		let rhs = self.parse_expr_prec(prec)?;
-		let expr = Expr::Binary(Binary(op, val_id, rhs));
+		let expr = Expr::Binary(Binary {
+			op,
+			lhs: val_id,
+			rhs,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1679,7 +1789,7 @@ impl<'src> Parser<'src> {
 	) -> Result<ExprId, Error> {
 		let tok = self.take(tag)?;
 		let val_id = self.parse_expr_prec(prec)?;
-		let expr = Expr::Unary(Unary(op, val_id));
+		let expr = Expr::Unary(Unary { op, val: val_id });
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1687,7 +1797,7 @@ impl<'src> Parser<'src> {
 	fn parse_mention_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Amp)?;
 		let val_id = self.parse_expr_prec(Precedence::MENTION)?;
-		let expr = Expr::Mention(Mention(val_id));
+		let expr = Expr::Mention(Mention { val: val_id });
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1738,8 +1848,12 @@ impl<'src> Parser<'src> {
 			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		let block = self.chunk.add_block(Block(body));
-		let expr = Expr::Each(Each(item, iter, block));
+		let block = self.chunk.add_block(Block { exprs: body });
+		let expr = Expr::Each(Each {
+			item,
+			iter,
+			body: block,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1753,8 +1867,8 @@ impl<'src> Parser<'src> {
 			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		let block = self.chunk.add_block(Block(body));
-		let expr = Expr::Loop(Loop(block));
+		let block = self.chunk.add_block(Block { exprs: body });
+		let expr = Expr::Loop(Loop { body: block });
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1766,7 +1880,7 @@ impl<'src> Parser<'src> {
 		} else {
 			Some(self.parse_expr()?)
 		};
-		let expr = Expr::Return(Return(val_expr_id));
+		let expr = Expr::Return(Return { val: val_expr_id });
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1778,7 +1892,7 @@ impl<'src> Parser<'src> {
 		} else {
 			Some(self.parse_expr()?)
 		};
-		let expr = Expr::Break(Break(val_expr_id));
+		let expr = Expr::Break(Break { val: val_expr_id });
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1798,12 +1912,14 @@ impl<'src> Parser<'src> {
 			let expr_id = self.parse_expr()?;
 			then_branch.push(expr_id);
 		}
-		let then_branch = self.chunk.add_block(Block(then_branch));
+		let then_branch = self.chunk.add_block(Block { exprs: then_branch });
 		let (else_branch, consume_end) = if self.tag() == TokenTag::Else {
 			self.take(TokenTag::Else)?;
 			if self.tag() == TokenTag::When {
 				let nested_when = self.parse_when_expr()?;
-				let else_branch = self.chunk.add_block(Block(vec![nested_when]));
+				let else_branch = self.chunk.add_block(Block {
+					exprs: vec![nested_when],
+				});
 				(Some(else_branch), false)
 			} else {
 				let mut else_branch = Vec::new();
@@ -1811,7 +1927,7 @@ impl<'src> Parser<'src> {
 					let expr_id = self.parse_expr()?;
 					else_branch.push(expr_id);
 				}
-				let else_branch = self.chunk.add_block(Block(else_branch));
+				let else_branch = self.chunk.add_block(Block { exprs: else_branch });
 				(Some(else_branch), true)
 			}
 		} else {
@@ -1820,7 +1936,11 @@ impl<'src> Parser<'src> {
 		if consume_end {
 			self.take(TokenTag::End)?;
 		}
-		let expr = Expr::When(When(cond, then_branch, else_branch));
+		let expr = Expr::When(When {
+			cond,
+			then_branch,
+			else_branch,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1843,8 +1963,8 @@ impl<'src> Parser<'src> {
 				let expr_id = self.parse_expr()?;
 				body.push(expr_id);
 			}
-			let body = self.chunk.add_block(Block(body));
-			arms.push(Arm(path, body));
+			let body = self.chunk.add_block(Block { exprs: body });
+			arms.push(Arm { path, body });
 		}
 		let else_branch = if self.tag() == TokenTag::Else {
 			self.take(TokenTag::Else)?;
@@ -1853,12 +1973,16 @@ impl<'src> Parser<'src> {
 				let expr_id = self.parse_expr()?;
 				else_branch.push(expr_id);
 			}
-			Some(self.chunk.add_block(Block(else_branch)))
+			Some(self.chunk.add_block(Block { exprs: else_branch }))
 		} else {
 			None
 		};
 		self.take(TokenTag::End)?;
-		let expr = Expr::Match(Match(scrutinee, arms, else_branch));
+		let expr = Expr::Match(Match {
+			scrutinee,
+			arms,
+			else_branch,
+		});
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1872,7 +1996,7 @@ impl<'src> Parser<'src> {
 	fn parse_name_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Ident)?;
 		let sym = tok.sym.unwrap();
-		let expr = Expr::Name(Name(sym));
+		let expr = Expr::Name(Name { sym });
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}
@@ -1885,7 +2009,7 @@ impl<'src> Parser<'src> {
 				self.take(TokenTag::LParen)?;
 				let val = self.parse_expr()?;
 				self.take(TokenTag::RParen)?;
-				let expr = Expr::Builtin(Builtin::Print(val));
+				let expr = Expr::Builtin(Builtin::Print { val });
 				let expr_id = self.chunk.add_expr(tok.into(), expr);
 				Ok(expr_id)
 			}

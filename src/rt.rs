@@ -10,10 +10,8 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Arg, Arm, Assign, Binary, BinaryOp, Block, BlockId, Break, Builtin, Call, Chunk,
-	ChunkId, Def, Each, Expr, ExprId, Lit, Location, Loop, Match, Mention, ModuleItem,
-	ModuleItemId, Name, Package, Param, Place, ProtoItem, Return, Span, TypeItem, Unary, UnaryOp,
-	When,
+	self, BinaryOp, BlockId, Builtin, Chunk, ChunkId, Expr, ExprId, Lit, Location, ModuleItem,
+	ModuleItemId, Package, Param, Place, Span, TypeItem, UnaryOp,
 };
 
 #[derive(Debug)]
@@ -445,7 +443,8 @@ struct UserType {
 
 impl UserType {
 	fn has_field(&self, name: Sym) -> bool {
-		self.ctor_fields.iter().any(|param| param.0 == name) || self.body_fields.contains_key(&name)
+		self.ctor_fields.iter().any(|param| param.name == name)
+			|| self.body_fields.contains_key(&name)
 	}
 
 	fn get_static(&self, name: Sym) -> Option<Static> {
@@ -898,7 +897,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		for item_id in &chunk.top {
 			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
 				let val = self.eval_proto_decl(chunk, chunk_id, proto);
-				self.scope.borrow_mut().locals.insert(proto.0, val);
+				self.scope.borrow_mut().locals.insert(proto.name, val);
 			}
 		}
 		for item_id in &chunk.top {
@@ -920,23 +919,22 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	) -> Result<(), Signal> {
 		match chunk.get_module_item(item_id) {
 			ModuleItem::Type(typ) => {
-				let name = typ.0;
 				let span = chunk.get_module_item_span(item_id);
 				let val = self.eval_type_decl(chunk, chunk_id, span, typ, None, false)?;
-				self.scope.borrow_mut().locals.insert(name, val);
+				self.scope.borrow_mut().locals.insert(typ.name, val);
 				Ok(())
 			}
 			ModuleItem::Proto(_) => Ok(()),
-			ModuleItem::Def(Def(name, params, body)) => {
+			ModuleItem::Def(def) => {
 				let obj = Obj::Proc(Proc {
-					name: *name,
-					params: params.to_vec(),
-					body: *body,
+					name: def.name,
+					params: def.params.to_vec(),
+					body: def.body,
 					chunk: chunk_id,
 					scope: self.scope.clone(),
 				});
 				let val = Val::Obj(Rc::new(RefCell::new(obj)));
-				self.scope.borrow_mut().locals.insert(*name, val);
+				self.scope.borrow_mut().locals.insert(def.name, val);
 				Ok(())
 			}
 			ModuleItem::Expr(expr_id) => {
@@ -946,30 +944,26 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
-	fn eval_proto_decl(
-		&mut self,
-		chunk: &Chunk,
-		chunk_id: ChunkId,
-		syn::Proto(name, items): &syn::Proto,
-	) -> Val {
+	fn eval_proto_decl(&mut self, chunk: &Chunk, chunk_id: ChunkId, proto: &syn::Proto) -> Val {
 		let mut members = FxHashMap::default();
-		for item_id in items {
-			let ProtoItem(Def(member, params, body)) = chunk.get_proto_item(*item_id);
-			let Block(exprs) = chunk.get_block(*body);
-			let provided = match exprs.is_empty() {
+		for item_id in &proto.items {
+			let item = chunk.get_proto_item(*item_id);
+			let def = &item.def;
+			let block = chunk.get_block(def.body);
+			let provided = match block.exprs.is_empty() {
 				true => None,
 				false => Some(Rc::new(RefCell::new(Proc {
-					name: *member,
-					params: params.to_vec(),
-					body: *body,
+					name: def.name,
+					params: def.params.to_vec(),
+					body: def.body,
 					chunk: chunk_id,
 					scope: self.scope.clone(),
 				}))),
 			};
-			members.insert(*member, provided);
+			members.insert(def.name, provided);
 		}
 		let id = self.types.add_proto(Proto {
-			name: *name,
+			name: proto.name,
 			members,
 		});
 		Val::Obj(Rc::new(RefCell::new(Obj::Proto(id))))
@@ -1005,13 +999,13 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		chunk: &Chunk,
 		chunk_id: ChunkId,
 		span: Span,
-		syn::Type(name, ctor_field_names, impls, items): &syn::Type,
+		type_: &syn::Type,
 		enclosing: Option<UserTypeId>,
 		is_case: bool,
 	) -> Result<Val, Signal> {
 		let id = self.types.add_user_type(UserType {
-			name: *name,
-			ctor_fields: ctor_field_names.to_vec(),
+			name: type_.name,
+			ctor_fields: type_.params.to_vec(),
 			body_fields: OrderMap::with_hasher(FxBuildHasher),
 			chunk: chunk_id,
 			methods: FxHashMap::default(),
@@ -1026,11 +1020,11 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let mut statics = FxHashMap::default();
 		let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
 		let mut variants = if is_case { None } else { Some(Vec::new()) };
-		for item_id in items {
+		for item_id in &type_.items {
 			let item_span = chunk.get_type_item_span(*item_id);
 			match chunk.get_type_item(*item_id) {
-				TypeItem::Field(syn::Field(name, init)) => {
-					body_fields.insert(*name, *init);
+				TypeItem::Field(field) => {
+					body_fields.insert(field.name, field.init);
 				}
 				TypeItem::Case(variant) => {
 					let val =
@@ -1039,7 +1033,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let Obj::Type(TypeId::User(variant_id)) = *rf.borrow() else {
 						panic!()
 					};
-					statics.insert(variant.0, Static::Type(val));
+					statics.insert(variant.name, Static::Type(val));
 					variants.as_mut().unwrap().push(variant_id);
 				}
 				TypeItem::Type(inner_type) => {
@@ -1051,33 +1045,33 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Some(id),
 						false,
 					)?;
-					statics.insert(inner_type.0, Static::Type(val));
+					statics.insert(inner_type.name, Static::Type(val));
 				}
-				TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
+				TypeItem::Method(syn::Method::Instance(def)) => {
 					let proc = Rc::new(RefCell::new(Proc {
-						name: *name,
-						params: params.to_vec(),
-						body: *body,
+						name: def.name,
+						params: def.params.to_vec(),
+						body: def.body,
 						chunk: chunk_id,
 						scope: self.scope.clone(),
 					}));
-					methods.insert(*name, proc);
+					methods.insert(def.name, proc);
 				}
-				TypeItem::Method(syn::Method::Static(Def(name, params, body))) => {
+				TypeItem::Method(syn::Method::Static(def)) => {
 					let proc = Rc::new(RefCell::new(Proc {
-						name: *name,
-						params: params.to_vec(),
-						body: *body,
+						name: def.name,
+						params: def.params.to_vec(),
+						body: def.body,
 						chunk: chunk_id,
 						scope: self.scope.clone(),
 					}));
-					statics.insert(*name, Static::Proc(proc));
+					statics.insert(def.name, Static::Proc(proc));
 				}
 			}
 		}
 		let mut acquired = FxHashMap::default();
-		let mut protos = Vec::with_capacity(impls.len());
-		for impl_name in impls {
+		let mut protos = Vec::with_capacity(type_.impls.len());
+		for impl_name in &type_.impls {
 			let proto_id = self.resolve_proto(span, *impl_name)?;
 			protos.push(proto_id);
 			for (member, provided) in &self.types.get_proto(proto_id).members {
@@ -1103,7 +1097,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
-			Expr::Each(Each(name, iter, body_id)) => match self.eval_expr(chunk, *iter)? {
+			Expr::Each(each) => match self.eval_expr(chunk, each.iter)? {
 				Val::Str(str) => {
 					for char in str.text.chars() {
 						let scope = Rc::new(RefCell::new(Scope {
@@ -1114,8 +1108,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						scope
 							.borrow_mut()
 							.locals
-							.insert(*name, Val::Char(Char(char)));
-						match self.eval_block(chunk, scope, *body_id) {
+							.insert(each.item, Val::Char(Char(char)));
+						match self.eval_block(chunk, scope, each.body) {
 							Ok(_) => {}
 							Err(Signal::Break(val)) => return Ok(val),
 							Err(signal) => return Err(signal),
@@ -1131,8 +1125,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								outer: Some(self.scope.clone()),
 								tier: Tier::Local,
 							}));
-							scope.borrow_mut().locals.insert(*name, item.clone());
-							match self.eval_block(chunk, scope, *body_id) {
+							scope.borrow_mut().locals.insert(each.item, item.clone());
+							match self.eval_block(chunk, scope, each.body) {
 								Ok(_) => {}
 								Err(Signal::Break(val)) => return Ok(val),
 								Err(signal) => return Err(signal),
@@ -1147,8 +1141,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								outer: Some(self.scope.clone()),
 								tier: Tier::Local,
 							}));
-							scope.borrow_mut().locals.insert(*name, key.clone());
-							match self.eval_block(chunk, scope, *body_id) {
+							scope.borrow_mut().locals.insert(each.item, key.clone());
+							match self.eval_block(chunk, scope, each.body) {
 								Ok(_) => {}
 								Err(Signal::Break(val)) => return Ok(val),
 								Err(signal) => return Err(signal),
@@ -1174,37 +1168,37 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					))
 				}
 			},
-			Expr::Loop(Loop(body_id)) => loop {
+			Expr::Loop(loop_) => loop {
 				let scope = Rc::new(RefCell::new(Scope {
 					locals: FxHashMap::default(),
 					outer: Some(self.scope.clone()),
 					tier: Tier::Local,
 				}));
-				match self.eval_block(chunk, scope, *body_id) {
+				match self.eval_block(chunk, scope, loop_.body) {
 					Ok(_) => {}
 					Err(Signal::Break(val)) => return Ok(val),
 					Err(signal) => return Err(signal),
 				}
 			},
-			Expr::When(When(cond, then_branch, else_branch)) => {
-				let cond = self.eval_expr(chunk, *cond)?.is_truthy();
+			Expr::When(when) => {
+				let cond = self.eval_expr(chunk, when.cond)?.is_truthy();
 				let scope = Rc::new(RefCell::new(Scope {
 					locals: FxHashMap::default(),
 					outer: Some(self.scope.clone()),
 					tier: Tier::Local,
 				}));
 				if cond {
-					self.eval_block(chunk, scope, *then_branch)
-				} else if let Some(else_branch) = else_branch {
-					self.eval_block(chunk, scope, *else_branch)
+					self.eval_block(chunk, scope, when.then_branch)
+				} else if let Some(else_branch) = when.else_branch {
+					self.eval_block(chunk, scope, else_branch)
 				} else {
 					Ok(Val::Nil(Nil))
 				}
 			}
-			Expr::Match(Match(scrutinee, arms, else_branch)) => {
-				let scrutinee_type_id = self.eval_expr(chunk, *scrutinee)?.type_id();
-				for Arm(path, body) in arms {
-					let path_val = self.eval_expr(chunk, *path)?;
+			Expr::Match(match_) => {
+				let scrutinee_type_id = self.eval_expr(chunk, match_.scrutinee)?.type_id();
+				for arm in &match_.arms {
+					let path_val = self.eval_expr(chunk, arm.path)?;
 					let arm_type_id = match &path_val {
 						Val::Obj(rf) => match &*rf.borrow() {
 							Obj::Type(id) => Some(*id),
@@ -1213,7 +1207,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						_ => None,
 					};
 					let Some(arm_type_id) = arm_type_id else {
-						let loc = chunk.get_expr_span(*path).loc(self.pkg);
+						let loc = chunk.get_expr_span(arm.path).loc(self.pkg);
 						let type_name = self.types.type_name(self.syms, path_val.type_id());
 						return Err(Signal::Error(
 							Error::TypeError(TypeError::CaseNonType(type_name)),
@@ -1226,44 +1220,44 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							outer: Some(self.scope.clone()),
 							tier: Tier::Local,
 						}));
-						return self.eval_block(chunk, scope, *body);
+						return self.eval_block(chunk, scope, arm.body);
 					}
 				}
-				if let Some(else_branch) = else_branch {
+				if let Some(else_branch) = match_.else_branch {
 					let scope = Rc::new(RefCell::new(Scope {
 						locals: FxHashMap::default(),
 						outer: Some(self.scope.clone()),
 						tier: Tier::Local,
 					}));
-					self.eval_block(chunk, scope, *else_branch)
+					self.eval_block(chunk, scope, else_branch)
 				} else {
 					Ok(Val::Nil(Nil))
 				}
 			}
-			Expr::Return(Return(val_expr_id)) => {
-				let val = if let Some(val_expr_id) = val_expr_id {
-					self.eval_expr(chunk, *val_expr_id)?
+			Expr::Return(return_) => {
+				let val = if let Some(val_expr_id) = return_.val {
+					self.eval_expr(chunk, val_expr_id)?
 				} else {
 					Val::Nil(Nil)
 				};
 				Err(Signal::Return(val))
 			}
-			Expr::Break(Break(val_expr_id)) => {
-				let val = if let Some(val_expr_id) = val_expr_id {
-					self.eval_expr(chunk, *val_expr_id)?
+			Expr::Break(break_) => {
+				let val = if let Some(val_expr_id) = break_.val {
+					self.eval_expr(chunk, val_expr_id)?
 				} else {
 					Val::Nil(Nil)
 				};
 				Err(Signal::Break(val))
 			}
-			Expr::Call(Call(val_id, arg_nodes)) => {
+			Expr::Call(call) => {
 				let span = chunk.get_expr_span(expr_id);
-				let mut args = Vec::with_capacity(arg_nodes.len());
-				for Arg(name, arg_id) in arg_nodes {
-					let arg = self.eval_expr(chunk, *arg_id)?;
-					args.push((*name, arg));
+				let mut args = Vec::with_capacity(call.args.len());
+				for arg in &call.args {
+					let val = self.eval_expr(chunk, arg.val)?;
+					args.push((arg.name, val));
 				}
-				let callee = self.eval_expr_raw(chunk, *val_id)?;
+				let callee = self.eval_expr_raw(chunk, call.callee)?;
 				match callee {
 					Val::Obj(rf) => match &*rf.borrow() {
 						Obj::Proc(proc) => self.eval_proc_call(span, proc, None, args),
@@ -1398,18 +1392,18 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Member(syn::Member(val_id, name)) => {
-				let val = self.eval_member_raw(chunk, expr_id, *val_id, *name)?;
+			Expr::Member(member) => {
+				let val = self.eval_member_raw(chunk, expr_id, member.receiver, member.name)?;
 				self.invoke_or_return(chunk, expr_id, val)
 			}
-			Expr::Access(Access(val_id, key_id)) => match self.eval_expr(chunk, *val_id)? {
+			Expr::Access(access) => match self.eval_expr(chunk, access.receiver)? {
 				Val::Obj(rf) => match &*rf.borrow() {
 					Obj::List(list) => {
-						let idx = self.eval_index(chunk, expr_id, *key_id, list.items.len())?;
+						let idx = self.eval_index(chunk, expr_id, access.key, list.items.len())?;
 						Ok(list.items[idx].clone())
 					}
 					Obj::Dict(dict) => {
-						let key = self.eval_expr(chunk, *key_id)?;
+						let key = self.eval_expr(chunk, access.key)?;
 						match dict.pairs.get(&key) {
 							Some(val) => Ok(val.clone()),
 							None => {
@@ -1439,19 +1433,20 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					))
 				}
 			},
-			Expr::Mention(Mention(val_id)) => {
-				let val = self.eval_expr_raw(chunk, *val_id)?;
+			Expr::Mention(mention) => {
+				let val = self.eval_expr_raw(chunk, mention.val)?;
 				self.expect_invocable(chunk, expr_id, val)
 			}
-			Expr::Assign(Assign(place, val_expr_id)) => {
-				let val = self.eval_expr(chunk, *val_expr_id)?;
-				match place {
-					Place::Name(Name(sym)) => {
-						let local = Scope::local(&self.scope, *sym);
+			Expr::Assign(assign) => {
+				let val = self.eval_expr(chunk, assign.val)?;
+				match &assign.place {
+					Place::Name(name) => {
+						let sym = name.sym;
+						let local = Scope::local(&self.scope, sym);
 						if local.is_bound() && local.tier == Tier::Local {
 							local.set(val.clone());
 						} else if let Some(receiver) = &self.receiver
-							&& let Some(member) = receiver.member(*sym, &self.types)
+							&& let Some(member) = receiver.member(sym, &self.types)
 						{
 							if let Err(()) = member.set(val.clone(), &self.types) {
 								let type_name = self
@@ -1461,7 +1456,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
 										type_name.to_string(),
-										self.syms.resolve(*sym).to_string(),
+										self.syms.resolve(sym).to_string(),
 									)),
 									vec![(String::new(), loc)],
 								));
@@ -1471,48 +1466,53 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						}
 						Ok(val)
 					}
-					Place::Member(syn::Member(target_id, name)) => {
-						let target = self.eval_expr(chunk, *target_id)?;
-
-						if let Some(member) = target.member(*name, &self.types) {
-							if let Err(()) = member.set(val.clone(), &self.types) {
-								let type_name =
-									self.types.type_name(self.syms, target.namespace_type_id());
+					Place::Member(member) => {
+						let receiver = self.eval_expr(chunk, member.receiver)?;
+						if let Some(m) = receiver.member(member.name, &self.types) {
+							if let Err(()) = m.set(val.clone(), &self.types) {
+								let type_name = self
+									.types
+									.type_name(self.syms, receiver.namespace_type_id());
 								let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
 										type_name.to_string(),
-										self.syms.resolve(*name).to_string(),
+										self.syms.resolve(member.name).to_string(),
 									)),
 									vec![(String::new(), loc)],
 								));
 							}
 							Ok(val)
 						} else {
-							let type_name =
-								self.types.type_name(self.syms, target.namespace_type_id());
+							let type_name = self
+								.types
+								.type_name(self.syms, receiver.namespace_type_id());
 							let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 							Err(Signal::Error(
 								Error::MemberError(MemberError::Missing(
 									type_name.to_string(),
-									self.syms.resolve(*name).to_string(),
+									self.syms.resolve(member.name).to_string(),
 								)),
 								vec![(String::new(), loc)],
 							))
 						}
 					}
-					Place::Access(syn::Access(target_id, key_id)) => {
-						let target = self.eval_expr(chunk, *target_id)?;
-						match &target {
+					Place::Access(access) => {
+						let receiver = self.eval_expr(chunk, access.receiver)?;
+						match &receiver {
 							Val::Obj(rf) => match &mut *rf.borrow_mut() {
 								Obj::List(list) => {
-									let idx =
-										self.eval_index(chunk, expr_id, *key_id, list.items.len())?;
+									let idx = self.eval_index(
+										chunk,
+										expr_id,
+										access.key,
+										list.items.len(),
+									)?;
 									list.items[idx] = val.clone();
 									Ok(val)
 								}
 								Obj::Dict(dict) => {
-									let key = self.eval_expr(chunk, *key_id)?;
+									let key = self.eval_expr(chunk, access.key)?;
 									dict.pairs.insert(key, val.clone());
 									Ok(val)
 								}
@@ -1539,21 +1539,21 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			}
-			Expr::Binary(Binary(op, lhs_id, rhs_id)) => match op {
+			Expr::Binary(binary) => match &binary.op {
 				BinaryOp::Or => {
-					let lhs = self.eval_expr(chunk, *lhs_id)?;
+					let lhs = self.eval_expr(chunk, binary.lhs)?;
 					if lhs.is_truthy() {
 						Ok(lhs)
 					} else {
-						self.eval_expr(chunk, *rhs_id)
+						self.eval_expr(chunk, binary.rhs)
 					}
 				}
 				BinaryOp::And => {
-					let lhs = self.eval_expr(chunk, *lhs_id)?;
+					let lhs = self.eval_expr(chunk, binary.lhs)?;
 					if !lhs.is_truthy() {
 						Ok(lhs)
 					} else {
-						self.eval_expr(chunk, *rhs_id)
+						self.eval_expr(chunk, binary.rhs)
 					}
 				}
 				BinaryOp::Eq
@@ -1567,34 +1567,40 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				| BinaryOp::Sub
 				| BinaryOp::Mul
 				| BinaryOp::Div => {
-					let lhs = self.eval_expr(chunk, *lhs_id)?;
-					let rhs = self.eval_expr(chunk, *rhs_id)?;
-					match op {
+					let lhs = self.eval_expr(chunk, binary.lhs)?;
+					let rhs = self.eval_expr(chunk, binary.rhs)?;
+					match &binary.op {
 						BinaryOp::Eq => Ok(Val::Bool(Bool(lhs == rhs))),
 						BinaryOp::NotEq => Ok(Val::Bool(Bool(lhs != rhs))),
 						BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
 							match (lhs, rhs) {
-								(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Bool(Bool(match op {
-									BinaryOp::Lt => lhs.0 < rhs.0,
-									BinaryOp::Gt => lhs.0 > rhs.0,
-									BinaryOp::LtEq => lhs.0 <= rhs.0,
-									BinaryOp::GtEq => lhs.0 >= rhs.0,
-									_ => panic!(),
-								}))),
-								(Val::Str(lhs), Val::Str(rhs)) => Ok(Val::Bool(Bool(match op {
-									BinaryOp::Lt => lhs.text < rhs.text,
-									BinaryOp::Gt => lhs.text > rhs.text,
-									BinaryOp::LtEq => lhs.text <= rhs.text,
-									BinaryOp::GtEq => lhs.text >= rhs.text,
-									_ => panic!(),
-								}))),
-								(Val::Char(lhs), Val::Char(rhs)) => Ok(Val::Bool(Bool(match op {
-									BinaryOp::Lt => lhs.0 < rhs.0,
-									BinaryOp::Gt => lhs.0 > rhs.0,
-									BinaryOp::LtEq => lhs.0 <= rhs.0,
-									BinaryOp::GtEq => lhs.0 >= rhs.0,
-									_ => panic!(),
-								}))),
+								(Val::Num(lhs), Val::Num(rhs)) => {
+									Ok(Val::Bool(Bool(match &binary.op {
+										BinaryOp::Lt => lhs.0 < rhs.0,
+										BinaryOp::Gt => lhs.0 > rhs.0,
+										BinaryOp::LtEq => lhs.0 <= rhs.0,
+										BinaryOp::GtEq => lhs.0 >= rhs.0,
+										_ => panic!(),
+									})))
+								}
+								(Val::Str(lhs), Val::Str(rhs)) => {
+									Ok(Val::Bool(Bool(match &binary.op {
+										BinaryOp::Lt => lhs.text < rhs.text,
+										BinaryOp::Gt => lhs.text > rhs.text,
+										BinaryOp::LtEq => lhs.text <= rhs.text,
+										BinaryOp::GtEq => lhs.text >= rhs.text,
+										_ => panic!(),
+									})))
+								}
+								(Val::Char(lhs), Val::Char(rhs)) => {
+									Ok(Val::Bool(Bool(match &binary.op {
+										BinaryOp::Lt => lhs.0 < rhs.0,
+										BinaryOp::Gt => lhs.0 > rhs.0,
+										BinaryOp::LtEq => lhs.0 <= rhs.0,
+										BinaryOp::GtEq => lhs.0 >= rhs.0,
+										_ => panic!(),
+									})))
+								}
 								(lhs, rhs) => {
 									let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
 									let val = match (&lhs, &rhs) {
@@ -1663,7 +1669,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 						},
 						BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => match (lhs, rhs) {
-							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match op {
+							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(match &binary.op {
 								BinaryOp::Sub => lhs.0 - rhs.0,
 								BinaryOp::Mul => lhs.0 * rhs.0,
 								BinaryOp::Div => lhs.0 / rhs.0,
@@ -1687,12 +1693,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			},
-			Expr::Unary(Unary(op, val_id)) => match op {
+			Expr::Unary(unary) => match &unary.op {
 				UnaryOp::Not => {
-					let val = self.eval_expr(chunk, *val_id)?;
+					let val = self.eval_expr(chunk, unary.val)?;
 					Ok(Val::Bool(Bool(!val.is_truthy())))
 				}
-				UnaryOp::Neg => match self.eval_expr(chunk, *val_id)? {
+				UnaryOp::Neg => match self.eval_expr(chunk, unary.val)? {
 					Val::Num(num) => Ok(Val::Num(Num(-num.0))),
 					val => {
 						let loc = chunk.get_expr_span(expr_id).loc(self.pkg);
@@ -1708,12 +1714,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Some(receiver) => Ok(receiver.clone()),
 				None => todo!(),
 			},
-			Expr::Name(Name(name)) => {
-				let val = self.eval_name_raw(chunk, expr_id, *name)?;
+			Expr::Name(name) => {
+				let val = self.eval_name_raw(chunk, expr_id, name.sym)?;
 				self.invoke_or_return(chunk, expr_id, val)
 			}
 			Expr::Builtin(builtin) => match builtin {
-				Builtin::Print(val_id) => {
+				Builtin::Print { val: val_id } => {
 					let val = self.eval_expr(chunk, *val_id)?;
 					println!("{}", rt_print_val(self.syms, &self.types, &val));
 					Ok(val)
@@ -1751,9 +1757,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	fn eval_expr_raw(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
-			Expr::Name(Name(name)) => self.eval_name_raw(chunk, expr_id, *name),
-			Expr::Member(syn::Member(target_id, name)) => {
-				self.eval_member_raw(chunk, expr_id, *target_id, *name)
+			Expr::Name(name) => self.eval_name_raw(chunk, expr_id, name.sym),
+			Expr::Member(member) => {
+				self.eval_member_raw(chunk, expr_id, member.receiver, member.name)
 			}
 			_ => self.eval_expr(chunk, expr_id),
 		}
@@ -1893,14 +1899,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Obj::Proc(proc) => proc
 				.params
 				.first()
-				.filter(|param| param.1.is_none())
-				.map(|param| self.syms.resolve(param.0).to_string()),
+				.filter(|param| param.default.is_none())
+				.map(|param| self.syms.resolve(param.name).to_string()),
 			Obj::Method(Method::User(_, proc)) => proc
 				.borrow()
 				.params
 				.first()
-				.filter(|param| param.1.is_none())
-				.map(|param| self.syms.resolve(param.0).to_string()),
+				.filter(|param| param.default.is_none())
+				.map(|param| self.syms.resolve(param.name).to_string()),
 			// Native types are defined in Rust, skipping the
 			// required-before-default ordering check. Use find instead of
 			// filter to ensure we find any required params.
@@ -2027,7 +2033,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let mut next = 0;
 		for (name, val) in args {
 			let index = match name {
-				Some(name) => match params.iter().position(|param| param.0 == name) {
+				Some(name) => match params.iter().position(|param| param.name == name) {
 					Some(index) => index,
 					None => {
 						let loc = span.loc(self.pkg);
@@ -2053,7 +2059,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			};
 			if slots[index].is_some() {
 				let loc = span.loc(self.pkg);
-				let name = self.syms.resolve(params[index].0).to_string();
+				let name = self.syms.resolve(params[index].name).to_string();
 				return Err(Signal::Error(
 					Error::ArgumentError(ArgumentError::Duplicate(name)),
 					vec![(String::new(), loc)],
@@ -2067,8 +2073,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let missing = params
 			.iter()
 			.zip(&slots)
-			.filter(|(param, slot)| slot.is_none() && param.1.is_none())
-			.map(|(param, _)| self.syms.resolve(param.0).to_string())
+			.filter(|(param, slot)| slot.is_none() && param.default.is_none())
+			.map(|(param, _)| self.syms.resolve(param.name).to_string())
 			.collect::<Vec<_>>();
 		if !missing.is_empty() {
 			let loc = span.loc(self.pkg);
@@ -2096,7 +2102,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Some(val) => val,
 				None => {
 					let chunk = self.pkg.get_chunk(chunk_id);
-					match self.eval_expr(chunk, param.1.unwrap()) {
+					match self.eval_expr(chunk, param.default.unwrap()) {
 						Ok(val) => val,
 						Err(signal) => {
 							self.scope = saved_scope;
@@ -2105,7 +2111,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 				}
 			};
-			scope.borrow_mut().locals.insert(param.0, val);
+			scope.borrow_mut().locals.insert(param.name, val);
 		}
 		self.scope = saved_scope;
 		Ok(())
@@ -2157,7 +2163,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let saved = self.scope.clone();
 		self.scope = scope;
 		let mut res = Val::Nil(Nil);
-		for expr_id in &block.0 {
+		for expr_id in &block.exprs {
 			match self.eval_expr(chunk, *expr_id) {
 				Ok(val) => {
 					res = val;
@@ -2228,7 +2234,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 				let mut res = String::new();
 				res.push_str(&format!("type {}(", name));
 				for (i, field) in typ.ctor_fields.iter().enumerate() {
-					let field = syms.resolve(field.0);
+					let field = syms.resolve(field.name);
 					res.push_str(field);
 					if i + 1 != typ.ctor_fields.len() {
 						res.push_str(", ");
@@ -2253,7 +2259,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
 			for (i, field) in typ.ctor_fields.iter().enumerate() {
-				let val = inst.fields.get(&field.0).unwrap();
+				let val = inst.fields.get(&field.name).unwrap();
 				res.push_str(&rt_print_val(syms, types, val));
 				if i + 1 != typ.ctor_fields.len() {
 					res.push_str(", ");
@@ -2279,7 +2285,7 @@ fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 		res.push('(');
 	}
 	for (i, param) in proc.params.iter().enumerate() {
-		let param = syms.resolve(param.0);
+		let param = syms.resolve(param.name);
 		res.push_str(param);
 		if i + 1 != proc.params.len() {
 			res.push_str(", ");
