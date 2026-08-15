@@ -8,29 +8,33 @@ pub struct Sym(u32);
 impl Sym {
 	pub const TYPE: Sym = Sym(0);
 	pub const CASE: Sym = Sym(1);
-	pub const DEF: Sym = Sym(2);
-	pub const EACH: Sym = Sym(3);
-	pub const LOOP: Sym = Sym(4);
-	pub const DO: Sym = Sym(5);
-	pub const IN: Sym = Sym(6);
-	pub const WHEN: Sym = Sym(7);
-	pub const THEN: Sym = Sym(8);
-	pub const ELSE: Sym = Sym(9);
-	pub const END: Sym = Sym(10);
-	pub const RETURN: Sym = Sym(11);
-	pub const BREAK: Sym = Sym(12);
-	pub const AND: Sym = Sym(13);
-	pub const OR: Sym = Sym(14);
-	pub const NOT: Sym = Sym(15);
-	pub const SELF: Sym = Sym(16);
-	pub const TRUE: Sym = Sym(17);
-	pub const FALSE: Sym = Sym(18);
-	pub const NIL: Sym = Sym(19);
+	pub const PROTO: Sym = Sym(2);
+	pub const IMPL: Sym = Sym(3);
+	pub const DEF: Sym = Sym(4);
+	pub const EACH: Sym = Sym(5);
+	pub const LOOP: Sym = Sym(6);
+	pub const DO: Sym = Sym(7);
+	pub const IN: Sym = Sym(8);
+	pub const WHEN: Sym = Sym(9);
+	pub const THEN: Sym = Sym(10);
+	pub const ELSE: Sym = Sym(11);
+	pub const END: Sym = Sym(12);
+	pub const RETURN: Sym = Sym(13);
+	pub const BREAK: Sym = Sym(14);
+	pub const AND: Sym = Sym(15);
+	pub const OR: Sym = Sym(16);
+	pub const NOT: Sym = Sym(17);
+	pub const SELF: Sym = Sym(18);
+	pub const TRUE: Sym = Sym(19);
+	pub const FALSE: Sym = Sym(20);
+	pub const NIL: Sym = Sym(21);
 }
 
 const KEYWORDS: &[(&str, Sym)] = &[
 	("type", Sym::TYPE),
 	("case", Sym::CASE),
+	("proto", Sym::PROTO),
+	("impl", Sym::IMPL),
 	("def", Sym::DEF),
 	("each", Sym::EACH),
 	("loop", Sym::LOOP),

@@ -245,3 +245,22 @@ $print("str" + 5.1)
 #! 	at <main> (rt_errors.ms:247,5)
 
 Char()
+
+#---
+
+#! rt_errors.ms:260,1: runtime error: type Num is not a protocol
+#! 	at <main> (rt_errors.ms:260,1)
+
+proto Order
+	def compare(other) end
+end
+
+Order := 5
+
+type Task(priority)
+	impl Order
+
+	def compare(other)
+		return 0
+	end
+end

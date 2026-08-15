@@ -187,6 +187,8 @@ pub enum TokenTag {
 
 	Type,
 	Case,
+	Proto,
+	Impl,
 	Def,
 	Each,
 	Loop,
@@ -249,6 +251,8 @@ impl TokenTag {
 
 			TokenTag::Type => "TYPE",
 			TokenTag::Case => "CASE",
+			TokenTag::Proto => "PROTO",
+			TokenTag::Impl => "IMPL",
 			TokenTag::Def => "DEF",
 			TokenTag::Each => "EACH",
 			TokenTag::Loop => "LOOP",
@@ -710,6 +714,8 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		let tag = match sym {
 			Sym::TYPE => TokenTag::Type,
 			Sym::CASE => TokenTag::Case,
+			Sym::PROTO => TokenTag::Proto,
+			Sym::IMPL => TokenTag::Impl,
 			Sym::DEF => TokenTag::Def,
 			Sym::EACH => TokenTag::Each,
 			Sym::LOOP => TokenTag::Loop,
@@ -871,12 +877,16 @@ impl NodeId for ModuleItemId {
 #[derive(Debug)]
 pub enum ModuleItem {
 	Type(Type),
+	Proto(Proto),
 	Def(Def),
 	Expr(ExprId),
 }
 
 #[derive(Debug)]
-pub struct Type(pub Sym, pub Vec<Param>, pub Vec<TypeItemId>);
+pub struct Type(pub Sym, pub Vec<Param>, pub Vec<Sym>, pub Vec<TypeItemId>);
+
+#[derive(Debug)]
+pub struct Proto(pub Sym, pub Vec<ProtoItemId>);
 
 #[derive(Debug)]
 pub struct Def(pub Sym, pub Vec<Param>, pub BlockId);
@@ -913,6 +923,22 @@ pub enum Method {
 	Instance(Def),
 	Static(Def),
 }
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ProtoItemId(u32);
+
+impl NodeId for ProtoItemId {
+	fn from_index(i: u32) -> Self {
+		Self(i)
+	}
+
+	fn index(self) -> u32 {
+		self.0
+	}
+}
+
+#[derive(Debug)]
+pub struct ProtoItem(pub Def);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ExprId(u32);
@@ -1061,6 +1087,7 @@ pub struct Chunk {
 	pub top: Vec<ModuleItemId>,
 	module_items: Nodes<ModuleItem, ModuleItemId>,
 	type_items: Nodes<TypeItem, TypeItemId>,
+	proto_items: Nodes<ProtoItem, ProtoItemId>,
 	exprs: Nodes<Expr, ExprId>,
 	blocks: Vec<Block>,
 }
@@ -1072,6 +1099,7 @@ impl Chunk {
 			top: Vec::new(),
 			module_items: Nodes::new(),
 			type_items: Nodes::new(),
+			proto_items: Nodes::new(),
 			exprs: Nodes::new(),
 			blocks: Vec::new(),
 		}
@@ -1099,6 +1127,18 @@ impl Chunk {
 
 	pub fn add_type_item(&mut self, span: Span, item: TypeItem) -> TypeItemId {
 		self.type_items.add(span, item)
+	}
+
+	pub fn get_proto_item(&self, item_id: ProtoItemId) -> &ProtoItem {
+		self.proto_items.get(item_id)
+	}
+
+	pub fn get_proto_item_span(&self, item_id: ProtoItemId) -> Span {
+		self.proto_items.get_span(item_id)
+	}
+
+	pub fn add_proto_item(&mut self, span: Span, item: ProtoItem) -> ProtoItemId {
+		self.proto_items.add(span, item)
 	}
 
 	pub fn get_expr(&self, expr_id: ExprId) -> &Expr {
@@ -1282,6 +1322,7 @@ impl<'src> Parser<'src> {
 	fn parse_module_item(&mut self) -> Result<ModuleItemId, Error> {
 		match self.tag() {
 			TokenTag::Type => self.parse_type_in_module(),
+			TokenTag::Proto => self.parse_proto_decl(),
 			TokenTag::Def => self.parse_def_decl(),
 			_ => {
 				let expr_id = self.parse_expr()?;
@@ -1314,21 +1355,11 @@ impl<'src> Parser<'src> {
 		Ok(item_id)
 	}
 
-	// A case clause is field-for-field a type, so both parse here. Cases nest
-	// one level only: inside a case, `case` falls through to parse_type_item's
-	// catch-all.
 	fn parse_type(&mut self, open: TokenTag, allow_cases: bool) -> Result<(Type, Span), Error> {
 		let tok = self.take(open)?;
-		let ident = self.take(TokenTag::Ident)?;
-		let name = ident.sym.unwrap();
-		let last = self.src[ident.end - 1];
-		if last == b'!' || last == b'?' {
-			return Err(Error::UnexpectedChar(
-				self.src.loc(ident.end - 1),
-				last as char,
-			));
-		}
+		let name = self.take_type_name()?;
 		let fields = self.parse_params()?;
+		let protos = self.parse_impl_line()?;
 		let mut items = Vec::new();
 		let mut seen_field = false;
 		let mut seen_method = false;
@@ -1358,7 +1389,7 @@ impl<'src> Parser<'src> {
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		Ok((Type(name, fields, items), tok.into()))
+		Ok((Type(name, fields, protos, items), tok.into()))
 	}
 
 	fn parse_type_item(&mut self, allow_cases: bool) -> Result<TypeItemId, Error> {
@@ -1392,13 +1423,7 @@ impl<'src> Parser<'src> {
 			self.take(TokenTag::Ident)?.sym.unwrap()
 		};
 		let params = self.parse_params()?;
-		let mut body = Vec::new();
-		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
-			let expr_id = self.parse_expr()?;
-			body.push(expr_id);
-		}
-		self.take(TokenTag::End)?;
-		let block = self.chunk.add_block(Block(body));
+		let block = self.parse_body_block()?;
 		let def = Def(name, params, block);
 		let method = if is_static {
 			Method::Static(def)
@@ -1410,20 +1435,75 @@ impl<'src> Parser<'src> {
 		Ok(item_id)
 	}
 
+	fn parse_proto_decl(&mut self) -> Result<ModuleItemId, Error> {
+		let tok = self.take(TokenTag::Proto)?;
+		let name = self.take_type_name()?;
+		let mut items = Vec::new();
+		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
+			let item_id = self.parse_proto_item()?;
+			items.push(item_id);
+		}
+		self.take(TokenTag::End)?;
+		let item = ModuleItem::Proto(Proto(name, items));
+		let item_id = self.chunk.add_module_item(tok.into(), item);
+		Ok(item_id)
+	}
+
+	fn parse_proto_item(&mut self) -> Result<ProtoItemId, Error> {
+		let tok = self.take(TokenTag::Def)?;
+		let name = self.take(TokenTag::Ident)?.sym.unwrap();
+		let params = self.parse_params()?;
+		let block = self.parse_body_block()?;
+		let item = ProtoItem(Def(name, params, block));
+		let item_id = self.chunk.add_proto_item(tok.into(), item);
+		Ok(item_id)
+	}
+
 	fn parse_def_decl(&mut self) -> Result<ModuleItemId, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let params = self.parse_params()?;
+		let block = self.parse_body_block()?;
+		let item = ModuleItem::Def(Def(name, params, block));
+		let item_id = self.chunk.add_module_item(tok.into(), item);
+		Ok(item_id)
+	}
+
+	fn take_type_name(&mut self) -> Result<Sym, Error> {
+		let ident = self.take(TokenTag::Ident)?;
+		let last = self.src[ident.end - 1];
+		// Only locals, fields, and procs can have ! and ? in their names.
+		if last == b'!' || last == b'?' {
+			return Err(Error::UnexpectedChar(
+				self.src.loc(ident.end - 1),
+				last as char,
+			));
+		}
+		Ok(ident.sym.unwrap())
+	}
+
+	fn parse_body_block(&mut self) -> Result<BlockId, Error> {
 		let mut body = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			let expr_id = self.parse_expr()?;
 			body.push(expr_id);
 		}
 		self.take(TokenTag::End)?;
-		let block = self.chunk.add_block(Block(body));
-		let item = ModuleItem::Def(Def(name, params, block));
-		let item_id = self.chunk.add_module_item(tok.into(), item);
-		Ok(item_id)
+		Ok(self.chunk.add_block(Block(body)))
+	}
+
+	fn parse_impl_line(&mut self) -> Result<Vec<Sym>, Error> {
+		let mut protos = Vec::new();
+		if self.tag() != TokenTag::Impl {
+			return Ok(protos);
+		}
+		self.take(TokenTag::Impl)?;
+		protos.push(self.take_type_name()?);
+		while self.tag() == TokenTag::Comma {
+			self.take(TokenTag::Comma)?;
+			protos.push(self.take_type_name()?);
+		}
+		Ok(protos)
 	}
 
 	fn parse_params(&mut self) -> Result<Vec<Param>, Error> {

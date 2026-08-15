@@ -10,9 +10,10 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Arg, Arm, Assign, Binary, BinaryOp, BlockId, Break, Builtin, Call, Chunk,
+	self, Access, Arg, Arm, Assign, Binary, BinaryOp, Block, BlockId, Break, Builtin, Call, Chunk,
 	ChunkId, Def, Each, Expr, ExprId, Lit, Location, Loop, Match, Mention, ModuleItem,
-	ModuleItemId, Name, Package, Param, Place, Return, Span, TypeItem, Unary, UnaryOp, When,
+	ModuleItemId, Name, Package, Param, Place, ProtoItem, Return, Span, TypeItem, Unary, UnaryOp,
+	When,
 };
 
 #[derive(Debug)]
@@ -50,6 +51,7 @@ pub enum TypeError {
 	NotCallable(String),
 	NotConstructible(String),
 	NotInvokable(String),
+	NotProtocol(String),
 	CaseNonType(String),
 }
 
@@ -124,6 +126,7 @@ impl Display for TypeError {
 				write!(f, "type {} cannot be constructed", type_name)
 			}
 			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
+			Self::NotProtocol(type_name) => write!(f, "type {} is not a protocol", type_name),
 			Self::CaseNonType(type_name) => {
 				write!(f, "type {} cannot be matched against", type_name)
 			}
@@ -343,6 +346,7 @@ enum Obj {
 	Dict(Dict),
 	Proc(Proc),
 	Type(TypeId),
+	Proto(ProtoId),
 	Instance(Instance),
 	Method(Method),
 }
@@ -354,6 +358,7 @@ impl Obj {
 			Self::Dict(_) => TypeId::Native(NativeTypeId::DICT),
 			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
 			Self::Type(_) => TypeId::Native(NativeTypeId::TYPE),
+			Self::Proto(_) => TypeId::Native(NativeTypeId::PROTO),
 			Self::Instance(inst) => TypeId::User(inst.typ),
 			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
 		}
@@ -425,7 +430,11 @@ struct UserType {
 	body_fields: OrderMap<Sym, ExprId, FxBuildHasher>,
 	chunk: ChunkId,
 	methods: FxHashMap<Sym, Rc<RefCell<Proc>>>,
+	// Provided members this type took from the protocols it implements, kept
+	// apart from the methods it declares itself.
+	acquired: FxHashMap<Sym, Rc<RefCell<Proc>>>,
 	statics: FxHashMap<Sym, Static>,
+	protos: Vec<ProtoId>,
 	// Scope this type was declared in.
 	scope: Rc<RefCell<Scope>>,
 	// Type this type was declared in; None if at the module level.
@@ -450,6 +459,16 @@ impl UserType {
 	fn variants(&self) -> &[UserTypeId] {
 		self.variants.as_deref().unwrap_or(&[])
 	}
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProtoId(u32);
+
+#[derive(Debug)]
+struct Proto {
+	name: Sym,
+	// None for a required member, Some for a provided one.
+	members: FxHashMap<Sym, Option<Rc<RefCell<Proc>>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -535,6 +554,7 @@ const CORE_TYPES: &[(
 	),
 	("Proc", NativeTypeId::PROC, None, &[]),
 	("Type", NativeTypeId::TYPE, None, &[]),
+	("Proto", NativeTypeId::PROTO, None, &[]),
 ];
 
 pub(crate) const CORE_TYPE_NAMES: [&str; CORE_TYPES.len()] = {
@@ -557,11 +577,13 @@ impl NativeTypeId {
 	const DICT: NativeTypeId = NativeTypeId(6);
 	const PROC: NativeTypeId = NativeTypeId(7);
 	const TYPE: NativeTypeId = NativeTypeId(8);
+	const PROTO: NativeTypeId = NativeTypeId(9);
 }
 
 struct TypeRegistry {
 	user: Vec<UserType>,
 	native: Vec<NativeType>,
+	protos: Vec<Proto>,
 }
 
 impl TypeRegistry {
@@ -590,6 +612,7 @@ impl TypeRegistry {
 		Self {
 			user: Vec::new(),
 			native,
+			protos: Vec::new(),
 		}
 	}
 
@@ -624,18 +647,43 @@ impl TypeRegistry {
 		&mut self.user[id.0 as usize]
 	}
 
-	// Get a method by name for a type. Looks up one level to the type's parent
-	// if it is a variant and has no matching method.
+	// Get a method by name for a type, in four tiers: methods declared here,
+	// then a parent's if this is a variant, then members acquired from a
+	// protocol, then a parent's acquired. Declared always beats acquired, so a
+	// type supplying its own member overrides a provided one.
 	fn user_method(&self, id: UserTypeId, name: Sym) -> Option<Rc<RefCell<Proc>>> {
 		let typ = self.get_user_type(id);
+		let parent = match typ.is_variant() {
+			true => Some(self.get_user_type(typ.enclosing.unwrap())),
+			false => None,
+		};
 		if let Some(proc_rf) = typ.methods.get(&name) {
 			return Some(proc_rf.clone());
 		}
-		if typ.is_variant() {
-			let parent = self.get_user_type(typ.enclosing.unwrap());
-			return parent.methods.get(&name).cloned();
+		if let Some(parent) = parent
+			&& let Some(proc_rf) = parent.methods.get(&name)
+		{
+			return Some(proc_rf.clone());
+		}
+		if let Some(proc_rf) = typ.acquired.get(&name) {
+			return Some(proc_rf.clone());
+		}
+		if let Some(parent) = parent
+			&& let Some(proc_rf) = parent.acquired.get(&name)
+		{
+			return Some(proc_rf.clone());
 		}
 		None
+	}
+
+	fn get_proto(&self, id: ProtoId) -> &Proto {
+		&self.protos[id.0 as usize]
+	}
+
+	fn add_proto(&mut self, proto: Proto) -> ProtoId {
+		let id = ProtoId(self.protos.len() as u32);
+		self.protos.push(proto);
+		id
 	}
 
 	fn get_native_type(&self, id: NativeTypeId) -> &NativeType {
@@ -845,6 +893,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 	pub fn eval(mut self, chunk_id: ChunkId) -> Result<(), (Error, Vec<(String, Location)>)> {
 		let chunk = self.pkg.get_chunk(chunk_id);
+		// Protocols are bound ahead of the walk, so a type can implement one
+		// declared below it.
+		for item_id in &chunk.top {
+			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
+				let val = self.eval_proto_decl(chunk, chunk_id, proto);
+				self.scope.borrow_mut().locals.insert(proto.0, val);
+			}
+		}
 		for item_id in &chunk.top {
 			match self.eval_module_item(chunk, chunk_id, *item_id) {
 				Ok(()) => {}
@@ -865,10 +921,12 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		match chunk.get_module_item(item_id) {
 			ModuleItem::Type(typ) => {
 				let name = typ.0;
-				let val = self.eval_type_decl(chunk, chunk_id, typ, None, false)?;
+				let span = chunk.get_module_item_span(item_id);
+				let val = self.eval_type_decl(chunk, chunk_id, span, typ, None, false)?;
 				self.scope.borrow_mut().locals.insert(name, val);
 				Ok(())
 			}
+			ModuleItem::Proto(_) => Ok(()),
 			ModuleItem::Def(Def(name, params, body)) => {
 				let obj = Obj::Proc(Proc {
 					name: *name,
@@ -888,11 +946,66 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
+	fn eval_proto_decl(
+		&mut self,
+		chunk: &Chunk,
+		chunk_id: ChunkId,
+		syn::Proto(name, items): &syn::Proto,
+	) -> Val {
+		let mut members = FxHashMap::default();
+		for item_id in items {
+			let ProtoItem(Def(member, params, body)) = chunk.get_proto_item(*item_id);
+			let Block(exprs) = chunk.get_block(*body);
+			let provided = match exprs.is_empty() {
+				true => None,
+				false => Some(Rc::new(RefCell::new(Proc {
+					name: *member,
+					params: params.to_vec(),
+					body: *body,
+					chunk: chunk_id,
+					scope: self.scope.clone(),
+				}))),
+			};
+			members.insert(*member, provided);
+		}
+		let id = self.types.add_proto(Proto {
+			name: *name,
+			members,
+		});
+		Val::Obj(Rc::new(RefCell::new(Obj::Proto(id))))
+	}
+
+	// Resolve an 'impl' name through the ordinary scope chain. A top-level
+	// binding can shadow a protocol's name between eval's pre-pass and here,
+	// which is why this can fail despite sem's check.
+	fn resolve_proto(&mut self, span: Span, name: Sym) -> Result<ProtoId, Signal> {
+		let local = Scope::local(&self.scope, name);
+		let loc = span.loc(self.pkg);
+		if !local.is_bound() {
+			return Err(Signal::Error(
+				Error::NameError(self.syms.resolve(name).to_string()),
+				vec![(String::new(), loc)],
+			));
+		}
+		let val = local.get();
+		if let Val::Obj(rf) = &val
+			&& let Obj::Proto(id) = *rf.borrow()
+		{
+			return Ok(id);
+		}
+		let type_name = self.types.type_name(self.syms, val.type_id());
+		Err(Signal::Error(
+			Error::TypeError(TypeError::NotProtocol(type_name)),
+			vec![(String::new(), loc)],
+		))
+	}
+
 	fn eval_type_decl(
 		&mut self,
 		chunk: &Chunk,
 		chunk_id: ChunkId,
-		syn::Type(name, ctor_field_names, items): &syn::Type,
+		span: Span,
+		syn::Type(name, ctor_field_names, impls, items): &syn::Type,
 		enclosing: Option<UserTypeId>,
 		is_case: bool,
 	) -> Result<Val, Signal> {
@@ -902,7 +1015,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			body_fields: OrderMap::with_hasher(FxBuildHasher),
 			chunk: chunk_id,
 			methods: FxHashMap::default(),
+			acquired: FxHashMap::default(),
 			statics: FxHashMap::default(),
+			protos: Vec::new(),
 			scope: self.scope.clone(),
 			enclosing,
 			variants: None,
@@ -912,12 +1027,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
 		let mut variants = if is_case { None } else { Some(Vec::new()) };
 		for item_id in items {
+			let item_span = chunk.get_type_item_span(*item_id);
 			match chunk.get_type_item(*item_id) {
 				TypeItem::Field(syn::Field(name, init)) => {
 					body_fields.insert(*name, *init);
 				}
 				TypeItem::Case(variant) => {
-					let val = self.eval_type_decl(chunk, chunk_id, variant, Some(id), true)?;
+					let val =
+						self.eval_type_decl(chunk, chunk_id, item_span, variant, Some(id), true)?;
 					let Val::Obj(rf) = &val else { panic!() };
 					let Obj::Type(TypeId::User(variant_id)) = *rf.borrow() else {
 						panic!()
@@ -926,7 +1043,14 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					variants.as_mut().unwrap().push(variant_id);
 				}
 				TypeItem::Type(inner_type) => {
-					let val = self.eval_type_decl(chunk, chunk_id, inner_type, Some(id), false)?;
+					let val = self.eval_type_decl(
+						chunk,
+						chunk_id,
+						item_span,
+						inner_type,
+						Some(id),
+						false,
+					)?;
 					statics.insert(inner_type.0, Static::Type(val));
 				}
 				TypeItem::Method(syn::Method::Instance(Def(name, params, body))) => {
@@ -951,10 +1075,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 		}
+		let mut acquired = FxHashMap::default();
+		let mut protos = Vec::with_capacity(impls.len());
+		for impl_name in impls {
+			let proto_id = self.resolve_proto(span, *impl_name)?;
+			protos.push(proto_id);
+			for (member, provided) in &self.types.get_proto(proto_id).members {
+				let Some(proc_rf) = provided else { continue };
+				// A member the type declares itself overrides the provided one.
+				if methods.contains_key(member) {
+					continue;
+				}
+				acquired.insert(*member, proc_rf.clone());
+			}
+		}
+
 		let typ = self.types.get_user_type_mut(id);
 		typ.body_fields = body_fields;
 		typ.methods = methods;
+		typ.acquired = acquired;
 		typ.statics = statics;
+		typ.protos = protos;
 		typ.variants = variants;
 		let obj = Obj::Type(TypeId::User(id));
 		Ok(Val::Obj(Rc::new(RefCell::new(obj))))
@@ -2102,6 +2243,10 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 				format!("type {}", name)
 			}
 		},
+		Obj::Proto(proto_id) => {
+			let proto = types.get_proto(*proto_id);
+			format!("proto {}", syms.resolve(proto.name))
+		}
 		Obj::Instance(inst) => {
 			let typ = types.get_user_type(inst.typ);
 			let name = types.type_name(syms, TypeId::User(inst.typ));

@@ -57,6 +57,8 @@ test_files! {
 	test_case_types_nested => "case_types_nested.ms",
 	test_reports_case_errors => "case_errors.ms",
 	test_reports_case_parent_shape => "sem_error_case.ms",
+	test_protos => "protos.ms",
+	test_reports_proto_errors => "sem_error_proto.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {

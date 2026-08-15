@@ -28,10 +28,10 @@ fn main() {
 
 	match Lexer::new(&mut syms, src).lex() {
 		Ok(toks) => match Parser::new(src, toks).parse() {
-			Ok(chunk) => match sem::check(&mut syms, &chunk, src) {
-				Ok(()) => {
-					let chunk_id = pkg.add_chunk(chunk);
-					match Interpreter::new(&mut syms, &pkg).eval(chunk_id) {
+			Ok(chunk) => {
+				let chunk_id = pkg.add_chunk(chunk);
+				match sem::check(&mut syms, &pkg, chunk_id) {
+					Ok(()) => match Interpreter::new(&mut syms, &pkg).eval(chunk_id) {
 						Ok(()) => {}
 						Err((err, mut trace)) => {
 							{
@@ -47,13 +47,13 @@ fn main() {
 							}
 							process::exit(1);
 						}
+					},
+					Err(err) => {
+						eprintln!("{}", err);
+						process::exit(1);
 					}
 				}
-				Err(err) => {
-					eprintln!("{}", err);
-					process::exit(1);
-				}
-			},
+			}
 			Err(err) => {
 				eprintln!("{}", err);
 				process::exit(1);
