@@ -49,8 +49,7 @@ impl Source {
 		}
 		Location {
 			file: self.file.clone(),
-			lin,
-			col,
+			pos: Some((lin, col)),
 		}
 	}
 }
@@ -74,13 +73,21 @@ impl Index<Range<usize>> for Source {
 #[derive(Debug)]
 pub struct Location {
 	file: String,
-	lin: usize,
-	col: usize,
+	pos: Option<(usize, usize)>,
+}
+
+impl Location {
+	fn file(file: String) -> Self {
+		Self { file, pos: None }
+	}
 }
 
 impl Display for Location {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-		write!(f, "{}:{},{}", self.file, self.lin, self.col)
+		match self.pos {
+			Some((lin, col)) => write!(f, "{}:{},{}", self.file, lin, col),
+			None => write!(f, "{}", self.file),
+		}
 	}
 }
 
