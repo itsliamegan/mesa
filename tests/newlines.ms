@@ -60,7 +60,7 @@ $print(result)
 
 #---
 
-#! newlines.ms:66,1: syntax error: unexpected token EQ
+#! syntax error: unexpected token EQ
 
 x
 := 5

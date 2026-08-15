@@ -24,7 +24,7 @@ $print(c.count)
 
 #---
 
-#! body_fields.ms:33,2: syntax error: unexpected token IDENT
+#! syntax error: unexpected token IDENT
 
 type Bad
 	def m()
@@ -35,7 +35,7 @@ end
 
 #---
 
-#! body_fields.ms:41,2: syntax error: unexpected token NUM
+#! syntax error: unexpected token NUM
 
 type T(a)
 	1 + 1

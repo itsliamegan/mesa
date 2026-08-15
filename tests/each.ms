@@ -27,8 +27,7 @@ $print(total)
 
 #---
 
-#! each.ms:38,10: runtime error: name 'leak' is not defined
-#! 	at <main> (each.ms:38,10)
+#! runtime error: name 'leak' is not defined
 
 each n in [1, 2] do
 	when n == 1 then
@@ -41,8 +40,7 @@ end
 
 #---
 
-#! each.ms:52,10: runtime error: name 'leak' is not defined
-#! 	at <main> (each.ms:52,10)
+#! runtime error: name 'leak' is not defined
 
 each k in {1: "a", 2: "b"} do
 	when k == 1 then

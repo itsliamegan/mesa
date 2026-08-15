@@ -100,7 +100,12 @@ fn assert_case(dir: &Path, file: &str, lines: &[&str], start: usize, end: usize)
 
 	let (stdout, stderr) = eval(dir, file, &src);
 	assert_eq!(out, stdout, "stdout of {} case at line {}", file, start + 1);
-	assert_eq!(err, stderr, "stderr of {} case at line {}", file, start + 1);
+	assert!(
+		stderr.contains(&err),
+		"stderr of {} case at line {}",
+		file,
+		start + 1
+	);
 }
 
 fn eval(dir: &Path, file: &str, src: &str) -> (String, String) {

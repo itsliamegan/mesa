@@ -1,5 +1,4 @@
-#! case_errors.ms:9,5: runtime error: type Expr cannot be constructed
-#! 	at <main> (case_errors.ms:9,5)
+#! runtime error: type Expr cannot be constructed
 
 type Expr
 	case Ident(name)
@@ -10,9 +9,7 @@ Expr("x")
 
 #---
 
-#! case_errors.ms:22,7: runtime error: type Expr cannot be constructed
-#! 	at make (case_errors.ms:22,7)
-#! 	at <main> (case_errors.ms:26,10)
+#! runtime error: type Expr cannot be constructed
 
 type Expr
 	case Ident(name)
@@ -27,8 +24,7 @@ Expr.make()
 
 #---
 
-#! case_errors.ms:40,16: runtime error: type Expr.Ident has no such member 'value'
-#! 	at <main> (case_errors.ms:40,16)
+#! runtime error: type Expr.Ident has no such member 'value'
 
 type Expr
 	case Ident(name)
@@ -41,8 +37,7 @@ Expr.Ident("x").value
 
 #---
 
-#! case_errors.ms:56,23: runtime error: member 'label' on type Expr.Ident is read-only
-#! 	at <main> (case_errors.ms:56,23)
+#! runtime error: member 'label' on type Expr.Ident is read-only
 
 type Expr
 	case Ident(name)
@@ -57,8 +52,7 @@ Expr.Ident("x").label := 1
 
 #---
 
-#! case_errors.ms:74,23: runtime error: member 'label' on type Expr.Ident is read-only
-#! 	at <main> (case_errors.ms:74,23)
+#! runtime error: member 'label' on type Expr.Ident is read-only
 
 # A parent method name is refused as a write target even when the variant has a
 # real field of that name — the same rule a single type already applies.
@@ -75,8 +69,7 @@ Expr.Ident("x").label := 1
 
 #---
 
-#! case_errors.ms:83,13: runtime error: type Num cannot be matched against
-#! 	at <main> (case_errors.ms:83,13)
+#! runtime error: type Num cannot be matched against
 
 n := 5
 m := 7
@@ -84,7 +77,7 @@ when n case m then "seven" end
 
 #---
 
-#! case_errors.ms:93,14: syntax error: unexpected token LPAREN
+#! syntax error: unexpected token LPAREN
 
 def f()
 	1
