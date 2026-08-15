@@ -6,7 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::intern::Interner;
-use crate::syn::{self, ChunkId, Lexer, Package, Parser};
+use crate::pkg::Package;
+use crate::syn::{self, ChunkId, Lexer, Parser};
 
 #[derive(Debug)]
 pub enum Error {

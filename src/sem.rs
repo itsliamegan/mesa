@@ -3,11 +3,12 @@ pub mod load;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
-use crate::intern::{Interner, Sym};
-use crate::rt::CORE_TYPE_NAMES;
+use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
+use crate::pkg::Package;
+use crate::src::{Location, Span};
 use crate::syn::{
-	BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Location, Member, Method, ModuleItem,
-	Package, Param, Place, Proto, Span, Type, TypeItem, TypeItemId,
+	BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param,
+	Place, Proto, Type, TypeItem, TypeItemId,
 };
 
 #[derive(Debug)]
@@ -148,7 +149,7 @@ fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<
 			ModuleItem::Expr(_) => continue,
 		};
 		if prelude.contains(&name) {
-			let loc = span.loc(pkg);
+			let loc = pkg.loc(span);
 			errs.push(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
 		}
 	}
@@ -196,7 +197,7 @@ fn check_type(
 			_ => false,
 		});
 	if has_cases && !type_.params.is_empty() {
-		let loc = span.loc(pkg);
+		let loc = pkg.loc(span);
 		return Err(Error::ParamsOnCaseParent(
 			loc,
 			syms.resolve(type_.name).to_string(),
@@ -214,7 +215,7 @@ fn check_type(
 			}
 			TypeItem::Field(field) => {
 				if has_cases {
-					let loc = span.loc(pkg);
+					let loc = pkg.loc(span);
 					return Err(Error::FieldOnCaseParent(
 						loc,
 						syms.resolve(type_.name).to_string(),
@@ -264,7 +265,7 @@ fn check_proto(
 	}
 	// A protocol must either provide a method or only require methods.
 	if provides && !requires {
-		let loc = span.loc(pkg);
+		let loc = pkg.loc(span);
 		return Err(Error::ProvidedWithoutRequired(
 			loc,
 			syms.resolve(proto.name).to_string(),
@@ -403,7 +404,7 @@ fn ensure_reaches_member(
 		if !members.contains(&member.name) {
 			let span = chunk.get_expr_span(expr_id);
 			return Err(Error::ProtocolReach(
-				span.loc(pkg),
+				pkg.loc(span),
 				syms.resolve(proto).to_string(),
 				syms.resolve(member.name).to_string(),
 			));
@@ -436,7 +437,7 @@ fn check_conformance(
 		let (proto_chunk_id, proto) = match protos.get(impl_name) {
 			Some(proto) => proto,
 			None => {
-				let loc = span.loc(pkg);
+				let loc = pkg.loc(span);
 				return Err(Error::UnknownProtocol(
 					loc,
 					syms.resolve(*impl_name).to_string(),
@@ -452,7 +453,7 @@ fn check_conformance(
 			let member = &def.name;
 			if let Some((method_span, method_def)) = methods.get(member) {
 				if !signatures_agree(proto_chunk, chunk, &def.params, &method_def.params) {
-					let loc = method_span.loc(pkg);
+					let loc = pkg.loc(*method_span);
 					return Err(Error::SignatureMismatch(
 						loc,
 						syms.resolve(type_.name).to_string(),
@@ -463,7 +464,7 @@ fn check_conformance(
 				continue;
 			}
 			if !is_provided(proto_chunk, def) {
-				let loc = span.loc(pkg);
+				let loc = pkg.loc(span);
 				return Err(Error::MissingMember(
 					loc,
 					syms.resolve(type_.name).to_string(),
@@ -472,7 +473,7 @@ fn check_conformance(
 				));
 			}
 			if let Some(static_span) = statics.get(member) {
-				let loc = static_span.loc(pkg);
+				let loc = pkg.loc(*static_span);
 				return Err(Error::MemberCollision(
 					loc,
 					syms.resolve(type_.name).to_string(),
@@ -481,7 +482,7 @@ fn check_conformance(
 				));
 			}
 			if let Some(first) = acquired.insert(*member, proto.name) {
-				let loc = span.loc(pkg);
+				let loc = pkg.loc(span);
 				return Err(Error::ProtocolConflict(
 					loc,
 					syms.resolve(first).to_string(),
@@ -634,7 +635,7 @@ fn check_expr(chunk: &Chunk, pkg: &Package, expr_id: ExprId, depth: u32) -> Resu
 		Expr::Break(break_) => {
 			if depth == 0 {
 				let span = chunk.get_expr_span(expr_id);
-				return Err(Error::BreakOutsideLoop(span.loc(pkg)));
+				return Err(Error::BreakOutsideLoop(pkg.loc(span)));
 			}
 			match break_.val {
 				Some(val) => check_expr(chunk, pkg, val, depth),
@@ -707,7 +708,7 @@ fn ensure_required_precede_defaults(
 		} else if let Some(earlier) = defaulted {
 			// A defaulted param came earlier, so this required one breaks the
 			// invariant.
-			let loc = span.loc(pkg);
+			let loc = pkg.loc(span);
 			return Err(Error::RequiredAfterDefault(
 				loc,
 				syms.resolve(param.name).to_string(),

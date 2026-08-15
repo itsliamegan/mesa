@@ -1,7 +1,7 @@
 use std::fmt::{self, Display, Formatter};
-use std::ops::{Index, Range};
 
 use crate::intern::{Interner, Sym};
+use crate::src::{Location, Source, SourceId, Span};
 
 #[derive(Debug)]
 pub enum Error {
@@ -48,111 +48,6 @@ impl Display for Error {
 	}
 }
 
-#[derive(Debug)]
-pub struct Package {
-	srcs: Vec<Source>,
-	chunks: Vec<Chunk>,
-}
-
-impl Package {
-	pub fn new() -> Self {
-		Self {
-			srcs: Vec::new(),
-			chunks: Vec::new(),
-		}
-	}
-
-	pub fn get_src(&self, id: SourceId) -> &Source {
-		&self.srcs[id.0 as usize]
-	}
-
-	pub fn add_src(&mut self, file: String, text: String) -> SourceId {
-		let id = SourceId(self.srcs.len() as u32);
-		let src = Source { id, file, text };
-		self.srcs.push(src);
-		id
-	}
-
-	pub fn get_chunk(&self, id: ChunkId) -> &Chunk {
-		&self.chunks[id.0 as usize]
-	}
-
-	pub fn chunk_ids(&self) -> impl Iterator<Item = ChunkId> {
-		(0..self.chunks.len() as u32).map(ChunkId)
-	}
-
-	pub fn add_chunk(&mut self, chunk: Chunk) -> ChunkId {
-		let id = ChunkId(self.chunks.len() as u32);
-		self.chunks.push(chunk);
-		id
-	}
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct SourceId(u32);
-
-#[derive(Debug)]
-pub struct Source {
-	id: SourceId,
-	file: String,
-	text: String,
-}
-
-impl Source {
-	pub fn len(&self) -> usize {
-		self.text.len()
-	}
-
-	pub fn loc(&self, pos: usize) -> Location {
-		let mut i = 0;
-		let mut lin = 1;
-		let mut col = 1;
-		while i < pos && i < self.text.len() {
-			if self.text.as_bytes()[i] == b'\n' {
-				lin += 1;
-				col = 1;
-			} else {
-				col += 1;
-			}
-			i += 1;
-		}
-		Location {
-			file: self.file.clone(),
-			lin,
-			col,
-		}
-	}
-}
-
-impl Index<usize> for Source {
-	type Output = u8;
-
-	fn index(&self, idx: usize) -> &Self::Output {
-		&self.text.as_bytes()[idx]
-	}
-}
-
-impl Index<Range<usize>> for Source {
-	type Output = str;
-
-	fn index(&self, idx: Range<usize>) -> &Self::Output {
-		&self.text[idx]
-	}
-}
-
-#[derive(Debug)]
-pub struct Location {
-	file: String,
-	lin: usize,
-	col: usize,
-}
-
-impl Display for Location {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-		write!(f, "{}:{},{}", self.file, self.lin, self.col)
-	}
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
 	pub src: SourceId,
@@ -160,19 +55,6 @@ pub struct Token {
 	pub sym: Option<Sym>,
 	pub pos: usize,
 	pub end: usize,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct Span {
-	pub src: SourceId,
-	pub start: usize,
-	pub end: usize,
-}
-
-impl Span {
-	pub fn loc(&self, pkg: &Package) -> Location {
-		pkg.get_src(self.src).loc(self.start)
-	}
 }
 
 impl From<Token> for Span {
@@ -444,7 +326,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_next(&mut self) -> Result<Token, Error> {
 		if self.pos == self.src.len() {
 			return Ok(Token {
-				src: self.src.id,
+				src: self.src.id(),
 				tag: TokenTag::Eof,
 				sym: None,
 				pos: self.pos,
@@ -457,7 +339,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::Eq,
 						sym: None,
 						pos: self.pos - 2,
@@ -466,7 +348,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				} else {
 					self.pos += 1;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::Colon,
 						sym: None,
 						pos: self.pos - 1,
@@ -478,7 +360,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::EqEq,
 						sym: None,
 						pos: self.pos - 2,
@@ -492,7 +374,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::NotEq,
 						sym: None,
 						pos: self.pos - 2,
@@ -506,7 +388,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::LtEq,
 						sym: None,
 						pos: self.pos - 2,
@@ -515,7 +397,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				} else if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'<' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::LtLt,
 						sym: None,
 						pos: self.pos - 2,
@@ -524,7 +406,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				} else {
 					self.pos += 1;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::Lt,
 						sym: None,
 						pos: self.pos - 1,
@@ -536,7 +418,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::GtEq,
 						sym: None,
 						pos: self.pos - 2,
@@ -545,7 +427,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				} else {
 					self.pos += 1;
 					Ok(Token {
-						src: self.src.id,
+						src: self.src.id(),
 						tag: TokenTag::Gt,
 						sym: None,
 						pos: self.pos - 1,
@@ -556,7 +438,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'+' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Plus,
 					sym: None,
 					pos: self.pos - 1,
@@ -566,7 +448,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'-' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Minus,
 					sym: None,
 					pos: self.pos - 1,
@@ -576,7 +458,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'*' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Star,
 					sym: None,
 					pos: self.pos - 1,
@@ -586,7 +468,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'/' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Slash,
 					sym: None,
 					pos: self.pos - 1,
@@ -596,7 +478,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'&' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Amp,
 					sym: None,
 					pos: self.pos - 1,
@@ -606,7 +488,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'{' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::LBrace,
 					sym: None,
 					pos: self.pos - 1,
@@ -616,7 +498,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'}' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::RBrace,
 					sym: None,
 					pos: self.pos - 1,
@@ -626,7 +508,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'[' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::LBrack,
 					sym: None,
 					pos: self.pos - 1,
@@ -636,7 +518,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b']' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::RBrack,
 					sym: None,
 					pos: self.pos - 1,
@@ -646,7 +528,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'(' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::LParen,
 					sym: None,
 					pos: self.pos - 1,
@@ -656,7 +538,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b')' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::RParen,
 					sym: None,
 					pos: self.pos - 1,
@@ -666,7 +548,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b',' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Comma,
 					sym: None,
 					pos: self.pos - 1,
@@ -676,7 +558,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'.' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id,
+					src: self.src.id(),
 					tag: TokenTag::Dot,
 					sym: None,
 					pos: self.pos - 1,
@@ -749,7 +631,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			_ => TokenTag::Ident,
 		};
 		Ok(Token {
-			src: self.src.id,
+			src: self.src.id(),
 			tag,
 			sym: Some(sym),
 			pos,
@@ -762,7 +644,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		self.pos += 1;
 		let ident = self.lex_ident()?;
 		Ok(Token {
-			src: self.src.id,
+			src: self.src.id(),
 			tag: TokenTag::Builtin,
 			sym: ident.sym,
 			pos,
@@ -785,7 +667,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		}
 		self.pos += 1;
 		Ok(Token {
-			src: self.src.id,
+			src: self.src.id(),
 			tag: TokenTag::Str,
 			sym: None,
 			pos,
@@ -808,7 +690,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		}
 		self.pos += 1;
 		Ok(Token {
-			src: self.src.id,
+			src: self.src.id(),
 			tag: TokenTag::Char,
 			sym: None,
 			pos,
@@ -828,7 +710,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			}
 		}
 		Ok(Token {
-			src: self.src.id,
+			src: self.src.id(),
 			tag: TokenTag::Num,
 			sym: None,
 			pos,
@@ -1181,6 +1063,16 @@ pub struct Block {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ChunkId(u32);
 
+impl ChunkId {
+	pub fn new(i: u32) -> Self {
+		Self(i)
+	}
+
+	pub fn index(self) -> usize {
+		self.0 as usize
+	}
+}
+
 #[derive(Debug)]
 pub struct Chunk {
 	pub src: SourceId,
@@ -1386,7 +1278,7 @@ impl<'src> Parser<'src> {
 			src,
 			toks,
 			cur: TokenId(0),
-			chunk: Chunk::new(src.id),
+			chunk: Chunk::new(src.id()),
 		}
 	}
 
@@ -1396,7 +1288,7 @@ impl<'src> Parser<'src> {
 
 	fn tok(&self, id: TokenId) -> Token {
 		Token {
-			src: self.src.id,
+			src: self.src.id(),
 			tag: self.toks.tag(id),
 			sym: self.toks.sym(id),
 			pos: self.toks.start(id),
