@@ -185,6 +185,9 @@ impl From<Token> for Span {
 pub enum TokenTag {
 	Eof,
 
+	Module,
+	Import,
+	Export,
 	Type,
 	Case,
 	Proto,
@@ -249,6 +252,9 @@ impl TokenTag {
 		match self {
 			TokenTag::Eof => "EOF",
 
+			TokenTag::Module => "MODULE",
+			TokenTag::Import => "IMPORT",
+			TokenTag::Export => "EXPORT",
 			TokenTag::Type => "TYPE",
 			TokenTag::Case => "CASE",
 			TokenTag::Proto => "PROTO",
@@ -712,6 +718,9 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		let span = &self.src[pos..self.pos];
 		let sym = self.syms.intern(span);
 		let tag = match sym {
+			Sym::MODULE => TokenTag::Module,
+			Sym::IMPORT => TokenTag::Import,
+			Sym::EXPORT => TokenTag::Export,
 			Sym::TYPE => TokenTag::Type,
 			Sym::CASE => TokenTag::Case,
 			Sym::PROTO => TokenTag::Proto,
@@ -876,10 +885,28 @@ impl NodeId for ModuleItemId {
 
 #[derive(Debug)]
 pub enum ModuleItem {
+	Module(Module),
+	Import(Import),
+	Export(Export),
 	Type(Type),
 	Proto(Proto),
 	Def(Def),
 	Expr(ExprId),
+}
+
+#[derive(Debug)]
+pub struct Module {
+	pub path: Vec<Sym>,
+}
+
+#[derive(Debug)]
+pub struct Import {
+	pub path: Vec<Sym>,
+}
+
+#[derive(Debug)]
+pub struct Export {
+	pub names: Vec<Sym>,
 }
 
 #[derive(Debug)]
@@ -1390,6 +1417,9 @@ impl<'src> Parser<'src> {
 
 	fn parse_module_item(&mut self) -> Result<ModuleItemId, Error> {
 		match self.tag() {
+			TokenTag::Module => self.parse_module_decl(),
+			TokenTag::Import => self.parse_import_decl(),
+			TokenTag::Export => self.parse_export_decl(),
 			TokenTag::Type => self.parse_type_in_module(),
 			TokenTag::Proto => self.parse_proto_decl(),
 			TokenTag::Def => self.parse_def_decl(),
@@ -1401,6 +1431,45 @@ impl<'src> Parser<'src> {
 				Ok(item_id)
 			}
 		}
+	}
+
+	fn parse_module_decl(&mut self) -> Result<ModuleItemId, Error> {
+		let tok = self.take(TokenTag::Import)?;
+		let path = self.parse_dotted_path()?;
+		let item = ModuleItem::Module(Module { path });
+		let item_id = self.chunk.add_module_item(tok.into(), item);
+		Ok(item_id)
+	}
+
+	fn parse_import_decl(&mut self) -> Result<ModuleItemId, Error> {
+		let tok = self.take(TokenTag::Import)?;
+		let path = self.parse_dotted_path()?;
+		let item = ModuleItem::Import(Import { path });
+		let item_id = self.chunk.add_module_item(tok.into(), item);
+		Ok(item_id)
+	}
+
+	fn parse_export_decl(&mut self) -> Result<ModuleItemId, Error> {
+		let tok = self.take(TokenTag::Export)?;
+		let mut names = Vec::new();
+		names.push(self.take(TokenTag::Ident)?.sym.unwrap());
+		while self.tag() == TokenTag::Comma {
+			self.cur = self.cur.next();
+			names.push(self.take(TokenTag::Ident)?.sym.unwrap());
+		}
+		let item = ModuleItem::Export(Export { names });
+		let item_id = self.chunk.add_module_item(tok.into(), item);
+		Ok(item_id)
+	}
+
+	fn parse_dotted_path(&mut self) -> Result<Vec<Sym>, Error> {
+		let mut path = Vec::new();
+		path.push(self.take(TokenTag::Ident)?.sym.unwrap());
+		while self.tag() == TokenTag::Dot {
+			self.cur = self.cur.next();
+			path.push(self.take(TokenTag::Ident)?.sym.unwrap());
+		}
+		Ok(path)
 	}
 
 	fn parse_type_in_module(&mut self) -> Result<ModuleItemId, Error> {
@@ -1587,17 +1656,17 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_impl_line(&mut self) -> Result<Vec<Sym>, Error> {
-		let mut protos = Vec::new();
+		let mut impls = Vec::new();
 		if self.tag() != TokenTag::Impl {
-			return Ok(protos);
+			return Ok(impls);
 		}
 		self.take(TokenTag::Impl)?;
-		protos.push(self.take_type_name()?);
+		impls.push(self.take_type_name()?);
 		while self.tag() == TokenTag::Comma {
 			self.take(TokenTag::Comma)?;
-			protos.push(self.take_type_name()?);
+			impls.push(self.take_type_name()?);
 		}
-		Ok(protos)
+		Ok(impls)
 	}
 
 	fn parse_params(&mut self) -> Result<Vec<Param>, Error> {

@@ -6,31 +6,37 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 pub struct Sym(u32);
 
 impl Sym {
-	pub const TYPE: Sym = Sym(0);
-	pub const CASE: Sym = Sym(1);
-	pub const PROTO: Sym = Sym(2);
-	pub const IMPL: Sym = Sym(3);
-	pub const DEF: Sym = Sym(4);
-	pub const EACH: Sym = Sym(5);
-	pub const LOOP: Sym = Sym(6);
-	pub const DO: Sym = Sym(7);
-	pub const IN: Sym = Sym(8);
-	pub const WHEN: Sym = Sym(9);
-	pub const THEN: Sym = Sym(10);
-	pub const ELSE: Sym = Sym(11);
-	pub const END: Sym = Sym(12);
-	pub const RETURN: Sym = Sym(13);
-	pub const BREAK: Sym = Sym(14);
-	pub const AND: Sym = Sym(15);
-	pub const OR: Sym = Sym(16);
-	pub const NOT: Sym = Sym(17);
-	pub const SELF: Sym = Sym(18);
-	pub const TRUE: Sym = Sym(19);
-	pub const FALSE: Sym = Sym(20);
-	pub const NIL: Sym = Sym(21);
+	pub const MODULE: Sym = Sym(0);
+	pub const IMPORT: Sym = Sym(1);
+	pub const EXPORT: Sym = Sym(2);
+	pub const TYPE: Sym = Sym(3);
+	pub const CASE: Sym = Sym(4);
+	pub const PROTO: Sym = Sym(5);
+	pub const IMPL: Sym = Sym(6);
+	pub const DEF: Sym = Sym(7);
+	pub const EACH: Sym = Sym(8);
+	pub const LOOP: Sym = Sym(9);
+	pub const DO: Sym = Sym(10);
+	pub const IN: Sym = Sym(11);
+	pub const WHEN: Sym = Sym(12);
+	pub const THEN: Sym = Sym(13);
+	pub const ELSE: Sym = Sym(14);
+	pub const END: Sym = Sym(15);
+	pub const RETURN: Sym = Sym(16);
+	pub const BREAK: Sym = Sym(17);
+	pub const AND: Sym = Sym(18);
+	pub const OR: Sym = Sym(19);
+	pub const NOT: Sym = Sym(20);
+	pub const SELF: Sym = Sym(21);
+	pub const TRUE: Sym = Sym(22);
+	pub const FALSE: Sym = Sym(23);
+	pub const NIL: Sym = Sym(24);
 }
 
 const KEYWORDS: &[(&str, Sym)] = &[
+	("module", Sym::MODULE),
+	("import", Sym::IMPORT),
+	("export", Sym::EXPORT),
 	("type", Sym::TYPE),
 	("case", Sym::CASE),
 	("proto", Sym::PROTO),

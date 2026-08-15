@@ -918,6 +918,9 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		item_id: ModuleItemId,
 	) -> Result<(), Signal> {
 		match chunk.get_module_item(item_id) {
+			ModuleItem::Module(_) => Ok(()),
+			ModuleItem::Import(_) => Ok(()),
+			ModuleItem::Export(_) => Ok(()),
 			ModuleItem::Type(typ) => {
 				let span = chunk.get_module_item_span(item_id);
 				let val = self.eval_type_decl(chunk, chunk_id, span, typ, None, false)?;

@@ -123,6 +123,9 @@ pub fn check(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<()
 	for item_id in &chunk.top {
 		let span = chunk.get_module_item_span(*item_id);
 		let name = match chunk.get_module_item(*item_id) {
+			ModuleItem::Module(_) => continue,
+			ModuleItem::Import(_) => continue,
+			ModuleItem::Export(_) => continue,
 			ModuleItem::Type(type_) => type_.name,
 			ModuleItem::Proto(proto) => {
 				protos.insert(proto.name, (chunk_id, proto));
@@ -144,6 +147,9 @@ pub fn check(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<()
 	for item_id in &chunk.top {
 		let span = chunk.get_module_item_span(*item_id);
 		let result = match chunk.get_module_item(*item_id) {
+			ModuleItem::Module(_) => Ok(()),
+			ModuleItem::Import(_) => Ok(()),
+			ModuleItem::Export(_) => Ok(()),
 			ModuleItem::Type(type_) => check_type(syms, chunk, pkg, span, type_, None, &protos),
 			ModuleItem::Proto(proto) => check_proto(syms, chunk, pkg, span, proto),
 			ModuleItem::Def(def) => check_def(syms, chunk, pkg, span, def),
