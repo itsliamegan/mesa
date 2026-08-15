@@ -10,9 +10,9 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::syn::{
-	self, Access, Arg, Assign, Binary, BinaryOp, BlockId, Break, Builtin, Call, Chunk, ChunkId,
-	Def, Each, Expr, ExprId, Lit, Location, Loop, Mention, ModuleItem, ModuleItemId, Name, Package,
-	Param, Place, Return, Span, TypeItem, Unary, UnaryOp, When,
+	self, Access, Arg, Arm, Assign, Binary, BinaryOp, BlockId, Break, Builtin, Call, Chunk,
+	ChunkId, Def, Each, Expr, ExprId, Lit, Location, Loop, Match, Mention, ModuleItem,
+	ModuleItemId, Name, Package, Param, Place, Return, Span, TypeItem, Unary, UnaryOp, When,
 };
 
 #[derive(Debug)]
@@ -50,6 +50,7 @@ pub enum TypeError {
 	NotCallable(String),
 	NotConstructible(String),
 	NotInvokable(String),
+	CaseNonType(String),
 }
 
 #[derive(Debug)]
@@ -123,6 +124,9 @@ impl Display for TypeError {
 				write!(f, "type {} cannot be constructed", type_name)
 			}
 			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
+			Self::CaseNonType(type_name) => {
+				write!(f, "type {} cannot be matched against", type_name)
+			}
 		}
 	}
 }
@@ -1051,6 +1055,45 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				if cond {
 					self.eval_block(chunk, scope, *then_branch)
 				} else if let Some(else_branch) = else_branch {
+					self.eval_block(chunk, scope, *else_branch)
+				} else {
+					Ok(Val::Nil(Nil))
+				}
+			}
+			Expr::Match(Match(scrutinee, arms, else_branch)) => {
+				let scrutinee_type_id = self.eval_expr(chunk, *scrutinee)?.type_id();
+				for Arm(path, body) in arms {
+					let path_val = self.eval_expr(chunk, *path)?;
+					let arm_type_id = match &path_val {
+						Val::Obj(rf) => match &*rf.borrow() {
+							Obj::Type(id) => Some(*id),
+							_ => None,
+						},
+						_ => None,
+					};
+					let Some(arm_type_id) = arm_type_id else {
+						let loc = chunk.get_expr_span(*path).loc(self.pkg);
+						let type_name = self.types.type_name(self.syms, path_val.type_id());
+						return Err(Signal::Error(
+							Error::TypeError(TypeError::CaseNonType(type_name)),
+							vec![(String::new(), loc)],
+						));
+					};
+					if arm_type_id == scrutinee_type_id {
+						let scope = Rc::new(RefCell::new(Scope {
+							locals: FxHashMap::default(),
+							outer: Some(self.scope.clone()),
+							tier: Tier::Local,
+						}));
+						return self.eval_block(chunk, scope, *body);
+					}
+				}
+				if let Some(else_branch) = else_branch {
+					let scope = Rc::new(RefCell::new(Scope {
+						locals: FxHashMap::default(),
+						outer: Some(self.scope.clone()),
+						tier: Tier::Local,
+					}));
 					self.eval_block(chunk, scope, *else_branch)
 				} else {
 					Ok(Val::Nil(Nil))

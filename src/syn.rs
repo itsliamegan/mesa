@@ -932,6 +932,7 @@ pub enum Expr {
 	Each(Each),
 	Loop(Loop),
 	When(When),
+	Match(Match),
 	Return(Return),
 	Break(Break),
 	Self_,
@@ -955,6 +956,12 @@ pub struct Loop(pub BlockId);
 
 #[derive(Debug)]
 pub struct When(pub ExprId, pub BlockId, pub Option<BlockId>);
+
+#[derive(Debug)]
+pub struct Match(pub ExprId, pub Vec<Arm>, pub Option<BlockId>);
+
+#[derive(Debug)]
+pub struct Arm(pub ExprId, pub BlockId);
 
 #[derive(Debug)]
 pub struct Return(pub Option<ExprId>);
@@ -1699,6 +1706,9 @@ impl<'src> Parser<'src> {
 	fn parse_when_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::When)?;
 		let cond = self.parse_expr()?;
+		if self.tag() == TokenTag::Case {
+			return self.parse_match_arms(tok, cond);
+		}
 		self.take(TokenTag::Then)?;
 		let mut then_branch = Vec::new();
 		while self.cur.index() < self.toks.len()
@@ -1731,6 +1741,44 @@ impl<'src> Parser<'src> {
 			self.take(TokenTag::End)?;
 		}
 		let expr = Expr::When(When(cond, then_branch, else_branch));
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
+	fn parse_match_arms(&mut self, tok: Token, scrutinee: ExprId) -> Result<ExprId, Error> {
+		let mut arms = Vec::new();
+		while self.tag() == TokenTag::Case {
+			self.take(TokenTag::Case)?;
+			let mut path = self.parse_name_expr()?;
+			while self.tag() == TokenTag::Dot {
+				path = self.parse_member_expr(path)?;
+			}
+			self.take(TokenTag::Then)?;
+			let mut body = Vec::new();
+			while self.cur.index() < self.toks.len()
+				&& self.tag() != TokenTag::Case
+				&& self.tag() != TokenTag::Else
+				&& self.tag() != TokenTag::End
+			{
+				let expr_id = self.parse_expr()?;
+				body.push(expr_id);
+			}
+			let body = self.chunk.add_block(Block(body));
+			arms.push(Arm(path, body));
+		}
+		let else_branch = if self.tag() == TokenTag::Else {
+			self.take(TokenTag::Else)?;
+			let mut else_branch = Vec::new();
+			while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
+				let expr_id = self.parse_expr()?;
+				else_branch.push(expr_id);
+			}
+			Some(self.chunk.add_block(Block(else_branch)))
+		} else {
+			None
+		};
+		self.take(TokenTag::End)?;
+		let expr = Expr::Match(Match(scrutinee, arms, else_branch));
 		let expr_id = self.chunk.add_expr(tok.into(), expr);
 		Ok(expr_id)
 	}

@@ -72,3 +72,22 @@ type Expr
 end
 
 Expr.Ident("x").label := 1
+
+#---
+
+#! case_errors.ms:83,13: runtime error: type Num cannot be matched against
+#! 	at <main> (case_errors.ms:83,13)
+
+n := 5
+m := 7
+when n case m then "seven" end
+
+#---
+
+#! case_errors.ms:93,14: syntax error: unexpected token LPAREN
+
+def f()
+	1
+end
+
+when 1 case f() then "x" end

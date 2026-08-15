@@ -4,9 +4,9 @@ use std::fmt::{self, Display, Formatter};
 use crate::intern::{Interner, Sym};
 use crate::rt::CORE_TYPE_NAMES;
 use crate::syn::{
-	Access, Arg, Assign, Binary, Block, BlockId, Break, Builtin, Call, Chunk, Def, Each, Expr,
-	ExprId, Field, Lit, Location, Loop, Member, Mention, Method, ModuleItem, Param, Place, Return,
-	Source, Span, Type, TypeItem, Unary, When,
+	Access, Arg, Arm, Assign, Binary, Block, BlockId, Break, Builtin, Call, Chunk, Def, Each, Expr,
+	ExprId, Field, Lit, Location, Loop, Match, Member, Mention, Method, ModuleItem, Param, Place,
+	Return, Source, Span, Type, TypeItem, Unary, When,
 };
 
 #[derive(Debug)]
@@ -166,6 +166,17 @@ fn check_expr(chunk: &Chunk, src: &Source, expr_id: ExprId, depth: u32) -> Resul
 		Expr::When(When(cond, then_branch, else_branch)) => {
 			check_expr(chunk, src, *cond, depth)?;
 			check_block(chunk, src, *then_branch, depth)?;
+			if let Some(else_branch) = else_branch {
+				check_block(chunk, src, *else_branch, depth)?;
+			}
+			Ok(())
+		}
+		Expr::Match(Match(scrutinee, arms, else_branch)) => {
+			check_expr(chunk, src, *scrutinee, depth)?;
+			for Arm(path, body) in arms {
+				check_expr(chunk, src, *path, depth)?;
+				check_block(chunk, src, *body, depth)?;
+			}
 			if let Some(else_branch) = else_branch {
 				check_block(chunk, src, *else_branch, depth)?;
 			}

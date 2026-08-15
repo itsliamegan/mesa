@@ -34,6 +34,7 @@ test_files! {
 	test_iterates => "each.ms",
 	test_loops => "loop.ms",
 	test_branches => "when.ms",
+	test_matches => "match.ms",
 	test_escapes_strings => "escapes.ms",
 	test_walks_scope => "scope.ms",
 	test_shadows_fields => "shadow.ms",
