@@ -776,7 +776,7 @@ impl Member {
 				let Obj::Instance(inst) = &mut *inst.borrow_mut() else {
 					panic!()
 				};
-				if types.user_method(inst.typ, *name).is_some() {
+				if !inst.fields.contains_key(name) && types.user_method(inst.typ, *name).is_some() {
 					return Err(());
 				}
 				inst.fields.insert(*name, val);

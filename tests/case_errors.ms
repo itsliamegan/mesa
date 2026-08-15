@@ -52,23 +52,6 @@ Expr.Ident("x").label := 1
 
 #---
 
-#! runtime error: member 'label' on type Expr.Ident is read-only
-
-# A parent method name is refused as a write target even when the variant has a
-# real field of that name — the same rule a single type already applies.
-type Expr
-	case Ident(label)
-	end
-
-	def label()
-		"e"
-	end
-end
-
-Expr.Ident("x").label := 1
-
-#---
-
 #! runtime error: type Num cannot be matched against
 
 n := 5

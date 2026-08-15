@@ -92,3 +92,21 @@ g := Tree.Group([Tree.Leaf(1), Tree.Leaf(2)])
 $print(g.count)
 $print(g.size())
 $print(Tree.Group.empty().size())
+
+#---
+
+#> x
+#> y
+
+type Expr
+	case Ident(label) end
+
+	def label
+		"z"
+	end
+end
+
+expr := Expr.Ident("x")
+$print(expr.label)
+expr.label := "y"
+$print(expr.label)
