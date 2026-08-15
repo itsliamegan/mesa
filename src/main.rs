@@ -48,8 +48,10 @@ fn main() {
 							process::exit(1);
 						}
 					},
-					Err(err) => {
-						eprintln!("{}", err);
+					Err(errs) => {
+						for err in errs {
+							eprintln!("{}", err);
+						}
 						process::exit(1);
 					}
 				}

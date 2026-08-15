@@ -107,12 +107,15 @@ impl Display for Error {
 	}
 }
 
-pub fn check(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<(), Error> {
+pub fn check(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<(), Vec<Error>> {
 	let chunk = pkg.get_chunk(chunk_id);
+	let mut errs = Vec::new();
+
 	let mut prelude = HashSet::new();
 	for name in CORE_TYPE_NAMES {
 		prelude.insert(syms.intern(name));
 	}
+
 	// Iterate all declarations first so that they can be checked
 	// order-independently. A protocol is kept with the chunk it was declared
 	// in, since its member ids only index that chunk's arena.
@@ -130,19 +133,28 @@ pub fn check(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<()
 		};
 		if prelude.contains(&name) {
 			let loc = span.loc(pkg);
-			return Err(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
+			errs.push(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
 		}
 	}
+
+	if !errs.is_empty() {
+		return Err(errs);
+	}
+
 	for item_id in &chunk.top {
 		let span = chunk.get_module_item_span(*item_id);
-		match chunk.get_module_item(*item_id) {
-			ModuleItem::Type(type_) => check_type(syms, chunk, pkg, span, type_, None, &protos)?,
-			ModuleItem::Proto(proto) => check_proto(syms, chunk, pkg, span, proto)?,
-			ModuleItem::Def(def) => check_def(syms, chunk, pkg, span, def)?,
-			ModuleItem::Expr(expr_id) => check_expr(chunk, pkg, *expr_id, 0)?,
+		let result = match chunk.get_module_item(*item_id) {
+			ModuleItem::Type(type_) => check_type(syms, chunk, pkg, span, type_, None, &protos),
+			ModuleItem::Proto(proto) => check_proto(syms, chunk, pkg, span, proto),
+			ModuleItem::Def(def) => check_def(syms, chunk, pkg, span, def),
+			ModuleItem::Expr(expr_id) => check_expr(chunk, pkg, *expr_id, 0),
+		};
+		if let Err(err) = result {
+			errs.push(err);
 		}
 	}
-	Ok(())
+
+	if !errs.is_empty() { Err(errs) } else { Ok(()) }
 }
 
 fn check_type(

@@ -59,6 +59,7 @@ test_files! {
 	test_reports_case_parent_shape => "sem_error_case.ms",
 	test_protos => "protos.ms",
 	test_reports_proto_errors => "sem_error_proto.ms",
+	test_reports_multiple_sem_errors => "sem_error_multi.ms",
 }
 
 fn assert_eval(file: &str, input: &str) {
@@ -100,12 +101,14 @@ fn assert_case(dir: &Path, file: &str, lines: &[&str], start: usize, end: usize)
 
 	let (stdout, stderr) = eval(dir, file, &src);
 	assert_eq!(out, stdout, "stdout of {} case at line {}", file, start + 1);
-	assert!(
-		stderr.contains(&err),
-		"stderr of {} case at line {}",
-		file,
-		start + 1
-	);
+	for line in err.lines() {
+		assert!(
+			stderr.contains(line),
+			"stderr of {} case at line {}",
+			file,
+			start + 1
+		);
+	}
 }
 
 fn eval(dir: &Path, file: &str, src: &str) -> (String, String) {
