@@ -64,3 +64,32 @@ $print(result)
 
 x
 := 5
+
+#---
+
+#> 9
+
+def compute
+	(1 + 2) * 3
+end
+$print(compute)
+
+#---
+
+#> 7
+
+def add(a, b)
+	a + b
+end
+$print(add(3, 4))
+
+#---
+
+#> 9
+
+type Box
+	def compute
+		(1 + 2) * 3
+	end
+end
+$print(Box().compute)

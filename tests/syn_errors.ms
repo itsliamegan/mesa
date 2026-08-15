@@ -49,3 +49,11 @@ type Expr
 		end
 	end
 end
+
+#---
+
+#! syntax error: unexpected token LPAREN
+
+type Point
+	(1)
+end

@@ -1602,7 +1602,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_params(&mut self) -> Result<Vec<Param>, Error> {
 		let mut params = Vec::new();
-		if self.tag() != TokenTag::LParen {
+		if self.tag() != TokenTag::LParen || self.toks.nl_before(self.cur) {
 			return Ok(params);
 		}
 		self.take(TokenTag::LParen)?;
