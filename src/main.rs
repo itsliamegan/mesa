@@ -1,68 +1,60 @@
 #![allow(unused)]
 
-use std::env;
-use std::fs;
 use std::process;
 
 use mesa::intern::Interner;
 use mesa::rt::Interpreter;
-use mesa::sem;
-use mesa::syn::{Lexer, Package, Parser};
+use mesa::sem::{self, load};
 
 fn main() {
-	let args = env::args().collect::<Vec<_>>();
-	if args.len() != 2 {
-		eprintln!("usage: mesa <file>");
-		process::exit(1);
-	}
-	let file = args[1].clone();
-	let Ok(text) = fs::read_to_string(&file) else {
-		eprintln!("error: cannot read file '{}'", file);
-		process::exit(1);
+	let root_dir = match load::find() {
+		Ok(root_dir) => root_dir,
+		Err(err) => {
+			eprintln!("{}", err);
+			process::exit(1);
+		}
+	};
+
+	let files = match load::collect(&root_dir) {
+		Ok(files) => files,
+		Err(err) => {
+			eprintln!("{}", err);
+			process::exit(1);
+		}
 	};
 
 	let mut syms = Interner::new();
-	let mut pkg = Package::new();
-	let src_id = pkg.add_src(file, text);
-	let src = pkg.get_src(src_id);
-
-	match Lexer::new(&mut syms, src).lex() {
-		Ok(toks) => match Parser::new(src, toks).parse() {
-			Ok(chunk) => {
-				let chunk_id = pkg.add_chunk(chunk);
-				match sem::check(&mut syms, &pkg, chunk_id) {
-					Ok(()) => match Interpreter::new(&mut syms, &pkg).eval(chunk_id) {
-						Ok(()) => {}
-						Err((err, mut trace)) => {
-							{
-								let mut frame = trace.first_mut().unwrap();
-								eprintln!("{}: runtime error: {}", frame.1, err);
-							}
-							{
-								let mut frame = trace.last_mut().unwrap();
-								frame.0.push_str("<main>");
-							}
-							for (proc_name, loc) in trace {
-								eprintln!("\tat {} ({})", proc_name, loc);
-							}
-							process::exit(1);
-						}
-					},
-					Err(errs) => {
-						for err in errs {
-							eprintln!("{}", err);
-						}
-						process::exit(1);
-					}
-				}
-			}
-			Err(err) => {
+	let (pkg, root_chunk_id) = match load::parse(&mut syms, files) {
+		Ok(parsed) => parsed,
+		Err(errs) => {
+			for err in errs {
 				eprintln!("{}", err);
-				process::exit(1);
 			}
-		},
-		Err(err) => {
+			process::exit(1);
+		}
+	};
+
+	if let Err(errs) = sem::check(&mut syms, &pkg) {
+		for err in errs {
 			eprintln!("{}", err);
+		}
+		process::exit(1);
+	}
+
+	match Interpreter::new(&mut syms, &pkg).eval(root_chunk_id) {
+		Ok(()) => {}
+		Err((err, mut trace)) => {
+			{
+				let mut frame = trace.first_mut().unwrap();
+				eprintln!("{}: runtime error: {}", frame.1, err);
+			}
+			{
+				let mut frame = trace.last_mut().unwrap();
+				frame.0.push_str("<main>");
+			}
+			for (proc_name, loc) in trace {
+				eprintln!("\tat {} ({})", proc_name, loc);
+			}
 			process::exit(1);
 		}
 	}

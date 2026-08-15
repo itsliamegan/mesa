@@ -1,6 +1,6 @@
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rand;
@@ -62,10 +62,32 @@ test_files! {
 	test_reports_multiple_sem_errors => "sem_error_multi.ms",
 }
 
+#[test]
+fn test_reports_errors_across_files() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n$print(\n"),
+			("codec.ms", "module Test.Codec\ndef f(\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert_eq!(
+		vec![
+			"src/codec.ms:3,1: syntax error: unexpected token EOF",
+			"src/package.ms:3,1: syntax error: unexpected token EOF",
+		],
+		stderr.lines().collect::<Vec<_>>()
+	);
+}
+
 fn assert_eval(file: &str, input: &str) {
-	let temp_dir = env::temp_dir();
-	let test_dir = temp_dir.join(format!("mesa-test-{:x}", rand::random::<u32>()));
-	fs::create_dir(&test_dir).unwrap();
+	let test_dir = make_test_dir();
 
 	let lines = input.lines().collect::<Vec<_>>();
 	let mut start = 0;
@@ -99,7 +121,7 @@ fn assert_case(dir: &Path, file: &str, lines: &[&str], start: usize, end: usize)
 		src.push('\n');
 	}
 
-	let (stdout, stderr) = eval(dir, file, &src);
+	let (stdout, stderr) = eval(dir, &src);
 	assert_eq!(out, stdout, "stdout of {} case at line {}", file, start + 1);
 	for line in err.lines() {
 		assert!(
@@ -111,16 +133,31 @@ fn assert_case(dir: &Path, file: &str, lines: &[&str], start: usize, end: usize)
 	}
 }
 
-fn eval(dir: &Path, file: &str, src: &str) -> (String, String) {
-	fs::write(dir.join(file), src).unwrap();
+fn eval(dir: &Path, src: &str) -> (String, String) {
+	let src = format!("module Test\n{}", src);
+	write_package(dir, &[("package.ms", &src)]);
+	run(dir)
+}
 
+fn make_test_dir() -> PathBuf {
+	let temp_dir = env::temp_dir();
+	let test_dir = temp_dir.join(format!("mesa-test-{:x}", rand::random::<u32>()));
+	fs::create_dir(&test_dir).unwrap();
+	test_dir
+}
+
+fn write_package(dir: &Path, files: &[(&str, &str)]) {
+	let src_dir = dir.join("src");
+	fs::create_dir_all(&src_dir).unwrap();
+	fs::write(dir.join("package.toml"), "").unwrap();
+	for (file, src) in files {
+		fs::write(src_dir.join(file), src).unwrap();
+	}
+}
+
+fn run(dir: &Path) -> (String, String) {
 	let bin = env!("CARGO_BIN_EXE_mesa");
-	let output = Command::new(bin)
-		.arg(file)
-		.current_dir(dir)
-		.output()
-		.unwrap();
-
+	let output = Command::new(bin).current_dir(dir).output().unwrap();
 	(
 		String::from_utf8(output.stdout).unwrap(),
 		String::from_utf8(output.stderr).unwrap(),

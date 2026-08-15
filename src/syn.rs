@@ -77,6 +77,10 @@ impl Package {
 		&self.chunks[id.0 as usize]
 	}
 
+	pub fn chunk_ids(&self) -> impl Iterator<Item = ChunkId> {
+		(0..self.chunks.len() as u32).map(ChunkId)
+	}
+
 	pub fn add_chunk(&mut self, chunk: Chunk) -> ChunkId {
 		let id = ChunkId(self.chunks.len() as u32);
 		self.chunks.push(chunk);
@@ -1434,7 +1438,7 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_module_decl(&mut self) -> Result<ModuleItemId, Error> {
-		let tok = self.take(TokenTag::Import)?;
+		let tok = self.take(TokenTag::Module)?;
 		let path = self.parse_dotted_path()?;
 		let item = ModuleItem::Module(Module { path });
 		let item_id = self.chunk.add_module_item(tok.into(), item);
@@ -1464,10 +1468,10 @@ impl<'src> Parser<'src> {
 
 	fn parse_dotted_path(&mut self) -> Result<Vec<Sym>, Error> {
 		let mut path = Vec::new();
-		path.push(self.take(TokenTag::Ident)?.sym.unwrap());
+		path.push(self.take_type_name()?);
 		while self.tag() == TokenTag::Dot {
 			self.cur = self.cur.next();
-			path.push(self.take(TokenTag::Ident)?.sym.unwrap());
+			path.push(self.take_type_name()?);
 		}
 		Ok(path)
 	}

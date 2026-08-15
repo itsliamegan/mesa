@@ -1,3 +1,5 @@
+pub mod load;
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
@@ -107,7 +109,18 @@ impl Display for Error {
 	}
 }
 
-pub fn check(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<(), Vec<Error>> {
+pub fn check(syms: &mut Interner, pkg: &Package) -> Result<(), Vec<Error>> {
+	let mut errs = Vec::new();
+	for chunk_id in pkg.chunk_ids() {
+		if let Err(mut chunk_errs) = check_chunk(syms, pkg, chunk_id) {
+			errs.append(&mut chunk_errs);
+		}
+	}
+
+	if !errs.is_empty() { Err(errs) } else { Ok(()) }
+}
+
+fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<(), Vec<Error>> {
 	let chunk = pkg.get_chunk(chunk_id);
 	let mut errs = Vec::new();
 
