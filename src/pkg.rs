@@ -33,6 +33,10 @@ impl Package {
 		&self.chunks[id.index()]
 	}
 
+	pub fn file(&self, id: ChunkId) -> &str {
+		self.get_src(self.get_chunk(id).src).file()
+	}
+
 	pub fn chunk_ids(&self) -> impl Iterator<Item = ChunkId> {
 		(0..self.chunks.len() as u32).map(ChunkId::new)
 	}

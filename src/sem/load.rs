@@ -1,19 +1,26 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use toml::{Table, Value};
+
 use crate::intern::Interner;
 use crate::pkg::Package;
 use crate::syn::{self, ChunkId, Lexer, Parser};
+
+pub const ROOT_FILE: &str = "src/package.ms";
+pub const RESERVED_DIR: &str = "src/package";
+pub const MANIFEST_FILE: &str = "package.toml";
 
 #[derive(Debug)]
 pub enum Error {
 	NoManifest,
 	NoSrcDir,
 	NoRootModule,
+	BadManifest(String),
 	Unreadable(PathBuf),
 }
 
@@ -21,41 +28,84 @@ impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		write!(f, "error: ")?;
 		match self {
-			Self::NoManifest => write!(f, "missing package.toml manifest file"),
+			Self::NoManifest => write!(f, "missing package.toml manifest"),
 			Self::NoSrcDir => write!(f, "missing src/ directory"),
 			Self::NoRootModule => write!(f, "missing src/package.ms root module"),
+			Self::BadManifest(why) => write!(f, "malformed package.toml manifest: {}", why),
 			Self::Unreadable(path) => write!(f, "cannot read file '{}'", path.to_string_lossy()),
 		}
 	}
 }
 
-pub fn find() -> Result<PathBuf, Error> {
+#[derive(Debug)]
+pub struct Manifest {
+	pub name: Option<String>,
+	pub version: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct Tree {
+	pub dirs: Vec<String>,
+	pub files: Vec<(String, String)>,
+}
+
+pub fn find() -> Result<(PathBuf, Manifest), Error> {
 	let root_dir = env::current_dir().unwrap();
 
-	let manifest_file = root_dir.join("package.toml");
+	let manifest_file = root_dir.join(MANIFEST_FILE);
 	if !manifest_file.exists() {
 		return Err(Error::NoManifest);
 	}
+	let text = fs::read_to_string(&manifest_file)
+		.map_err(|_| Error::Unreadable(PathBuf::from(MANIFEST_FILE)))?;
+	let manifest = read_manifest(&text)?;
 
 	let src_dir = root_dir.join("src");
 	if !src_dir.exists() {
 		return Err(Error::NoSrcDir);
 	}
-	if !src_dir.join("package.ms").exists() {
+	if !root_dir.join(ROOT_FILE).exists() {
 		return Err(Error::NoRootModule);
 	}
 
-	Ok(root_dir)
+	Ok((root_dir, manifest))
 }
 
-pub fn collect(root_dir: &Path) -> Result<Vec<(String, String)>, Error> {
-	let contents = collect_all_in_dir(root_dir, Path::new("src"))?;
-	let files = contents.into_iter().collect();
-	Ok(files)
+fn read_manifest(text: &str) -> Result<Manifest, Error> {
+	let table = text
+		.parse::<Table>()
+		.map_err(|err| Error::BadManifest(err.message().to_string()))?;
+
+	Ok(Manifest {
+		name: read_toml_str(&table, "name")?,
+		version: read_toml_str(&table, "version")?,
+	})
 }
 
-fn collect_all_in_dir(root_dir: &Path, dir: &Path) -> Result<BTreeMap<String, String>, Error> {
-	let mut contents = BTreeMap::new();
+fn read_toml_str(table: &Table, key: &str) -> Result<Option<String>, Error> {
+	match table.get(key) {
+		Some(Value::String(text)) => Ok(Some(text.clone())),
+		Some(_) => Err(Error::BadManifest(format!("'{}' is not a string", key))),
+		None => Ok(None),
+	}
+}
+
+pub fn collect(root_dir: &Path) -> Result<Tree, Error> {
+	let mut dirs = BTreeSet::new();
+	let mut files = BTreeMap::new();
+	collect_all_in_dir(root_dir, Path::new("src"), &mut dirs, &mut files)?;
+	Ok(Tree {
+		dirs: dirs.into_iter().collect(),
+		files: files.into_iter().collect(),
+	})
+}
+
+fn collect_all_in_dir(
+	root_dir: &Path,
+	dir: &Path,
+	dirs: &mut BTreeSet<String>,
+	files: &mut BTreeMap<String, String>,
+) -> Result<(), Error> {
 	let entries =
 		fs::read_dir(root_dir.join(dir)).map_err(|_| Error::Unreadable(dir.to_path_buf()))?;
 
@@ -72,19 +122,19 @@ fn collect_all_in_dir(root_dir: &Path, dir: &Path) -> Result<BTreeMap<String, St
 			.map_err(|_| Error::Unreadable(path.clone()))?;
 
 		if file_type.is_dir() {
-			let mut subdir_contents = collect_all_in_dir(root_dir, &path)?;
-			contents.append(&mut subdir_contents);
+			dirs.insert(path.to_string_lossy().to_string());
+			collect_all_in_dir(root_dir, &path, dirs, files)?;
 		} else {
 			if path.extension() != Some(OsStr::new("ms")) {
 				continue;
 			}
 			let text = fs::read_to_string(root_dir.join(&path))
 				.map_err(|_| Error::Unreadable(path.clone()))?;
-			contents.insert(path.to_string_lossy().to_string(), text);
+			files.insert(path.to_string_lossy().to_string(), text);
 		}
 	}
 
-	Ok(contents)
+	Ok(())
 }
 
 pub fn parse(

@@ -60,6 +60,7 @@ test_files! {
 	test_protos => "protos.ms",
 	test_reports_proto_errors => "sem_error_proto.ms",
 	test_reports_multiple_sem_errors => "sem_error_multi.ms",
+	test_reports_duplicate_members => "sem_error_member.ms",
 }
 
 #[test]
@@ -82,6 +83,104 @@ fn test_reports_errors_across_files() {
 			"src/codec.ms:3,1: syntax error: unexpected token EOF",
 			"src/package.ms:3,1: syntax error: unexpected token EOF",
 		],
+		stderr.lines().collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn test_reports_layout_defects() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n"),
+			("codec.ms", "module Test.Codec\n"),
+		],
+	);
+	fs::create_dir_all(test_dir.join("src/codec/json")).unwrap();
+	fs::create_dir(test_dir.join("src/package")).unwrap();
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert_eq!(
+		vec![
+			"src/codec/json: semantic error: directory has no sibling module file",
+			"src/package: semantic error: 'src/package/' is reserved; the root module's children live in src/",
+		],
+		stderr.lines().collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn test_reports_module_header_defects() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n"),
+			("bare.ms", "def f()\nend\n"),
+			("late.ms", "def f()\nend\nmodule Test.Late\n"),
+			("twice.ms", "module Test.Twice\nmodule Test.Again\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert_eq!(
+		vec![
+			"src/bare.ms: semantic error: file declares no module",
+			"src/late.ms:3,1: semantic error: 'module' must be the first item in a file",
+			"src/twice.ms:2,1: semantic error: file declares more than one module",
+		],
+		stderr.lines().collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn test_reports_misfiled_module() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n"),
+			("codec.ms", "module Test.Codec\n"),
+			("codec/json.ms", "module Test.Json\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert_eq!(
+		vec![
+			"src/codec/json.ms:1,1: semantic error: module 'Test.Json' must be declared under 'Test.Codec'",
+		],
+		stderr.lines().collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn test_reports_declaration_shadowing_child_module() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\ntype Codec\nend\n"),
+			("codec.ms", "module Test.Codec\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert_eq!(
+		vec!["src/codec.ms:1,1: semantic error: duplicate member 'Codec'"],
 		stderr.lines().collect::<Vec<_>>()
 	);
 }
@@ -151,7 +250,9 @@ fn write_package(dir: &Path, files: &[(&str, &str)]) {
 	fs::create_dir_all(&src_dir).unwrap();
 	fs::write(dir.join("package.toml"), "").unwrap();
 	for (file, src) in files {
-		fs::write(src_dir.join(file), src).unwrap();
+		let path = src_dir.join(file);
+		fs::create_dir_all(path.parent().unwrap()).unwrap();
+		fs::write(path, src).unwrap();
 	}
 }
 

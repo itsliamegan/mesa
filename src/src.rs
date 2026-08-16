@@ -30,6 +30,10 @@ impl Source {
 		self.id
 	}
 
+	pub fn file(&self) -> &str {
+		&self.file
+	}
+
 	pub fn len(&self) -> usize {
 		self.text.len()
 	}
@@ -77,7 +81,7 @@ pub struct Location {
 }
 
 impl Location {
-	fn file(file: String) -> Self {
+	pub fn file(file: String) -> Self {
 		Self { file, pos: None }
 	}
 }

@@ -7,16 +7,16 @@ use mesa::rt::Interpreter;
 use mesa::sem::{self, load};
 
 fn main() {
-	let root_dir = match load::find() {
-		Ok(root_dir) => root_dir,
+	let (root_dir, _manifest) = match load::find() {
+		Ok(found) => found,
 		Err(err) => {
 			eprintln!("{}", err);
 			process::exit(1);
 		}
 	};
 
-	let files = match load::collect(&root_dir) {
-		Ok(files) => files,
+	let tree = match load::collect(&root_dir) {
+		Ok(tree) => tree,
 		Err(err) => {
 			eprintln!("{}", err);
 			process::exit(1);
@@ -24,7 +24,7 @@ fn main() {
 	};
 
 	let mut syms = Interner::new();
-	let (pkg, root_chunk_id) = match load::parse(&mut syms, files) {
+	let (pkg, root_chunk_id) = match load::parse(&mut syms, tree.files) {
 		Ok(parsed) => parsed,
 		Err(errs) => {
 			for err in errs {
@@ -34,12 +34,15 @@ fn main() {
 		}
 	};
 
-	if let Err(errs) = sem::check(&mut syms, &pkg) {
-		for err in errs {
-			eprintln!("{}", err);
+	let _modules = match sem::check(&mut syms, &pkg, &tree.dirs) {
+		Ok(modules) => modules,
+		Err(errs) => {
+			for err in errs {
+				eprintln!("{}", err);
+			}
+			process::exit(1);
 		}
-		process::exit(1);
-	}
+	};
 
 	match Interpreter::new(&mut syms, &pkg).eval(root_chunk_id) {
 		Ok(()) => {}

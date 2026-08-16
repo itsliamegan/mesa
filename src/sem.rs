@@ -1,10 +1,12 @@
 pub mod load;
+pub mod modules;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
 use crate::pkg::Package;
+use crate::sem::modules::Modules;
 use crate::src::{Location, Span};
 use crate::syn::{
 	BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param,
@@ -25,6 +27,13 @@ pub enum Error {
 	ProtocolConflict(Location, String, String, String),
 	MemberCollision(Location, String, String, String),
 	ProtocolReach(Location, String, String),
+	MissingModuleHeader(Location),
+	DuplicateModuleHeader(Location),
+	MisplacedModuleHeader(Location),
+	UnpairedDirectory(Location),
+	ReservedDirectory(Location),
+	PrefixMismatch(Location, String, String),
+	DuplicateMember(Location, String),
 }
 
 impl Error {
@@ -42,6 +51,13 @@ impl Error {
 			Self::ProtocolConflict(loc, ..) => loc,
 			Self::MemberCollision(loc, ..) => loc,
 			Self::ProtocolReach(loc, ..) => loc,
+			Self::MissingModuleHeader(loc) => loc,
+			Self::DuplicateModuleHeader(loc) => loc,
+			Self::MisplacedModuleHeader(loc) => loc,
+			Self::UnpairedDirectory(loc) => loc,
+			Self::ReservedDirectory(loc) => loc,
+			Self::PrefixMismatch(loc, ..) => loc,
+			Self::DuplicateMember(loc, _) => loc,
 		}
 	}
 }
@@ -106,11 +122,35 @@ impl Display for Error {
 					member, proto
 				)
 			}
+			Self::MissingModuleHeader(_) => write!(f, "file declares no module"),
+			Self::DuplicateModuleHeader(_) => write!(f, "file declares more than one module"),
+			Self::MisplacedModuleHeader(_) => {
+				write!(f, "'module' must be the first item in a file")
+			}
+			Self::UnpairedDirectory(_) => {
+				write!(f, "directory has no sibling module file")
+			}
+			Self::ReservedDirectory(_) => {
+				write!(
+					f,
+					"'src/package/' is reserved; the root module's children live in src/"
+				)
+			}
+			Self::PrefixMismatch(_, declared, prefix) => {
+				write!(
+					f,
+					"module '{}' must be declared under '{}'",
+					declared, prefix
+				)
+			}
+			Self::DuplicateMember(_, name) => write!(f, "duplicate member '{}'", name),
 		}
 	}
 }
 
-pub fn check(syms: &mut Interner, pkg: &Package) -> Result<(), Vec<Error>> {
+pub fn check(syms: &mut Interner, pkg: &Package, dirs: &[String]) -> Result<Modules, Vec<Error>> {
+	let mods = modules::check(syms, pkg, dirs)?;
+
 	let mut errs = Vec::new();
 	for chunk_id in pkg.chunk_ids() {
 		if let Err(mut chunk_errs) = check_chunk(syms, pkg, chunk_id) {
@@ -118,7 +158,11 @@ pub fn check(syms: &mut Interner, pkg: &Package) -> Result<(), Vec<Error>> {
 		}
 	}
 
-	if !errs.is_empty() { Err(errs) } else { Ok(()) }
+	if !errs.is_empty() {
+		Err(errs)
+	} else {
+		Ok(mods)
+	}
 }
 
 fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<(), Vec<Error>> {
