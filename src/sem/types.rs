@@ -15,7 +15,7 @@ use crate::syn::{
 pub struct TypeId(u32);
 
 impl TypeId {
-	fn index(self) -> usize {
+	pub fn index(self) -> usize {
 		self.0 as usize
 	}
 }
@@ -24,7 +24,7 @@ impl TypeId {
 pub struct ProtoId(u32);
 
 impl ProtoId {
-	fn index(self) -> usize {
+	pub fn index(self) -> usize {
 		self.0 as usize
 	}
 }
@@ -34,6 +34,10 @@ impl ProtoId {
 pub struct Types {
 	types: Vec<Type>,
 	protos: Vec<Proto>,
+	// Where a type's declaration lives, so the walk that binds its name arrives
+	// at the description built for it. Only top-level types are keyed here; a
+	// nested one is reached as a static of the type enclosing it.
+	type_by_item: HashMap<(ChunkId, ModuleItemId), TypeId>,
 	// Where a protocol's declaration lives, so an 'impl' name resolved through
 	// the module map arrives at the description built for it.
 	proto_by_item: HashMap<(ChunkId, ModuleItemId), ProtoId>,
@@ -90,12 +94,28 @@ struct Inherited {
 }
 
 impl Types {
+	// Every type the package declares, nested ones included, in the order they
+	// were described.
+	pub fn ids(&self) -> impl ExactSizeIterator<Item = TypeId> {
+		(0..self.types.len() as u32).map(TypeId)
+	}
+
 	pub fn get_type(&self, id: TypeId) -> &Type {
 		&self.types[id.index()]
 	}
 
+	// The type a top-level declaration describes.
+	pub fn get_type_by_item(&self, chunk: ChunkId, item_id: ModuleItemId) -> TypeId {
+		self.type_by_item[&(chunk, item_id)]
+	}
+
 	pub fn get_proto(&self, id: ProtoId) -> &Proto {
 		&self.protos[id.index()]
+	}
+
+	// The protocol a declaration describes.
+	pub fn get_proto_by_item(&self, chunk: ChunkId, item_id: ModuleItemId) -> ProtoId {
+		self.proto_by_item[&(chunk, item_id)]
 	}
 
 	fn add_proto(&mut self, chunk: ChunkId, item_id: ModuleItemId, proto: Proto) -> ProtoId {
@@ -113,6 +133,7 @@ pub fn describe(pkg: &Package, mods: &Modules) -> Types {
 	let mut types = Types {
 		types: Vec::new(),
 		protos: Vec::new(),
+		type_by_item: HashMap::new(),
 		proto_by_item: HashMap::new(),
 	};
 
@@ -134,9 +155,10 @@ pub fn describe(pkg: &Package, mods: &Modules) -> Types {
 		let chunk = pkg.get_chunk(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Type(type_) = chunk.get_module_item(*item_id) {
-				describe_type(
+				let id = describe_type(
 					&mut types, pkg, mods, module, chunk_id, type_, None, None, false,
 				);
+				types.type_by_item.insert((chunk_id, *item_id), id);
 			}
 		}
 	}

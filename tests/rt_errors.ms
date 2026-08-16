@@ -217,21 +217,3 @@ $print("str" + 5.1)
 #! runtime error: type Char cannot be constructed
 
 Char()
-
-#---
-
-#! runtime error: type Num is not a protocol
-
-proto Order
-	def compare(other) end
-end
-
-Order := 5
-
-type Task(priority)
-	impl Order
-
-	def compare(other)
-		return 0
-	end
-end

@@ -10,10 +10,11 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
 use crate::pkg::Package;
+use crate::sem::types::{self, MemberSite};
 use crate::src::{Location, Span};
 use crate::syn::{
 	self, BinaryOp, BlockId, Builtin, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId,
-	Param, Place, TypeItem, UnaryOp,
+	Param, TypeItem, TypeItemId, UnaryOp,
 };
 
 #[derive(Debug)]
@@ -51,7 +52,6 @@ pub enum TypeError {
 	NotCallable(String),
 	NotConstructible(String),
 	NotInvokable(String),
-	NotProtocol(String),
 	CaseNonType(String),
 }
 
@@ -126,7 +126,6 @@ impl Display for TypeError {
 				write!(f, "type {} cannot be constructed", type_name)
 			}
 			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
-			Self::NotProtocol(type_name) => write!(f, "type {} is not a protocol", type_name),
 			Self::CaseNonType(type_name) => {
 				write!(f, "type {} cannot be matched against", type_name)
 			}
@@ -259,56 +258,6 @@ impl Val {
 			_ => true,
 		}
 	}
-
-	fn member(&self, name: Sym, types: &TypeRegistry) -> Option<Member> {
-		let type_id = self.type_id();
-		let namespace_type_id = self.namespace_type_id();
-		if type_id != namespace_type_id {
-			// type_id and namespace_type_id only ever differ when the Val is
-			// itself a Type.
-			let Val::Obj(rf) = self else {
-				panic!();
-			};
-			let has_static = match namespace_type_id {
-				TypeId::User(id) => types.get_user_type(id).get_static(name).is_some(),
-				TypeId::Native(id) => types.get_native_type(id).get_static(name).is_some(),
-			};
-			if has_static {
-				Some(Member::Static(rf.clone(), name))
-			} else {
-				let TypeId::Native(id) = type_id else {
-					panic!();
-				};
-				if types.get_native_type(id).has_member(name) {
-					Some(Member::Native(self.clone(), name))
-				} else {
-					None
-				}
-			}
-		} else {
-			match namespace_type_id {
-				TypeId::User(id) => {
-					let Val::Obj(rf) = self else {
-						panic!();
-					};
-					if types.get_user_type(id).has_field(name)
-						|| types.user_method(id, name).is_some()
-					{
-						Some(Member::User(rf.clone(), name))
-					} else {
-						None
-					}
-				}
-				TypeId::Native(id) => {
-					if types.get_native_type(id).has_member(name) {
-						Some(Member::Native(self.clone(), name))
-					} else {
-						None
-					}
-				}
-			}
-		}
-	}
 }
 
 impl PartialEq for Val {
@@ -346,7 +295,7 @@ enum Obj {
 	Dict(Dict),
 	Proc(Proc),
 	Type(TypeId),
-	Proto(ProtoId),
+	Proto(types::ProtoId),
 	Instance(Instance),
 	Method(Method),
 }
@@ -416,67 +365,26 @@ struct Proc {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeId {
-	User(UserTypeId),
+	User(types::TypeId),
 	Native(NativeTypeId),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct UserTypeId(u32);
-
+// Data the runtime attaches to the type descriptor, the latter having already
+// computed most of the important information.
 #[derive(Debug)]
 struct UserType {
-	name: Sym,
-	ctor_fields: Vec<Param>,
-	body_fields: OrderMap<Sym, ExprId, FxBuildHasher>,
-	chunk: ChunkId,
+	// The type's canonical value.
+	val: Rc<RefCell<Obj>>,
+	// Every member reachable on an instance, method precedence already
+	// accounted for by the descriptor's method table.
 	methods: FxHashMap<Sym, Rc<RefCell<Proc>>>,
-	// Provided members this type took from the protocols it implements, kept
-	// apart from the methods it declares itself.
-	acquired: FxHashMap<Sym, Rc<RefCell<Proc>>>,
 	statics: FxHashMap<Sym, Static>,
-	protos: Vec<ProtoId>,
-	// Scope this type was declared in.
-	scope: Rc<RefCell<Scope>>,
-	// Type this type was declared in; None if at the module level.
-	enclosing: Option<UserTypeId>,
-	// Variants of this type; None if this type is itself a variant.
-	variants: Option<Vec<UserTypeId>>,
-}
-
-impl UserType {
-	fn has_field(&self, name: Sym) -> bool {
-		self.ctor_fields.iter().any(|param| param.name == name)
-			|| self.body_fields.contains_key(&name)
-	}
-
-	fn get_static(&self, name: Sym) -> Option<Static> {
-		self.statics.get(&name).cloned()
-	}
-
-	fn is_variant(&self) -> bool {
-		self.variants.is_none()
-	}
-
-	fn variants(&self) -> &[UserTypeId] {
-		self.variants.as_deref().unwrap_or(&[])
-	}
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProtoId(u32);
-
-#[derive(Debug)]
-struct Proto {
-	name: Sym,
-	// None for a required member, Some for a provided one.
-	members: FxHashMap<Sym, Option<Rc<RefCell<Proc>>>>,
 }
 
 #[derive(Debug, Clone)]
 enum Static {
 	Proc(Rc<RefCell<Proc>>),
-	Type(Val),
-	NativeMember(NativeMember),
+	Type(types::TypeId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -508,16 +416,11 @@ struct NativeType {
 	name: Sym,
 	new: Option<fn() -> Val>,
 	members: FxHashMap<Sym, NativeMember>,
-	statics: FxHashMap<Sym, Static>,
 }
 
 impl NativeType {
 	fn has_member(&self, name: Sym) -> bool {
 		self.members.contains_key(&name)
-	}
-
-	fn get_static(&self, name: Sym) -> Option<Static> {
-		self.statics.get(&name).cloned()
 	}
 }
 
@@ -567,120 +470,227 @@ impl NativeTypeId {
 	const PROTO: NativeTypeId = NativeTypeId(9);
 }
 
-struct TypeRegistry {
-	user: Vec<UserType>,
-	native: Vec<NativeType>,
-	protos: Vec<Proto>,
+// The built-in types, interned once at startup. Natives have no declaration
+// and so no description; this table is all there is of them.
+fn native_types(syms: &mut Interner) -> Vec<NativeType> {
+	let mut native = Vec::with_capacity(CORE_TYPES.len());
+	for (id, new, member_pairs) in CORE_TYPES {
+		let mut members = HashMap::with_capacity_and_hasher(member_pairs.len(), FxBuildHasher);
+		for (name, params, call) in *member_pairs {
+			members.insert(
+				syms.intern(name),
+				NativeMember {
+					params,
+					call: *call,
+				},
+			);
+		}
+		native.push(NativeType {
+			name: syms.intern(CORE_TYPE_NAMES[id.0 as usize]),
+			new: *new,
+			members,
+		});
+	}
+	native
 }
 
-impl TypeRegistry {
-	fn new(syms: &mut Interner) -> Self {
-		let mut native = Vec::with_capacity(CORE_TYPES.len());
+// The runtime image of every type the program has: what the package described,
+// what running those descriptions takes, and the built-ins no description
+// covers.
+struct Types<'descs> {
+	descs: &'descs types::Types,
+	// Indexed in step with the description arena, so a type's index there is
+	// its index here.
+	user: Vec<UserType>,
+	native: Vec<NativeType>,
+}
 
-		for (id, new, member_pairs) in CORE_TYPES {
-			let mut members = HashMap::with_capacity_and_hasher(member_pairs.len(), FxBuildHasher);
-			for (name, params, call) in *member_pairs {
-				members.insert(
-					syms.intern(name),
-					NativeMember {
-						params,
-						call: *call,
-					},
-				);
+impl<'descs> Types<'descs> {
+	// Create a runtime representation of every type, storing a canonical Val
+	// for every type and creating an unbound proc for every method.
+	fn new(
+		native: Vec<NativeType>,
+		pkg: &Package,
+		descs: &'descs types::Types,
+		scopes: &Scopes,
+	) -> Self {
+		let mut user = Vec::with_capacity(descs.ids().len());
+		for id in descs.ids() {
+			let desc = descs.get_type(id);
+			let mut methods = FxHashMap::default();
+			for (name, site) in &desc.members {
+				methods.insert(*name, member_proc(pkg, scopes, *site));
 			}
-			native.push(NativeType {
-				name: syms.intern(CORE_TYPE_NAMES[id.0 as usize]),
-				new: *new,
-				members,
-				statics: FxHashMap::default(),
+			let mut statics = FxHashMap::default();
+			for (name, static_) in &desc.statics {
+				let static_ = match static_ {
+					types::Static::Type(id) => Static::Type(*id),
+					types::Static::Proc(chunk_id, item_id) => {
+						Static::Proc(static_proc(pkg, scopes, *chunk_id, *item_id))
+					}
+				};
+				statics.insert(*name, static_);
+			}
+			user.push(UserType {
+				val: Rc::new(RefCell::new(Obj::Type(TypeId::User(id)))),
+				methods,
+				statics,
 			});
 		}
 
 		Self {
-			user: Vec::new(),
+			descs,
+			user,
 			native,
-			protos: Vec::new(),
 		}
 	}
 
 	// Get a type's *qualified* name (including all lexical nesting).
-	fn type_name(&self, syms: &Interner, id: TypeId) -> String {
+	fn name(&self, syms: &Interner, id: TypeId) -> String {
 		match id {
 			TypeId::User(id) => {
-				let typ = self.get_user_type(id);
-				match typ.enclosing {
+				let desc = self.descs.get_type(id);
+				match desc.enclosing {
 					Some(outer) => {
-						let outer = self.type_name(syms, TypeId::User(outer));
-						format!("{}.{}", outer, syms.resolve(typ.name))
+						let outer = self.name(syms, TypeId::User(outer));
+						format!("{}.{}", outer, syms.resolve(desc.name))
 					}
-					None => syms.resolve(typ.name).to_string(),
+					None => syms.resolve(desc.name).to_string(),
 				}
 			}
-			TypeId::Native(id) => syms.resolve(self.get_native_type(id).name).to_string(),
+			TypeId::Native(id) => syms.resolve(self.native(id).name).to_string(),
 		}
 	}
 
-	fn get_user_type(&self, id: UserTypeId) -> &UserType {
-		&self.user[id.0 as usize]
+	fn user(&self, id: types::TypeId) -> &UserType {
+		&self.user[id.index()]
 	}
 
-	fn add_user_type(&mut self, typ: UserType) -> UserTypeId {
-		let id = UserTypeId(self.user.len() as u32);
-		self.user.push(typ);
-		id
+	fn method(&self, id: types::TypeId, name: Sym) -> Option<Rc<RefCell<Proc>>> {
+		self.user(id).methods.get(&name).cloned()
 	}
 
-	fn get_user_type_mut(&mut self, id: UserTypeId) -> &mut UserType {
-		&mut self.user[id.0 as usize]
+	fn static_(&self, id: types::TypeId, name: Sym) -> Option<Static> {
+		self.user(id).statics.get(&name).cloned()
 	}
 
-	// Get a method by name for a type, in four tiers: methods declared here,
-	// then a parent's if this is a variant, then members acquired from a
-	// protocol, then a parent's acquired. Declared always beats acquired, so a
-	// type supplying its own member overrides a provided one.
-	fn user_method(&self, id: UserTypeId, name: Sym) -> Option<Rc<RefCell<Proc>>> {
-		let typ = self.get_user_type(id);
-		let parent = match typ.is_variant() {
-			true => Some(self.get_user_type(typ.enclosing.unwrap())),
-			false => None,
-		};
-		if let Some(proc_rf) = typ.methods.get(&name) {
-			return Some(proc_rf.clone());
-		}
-		if let Some(parent) = parent
-			&& let Some(proc_rf) = parent.methods.get(&name)
-		{
-			return Some(proc_rf.clone());
-		}
-		if let Some(proc_rf) = typ.acquired.get(&name) {
-			return Some(proc_rf.clone());
-		}
-		if let Some(parent) = parent
-			&& let Some(proc_rf) = parent.acquired.get(&name)
-		{
-			return Some(proc_rf.clone());
-		}
-		None
+	fn field(&self, id: types::TypeId, name: Sym) -> bool {
+		let desc = self.descs.get_type(id);
+		desc.ctor_fields.iter().any(|param| param.name == name)
+			|| desc.body_fields.contains_key(&name)
 	}
 
-	fn get_proto(&self, id: ProtoId) -> &Proto {
-		&self.protos[id.0 as usize]
-	}
-
-	fn add_proto(&mut self, proto: Proto) -> ProtoId {
-		let id = ProtoId(self.protos.len() as u32);
-		self.protos.push(proto);
-		id
-	}
-
-	fn get_native_type(&self, id: NativeTypeId) -> &NativeType {
+	fn native(&self, id: NativeTypeId) -> &NativeType {
 		&self.native[id.0 as usize]
 	}
+
+	fn member(&self, val: &Val, name: Sym) -> Option<Member> {
+		let type_id = val.type_id();
+		let namespace_type_id = val.namespace_type_id();
+		if type_id != namespace_type_id {
+			// type_id and namespace_type_id only ever differ when the Val is
+			// itself a Type.
+			let Val::Obj(rf) = val else {
+				panic!();
+			};
+			// Only a user type has statics; a native one reaches its members
+			// through the seam instead.
+			let has_static = match namespace_type_id {
+				TypeId::User(id) => self.static_(id, name).is_some(),
+				TypeId::Native(_) => false,
+			};
+			if has_static {
+				Some(Member::Static(rf.clone(), name))
+			} else {
+				let TypeId::Native(id) = type_id else {
+					panic!();
+				};
+				if self.native(id).has_member(name) {
+					Some(Member::Native(val.clone(), name))
+				} else {
+					None
+				}
+			}
+		} else {
+			match namespace_type_id {
+				TypeId::User(id) => {
+					let Val::Obj(rf) = val else {
+						panic!();
+					};
+					if self.field(id, name) || self.method(id, name).is_some() {
+						Some(Member::User(rf.clone(), name))
+					} else {
+						None
+					}
+				}
+				TypeId::Native(id) => {
+					if self.native(id).has_member(name) {
+						Some(Member::Native(val.clone(), name))
+					} else {
+						None
+					}
+				}
+			}
+		}
+	}
+}
+
+// Build the proc a member resolves to. A member declared by the type reads
+// off its own item; one acquired from a protocol reads off the protocol's,
+// in whichever chunk that protocol was written.
+fn member_proc(pkg: &Package, scopes: &Scopes, site: MemberSite) -> Rc<RefCell<Proc>> {
+	match site {
+		MemberSite::Declared(chunk_id, item_id) => {
+			// Protocols don't involve static methods; assert that this is an
+			// instance method.
+			let TypeItem::Method(syn::Method::Instance(def)) =
+				pkg.get_chunk(chunk_id).get_type_item(item_id)
+			else {
+				panic!()
+			};
+			Rc::new(RefCell::new(Proc {
+				name: def.name,
+				params: def.params.to_vec(),
+				body: def.body,
+				chunk: chunk_id,
+				scope: scopes.module(chunk_id),
+			}))
+		}
+		MemberSite::Provided(chunk_id, item_id) => {
+			let item = pkg.get_chunk(chunk_id).get_proto_item(item_id);
+			Rc::new(RefCell::new(Proc {
+				name: item.def.name,
+				params: item.def.params.to_vec(),
+				body: item.def.body,
+				chunk: chunk_id,
+				scope: scopes.module(chunk_id),
+			}))
+		}
+	}
+}
+
+fn static_proc(
+	pkg: &Package,
+	scopes: &Scopes,
+	chunk_id: ChunkId,
+	item_id: TypeItemId,
+) -> Rc<RefCell<Proc>> {
+	let TypeItem::Method(syn::Method::Static(def)) = pkg.get_chunk(chunk_id).get_type_item(item_id)
+	else {
+		panic!()
+	};
+	Rc::new(RefCell::new(Proc {
+		name: def.name,
+		params: def.params.to_vec(),
+		body: def.body,
+		chunk: chunk_id,
+		scope: scopes.module(chunk_id),
+	}))
 }
 
 #[derive(Debug)]
 struct Instance {
-	typ: UserTypeId,
+	typ: types::TypeId,
 	fields: FxHashMap<Sym, Val>,
 }
 
@@ -695,84 +705,6 @@ enum Member {
 enum Method {
 	User(Rc<RefCell<Obj>>, Rc<RefCell<Proc>>),
 	Native(Val, Sym, NativeMember),
-}
-
-impl Member {
-	fn get(&self, types: &TypeRegistry) -> Result<Val, Error> {
-		match self {
-			Member::Static(type_rf, name) => {
-				let Obj::Type(type_id) = *type_rf.borrow() else {
-					panic!();
-				};
-				match type_id {
-					TypeId::User(type_id) => {
-						match types.get_user_type(type_id).get_static(*name).unwrap() {
-							Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(
-								Obj::Method(Method::User(type_rf.clone(), proc_rf)),
-							)))),
-							Static::Type(val) => Ok(val),
-							Static::NativeMember(_) => panic!(),
-						}
-					}
-					TypeId::Native(type_id) => {
-						match types.get_native_type(type_id).get_static(*name).unwrap() {
-							Static::Proc(_) => panic!(),
-							Static::Type(_) => panic!(),
-							Static::NativeMember(member) => {
-								Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
-									Method::Native(Val::Obj(type_rf.clone()), *name, member),
-								)))))
-							}
-						}
-					}
-				}
-			}
-			Member::User(inst_rf, name) => {
-				let Obj::Instance(inst) = &*inst_rf.borrow() else {
-					panic!()
-				};
-				if let Some(val) = inst.fields.get(name) {
-					Ok(val.clone())
-				} else if let Some(proc_rf) = types.user_method(inst.typ, *name) {
-					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
-						inst_rf.clone(),
-						proc_rf,
-					))))))
-				} else {
-					panic!();
-				}
-			}
-			Member::Native(recv, name) => {
-				let TypeId::Native(type_id) = recv.type_id() else {
-					panic!();
-				};
-				let typ = types.get_native_type(type_id);
-				match typ.members.get(name) {
-					Some(member) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
-						Method::Native(recv.clone(), *name, member.clone()),
-					))))),
-					None => panic!(),
-				}
-			}
-		}
-	}
-
-	fn set(&self, val: Val, types: &TypeRegistry) -> Result<(), ()> {
-		match self {
-			Member::Static(_, _) => Err(()),
-			Member::User(inst, name) => {
-				let Obj::Instance(inst) = &mut *inst.borrow_mut() else {
-					panic!()
-				};
-				if !inst.fields.contains_key(name) && types.user_method(inst.typ, *name).is_some() {
-					return Err(());
-				}
-				inst.fields.insert(*name, val);
-				Ok(())
-			}
-			Member::Native(_, _) => Err(()),
-		}
-	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -809,6 +741,91 @@ impl Local {
 	}
 }
 
+// Somewhere a value can be read from and written to. Either a name in a scope
+// or a member of a receiver.
+enum Place {
+	Local(Local),
+	Member(Member),
+}
+
+impl Place {
+	// Whether this place holds a value yet. A member always does, because it
+	// would not have resolved otherwise, but a local may have not been written
+	// yet.
+	fn is_bound(&self) -> bool {
+		match self {
+			Place::Local(local) => local.is_bound(),
+			Place::Member(_) => true,
+		}
+	}
+
+	fn get(&self, types: &Types) -> Result<Val, Error> {
+		match self {
+			Place::Local(local) => Ok(local.get()),
+			Place::Member(Member::Static(type_rf, name)) => {
+				// A static is only ever found on a user type.
+				let Obj::Type(TypeId::User(type_id)) = *type_rf.borrow() else {
+					panic!();
+				};
+				match types.static_(type_id, *name).unwrap() {
+					Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
+						Method::User(type_rf.clone(), proc_rf),
+					))))),
+					Static::Type(id) => Ok(Val::Obj(types.user(id).val.clone())),
+				}
+			}
+			Place::Member(Member::User(inst_rf, name)) => {
+				let Obj::Instance(inst) = &*inst_rf.borrow() else {
+					panic!()
+				};
+				if let Some(val) = inst.fields.get(name) {
+					Ok(val.clone())
+				} else if let Some(proc_rf) = types.method(inst.typ, *name) {
+					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
+						inst_rf.clone(),
+						proc_rf,
+					))))))
+				} else {
+					panic!();
+				}
+			}
+			Place::Member(Member::Native(recv, name)) => {
+				let TypeId::Native(type_id) = recv.type_id() else {
+					panic!();
+				};
+				match types.native(type_id).members.get(name) {
+					Some(member) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
+						Method::Native(recv.clone(), *name, member.clone()),
+					))))),
+					None => panic!(),
+				}
+			}
+		}
+	}
+
+	fn set(&self, types: &Types, val: Val) -> Result<(), ()> {
+		match self {
+			Place::Local(local) => {
+				local.set(val);
+				Ok(())
+			}
+			Place::Member(Member::Static(_, _)) => Err(()),
+			Place::Member(Member::User(inst_rf, name)) => {
+				let Obj::Instance(inst) = &mut *inst_rf.borrow_mut() else {
+					panic!()
+				};
+				// A method cannot be replaced by a field of the same name.
+				if !inst.fields.contains_key(name) && types.method(inst.typ, *name).is_some() {
+					return Err(());
+				}
+				inst.fields.insert(*name, val);
+				Ok(())
+			}
+			Place::Member(Member::Native(_, _)) => Err(()),
+		}
+	}
+}
+
 impl Scope {
 	fn local(origin: &Rc<RefCell<Scope>>, name: Sym) -> Local {
 		let mut scope = origin.clone();
@@ -831,10 +848,38 @@ impl Scope {
 	}
 }
 
-pub struct Interpreter<'syms, 'pkg> {
+// The scope for every module, keyed by the module's ChunkId.
+struct Scopes {
+	modules: Vec<Rc<RefCell<Scope>>>,
+}
+
+impl Scopes {
+	fn new(prelude: Rc<RefCell<Scope>>, chunks: usize) -> Self {
+		let mut modules = Vec::with_capacity(chunks);
+		for _ in 0..chunks {
+			let scope = Rc::new(RefCell::new(Scope {
+				locals: FxHashMap::default(),
+				outer: Some(prelude.clone()),
+				tier: Tier::Module,
+			}));
+			modules.push(scope);
+		}
+		Self { modules }
+	}
+
+	fn module(&self, chunk: ChunkId) -> Rc<RefCell<Scope>> {
+		self.modules[chunk.index()].clone()
+	}
+}
+
+pub struct Interpreter<'syms, 'pkg, 'descs> {
 	syms: &'syms Interner,
 	pkg: &'pkg Package,
-	types: TypeRegistry,
+	types: Types<'descs>,
+	// The chunk that evaluation starts from.
+	root: ChunkId,
+	scopes: Scopes,
+	// The scope the walk is currently in.
 	scope: Rc<RefCell<Scope>>,
 	receiver: Option<Val>,
 }
@@ -845,14 +890,19 @@ enum Signal {
 	Error(Error, Vec<(String, Location)>),
 }
 
-impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
-	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
-		let types = TypeRegistry::new(syms);
+impl<'syms, 'pkg, 'descs> Interpreter<'syms, 'pkg, 'descs> {
+	pub fn new(
+		syms: &'syms mut Interner,
+		pkg: &'pkg Package,
+		descs: &'descs types::Types,
+		root: ChunkId,
+	) -> Self {
+		let native = native_types(syms);
 
 		let prelude = {
 			let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
 			for (id, _, _) in CORE_TYPES {
-				let typ = types.get_native_type(*id);
+				let typ = &native[id.0 as usize];
 				let obj = Obj::Type(TypeId::Native(*id));
 				locals.insert(typ.name, Val::Obj(Rc::new(RefCell::new(obj))));
 			}
@@ -863,31 +913,23 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			}))
 		};
 
-		let scope = Rc::new(RefCell::new(Scope {
-			locals: FxHashMap::default(),
-			outer: Some(prelude),
-			tier: Tier::Module,
-		}));
+		let scopes = Scopes::new(prelude, pkg.chunk_ids().len());
+		let types = Types::new(native, pkg, descs, &scopes);
 
 		Self {
 			syms,
 			pkg,
 			types,
-			scope,
+			root,
+			scope: scopes.module(root),
+			scopes,
 			receiver: None,
 		}
 	}
 
-	pub fn eval(mut self, chunk_id: ChunkId) -> Result<(), (Error, Vec<(String, Location)>)> {
+	pub fn eval(mut self) -> Result<(), (Error, Vec<(String, Location)>)> {
+		let chunk_id = self.root;
 		let chunk = self.pkg.get_chunk(chunk_id);
-		// Protocols are bound ahead of the walk, so a type can implement one
-		// declared below it.
-		for item_id in &chunk.top {
-			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
-				let val = self.eval_proto_decl(chunk, chunk_id, proto);
-				self.scope.borrow_mut().locals.insert(proto.name, val);
-			}
-		}
 		for item_id in &chunk.top {
 			match self.eval_module_item(chunk, chunk_id, *item_id) {
 				Ok(()) => {}
@@ -910,12 +952,17 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			ModuleItem::Import(_) => Ok(()),
 			ModuleItem::Export(_) => Ok(()),
 			ModuleItem::Type(typ) => {
-				let span = chunk.get_module_item_span(item_id);
-				let val = self.eval_type_decl(chunk, chunk_id, span, typ, None, false)?;
+				let id = self.types.descs.get_type_by_item(chunk_id, item_id);
+				let val = Val::Obj(self.types.user(id).val.clone());
 				self.scope.borrow_mut().locals.insert(typ.name, val);
 				Ok(())
 			}
-			ModuleItem::Proto(_) => Ok(()),
+			ModuleItem::Proto(proto) => {
+				let id = self.types.descs.get_proto_by_item(chunk_id, item_id);
+				let val = Val::Obj(Rc::new(RefCell::new(Obj::Proto(id))));
+				self.scope.borrow_mut().locals.insert(proto.name, val);
+				Ok(())
+			}
 			ModuleItem::Def(def) => {
 				let obj = Obj::Proc(Proc {
 					name: def.name,
@@ -933,157 +980,6 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				Ok(())
 			}
 		}
-	}
-
-	fn eval_proto_decl(&mut self, chunk: &Chunk, chunk_id: ChunkId, proto: &syn::Proto) -> Val {
-		let mut members = FxHashMap::default();
-		for item_id in &proto.items {
-			let item = chunk.get_proto_item(*item_id);
-			let def = &item.def;
-			let block = chunk.get_block(def.body);
-			let provided = match block.exprs.is_empty() {
-				true => None,
-				false => Some(Rc::new(RefCell::new(Proc {
-					name: def.name,
-					params: def.params.to_vec(),
-					body: def.body,
-					chunk: chunk_id,
-					scope: self.scope.clone(),
-				}))),
-			};
-			members.insert(def.name, provided);
-		}
-		let id = self.types.add_proto(Proto {
-			name: proto.name,
-			members,
-		});
-		Val::Obj(Rc::new(RefCell::new(Obj::Proto(id))))
-	}
-
-	// Resolve an 'impl' name through the ordinary scope chain. A top-level
-	// binding can shadow a protocol's name between eval's pre-pass and here,
-	// which is why this can fail despite sem's check.
-	fn resolve_proto(&mut self, span: Span, name: Sym) -> Result<ProtoId, Signal> {
-		let local = Scope::local(&self.scope, name);
-		let loc = self.pkg.loc(span);
-		if !local.is_bound() {
-			return Err(Signal::Error(
-				Error::NameError(self.syms.resolve(name).to_string()),
-				vec![(String::new(), loc)],
-			));
-		}
-		let val = local.get();
-		if let Val::Obj(rf) = &val
-			&& let Obj::Proto(id) = *rf.borrow()
-		{
-			return Ok(id);
-		}
-		let type_name = self.types.type_name(self.syms, val.type_id());
-		Err(Signal::Error(
-			Error::TypeError(TypeError::NotProtocol(type_name)),
-			vec![(String::new(), loc)],
-		))
-	}
-
-	fn eval_type_decl(
-		&mut self,
-		chunk: &Chunk,
-		chunk_id: ChunkId,
-		span: Span,
-		type_: &syn::Type,
-		enclosing: Option<UserTypeId>,
-		is_case: bool,
-	) -> Result<Val, Signal> {
-		let id = self.types.add_user_type(UserType {
-			name: type_.name,
-			ctor_fields: type_.params.to_vec(),
-			body_fields: OrderMap::with_hasher(FxBuildHasher),
-			chunk: chunk_id,
-			methods: FxHashMap::default(),
-			acquired: FxHashMap::default(),
-			statics: FxHashMap::default(),
-			protos: Vec::new(),
-			scope: self.scope.clone(),
-			enclosing,
-			variants: None,
-		});
-		let mut methods = FxHashMap::default();
-		let mut statics = FxHashMap::default();
-		let mut body_fields = OrderMap::with_hasher(FxBuildHasher);
-		let mut variants = if is_case { None } else { Some(Vec::new()) };
-		for item_id in &type_.items {
-			let item_span = chunk.get_type_item_span(*item_id);
-			match chunk.get_type_item(*item_id) {
-				TypeItem::Field(field) => {
-					body_fields.insert(field.name, field.init);
-				}
-				TypeItem::Case(variant) => {
-					let val =
-						self.eval_type_decl(chunk, chunk_id, item_span, variant, Some(id), true)?;
-					let Val::Obj(rf) = &val else { panic!() };
-					let Obj::Type(TypeId::User(variant_id)) = *rf.borrow() else {
-						panic!()
-					};
-					statics.insert(variant.name, Static::Type(val));
-					variants.as_mut().unwrap().push(variant_id);
-				}
-				TypeItem::Type(inner_type) => {
-					let val = self.eval_type_decl(
-						chunk,
-						chunk_id,
-						item_span,
-						inner_type,
-						Some(id),
-						false,
-					)?;
-					statics.insert(inner_type.name, Static::Type(val));
-				}
-				TypeItem::Method(syn::Method::Instance(def)) => {
-					let proc = Rc::new(RefCell::new(Proc {
-						name: def.name,
-						params: def.params.to_vec(),
-						body: def.body,
-						chunk: chunk_id,
-						scope: self.scope.clone(),
-					}));
-					methods.insert(def.name, proc);
-				}
-				TypeItem::Method(syn::Method::Static(def)) => {
-					let proc = Rc::new(RefCell::new(Proc {
-						name: def.name,
-						params: def.params.to_vec(),
-						body: def.body,
-						chunk: chunk_id,
-						scope: self.scope.clone(),
-					}));
-					statics.insert(def.name, Static::Proc(proc));
-				}
-			}
-		}
-		let mut acquired = FxHashMap::default();
-		let mut protos = Vec::with_capacity(type_.impls.len());
-		for impl_name in &type_.impls {
-			let proto_id = self.resolve_proto(span, *impl_name)?;
-			protos.push(proto_id);
-			for (member, provided) in &self.types.get_proto(proto_id).members {
-				let Some(proc_rf) = provided else { continue };
-				// A member the type declares itself overrides the provided one.
-				if methods.contains_key(member) {
-					continue;
-				}
-				acquired.insert(*member, proc_rf.clone());
-			}
-		}
-
-		let typ = self.types.get_user_type_mut(id);
-		typ.body_fields = body_fields;
-		typ.methods = methods;
-		typ.acquired = acquired;
-		typ.statics = statics;
-		typ.protos = protos;
-		typ.variants = variants;
-		let obj = Obj::Type(TypeId::User(id));
-		Ok(Val::Obj(Rc::new(RefCell::new(obj))))
 	}
 
 	fn eval_expr(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
@@ -1143,7 +1039,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					obj => {
 						let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-						let type_name = self.types.type_name(self.syms, obj.type_id());
+						let type_name = self.types.name(self.syms, obj.type_id());
 						Err(Signal::Error(
 							Error::ProtocolError(ProtocolError::NotIterable(type_name)),
 							vec![(String::new(), loc)],
@@ -1152,7 +1048,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				},
 				val => {
 					let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-					let type_name = self.types.type_name(self.syms, val.type_id());
+					let type_name = self.types.name(self.syms, val.type_id());
 					Err(Signal::Error(
 						Error::ProtocolError(ProtocolError::NotIterable(type_name)),
 						vec![(String::new(), loc)],
@@ -1199,7 +1095,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					};
 					let Some(arm_type_id) = arm_type_id else {
 						let loc = self.pkg.loc(chunk.get_expr_span(arm.path));
-						let type_name = self.types.type_name(self.syms, path_val.type_id());
+						let type_name = self.types.name(self.syms, path_val.type_id());
 						return Err(Signal::Error(
 							Error::TypeError(TypeError::CaseNonType(type_name)),
 							vec![(String::new(), loc)],
@@ -1255,23 +1151,28 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_id) => {
 								let type_id = *type_id;
-								let typ = self.types.get_user_type(type_id);
+								// The description outlives the interpreter, so a type's
+								// fields are read where they were written rather than
+								// copied onto every construction.
+								let desc = self.types.descs.get_type(type_id);
 								// A type with variants cannot itself be constructed.
-								if !typ.variants().is_empty() {
+								if let Some(variants) = &desc.variants
+									&& !variants.is_empty()
+								{
 									let loc = self.pkg.loc(span);
 									let type_name =
-										self.types.type_name(self.syms, TypeId::User(type_id));
+										self.types.name(self.syms, TypeId::User(type_id));
 									return Err(Signal::Error(
 										Error::TypeError(TypeError::NotConstructible(type_name)),
 										vec![(String::new(), loc)],
 									));
 								}
-								let ctor_fields = typ.ctor_fields.clone();
-								let body_fields = typ.body_fields.clone();
-								let type_scope = typ.scope.clone();
-								let type_chunk_id = typ.chunk;
+								let ctor_fields = &desc.ctor_fields;
+								let body_fields = &desc.body_fields;
+								let type_chunk_id = desc.chunk;
+								let type_scope = self.scopes.module(type_chunk_id);
 
-								let slots = self.slot_args(span, &ctor_fields, args)?;
+								let slots = self.slot_args(span, ctor_fields, args)?;
 								let scope = Rc::new(RefCell::new(Scope {
 									locals: FxHashMap::default(),
 									outer: Some(type_scope.clone()),
@@ -1281,7 +1182,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								// fields to its left and the module, never self.
 								let outer_receiver = self.receiver.take();
 								let bound =
-									self.bind_args(type_chunk_id, &ctor_fields, slots, &scope);
+									self.bind_args(type_chunk_id, ctor_fields, slots, &scope);
 								self.receiver = outer_receiver;
 								bound?;
 								// The scope was just used for initialization, nothing else holds
@@ -1297,7 +1198,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								let saved_scope = self.scope.clone();
 								let saved_receiver = self.receiver.clone();
 								self.receiver = Some(Val::Obj(inst_rf.clone()));
-								for (name, init_id) in &body_fields {
+								for (name, init_id) in body_fields {
 									self.scope = Rc::new(RefCell::new(Scope {
 										locals: FxHashMap::default(),
 										outer: Some(type_scope.clone()),
@@ -1311,8 +1212,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 											return Err(signal);
 										}
 									};
-									Member::User(inst_rf.clone(), *name)
-										.set(val, &self.types)
+									Place::Member(Member::User(inst_rf.clone(), *name))
+										.set(&self.types, val)
 										.unwrap();
 								}
 								self.scope = saved_scope;
@@ -1321,7 +1222,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								Ok(Val::Obj(inst_rf))
 							}
 							TypeId::Native(type_id) => {
-								let typ = self.types.get_native_type(*type_id);
+								let typ = self.types.native(*type_id);
 								match typ.new {
 									Some(new) => {
 										// A native constructor defines no
@@ -1366,7 +1267,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						},
 						obj => {
 							let loc = self.pkg.loc(span);
-							let type_name = self.types.type_name(self.syms, obj.type_id());
+							let type_name = self.types.name(self.syms, obj.type_id());
 							Err(Signal::Error(
 								Error::TypeError(TypeError::NotCallable(type_name)),
 								vec![(String::new(), loc)],
@@ -1375,7 +1276,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					},
 					val => {
 						let loc = self.pkg.loc(span);
-						let type_name = self.types.type_name(self.syms, val.type_id());
+						let type_name = self.types.name(self.syms, val.type_id());
 						Err(Signal::Error(
 							Error::TypeError(TypeError::NotCallable(type_name)),
 							vec![(String::new(), loc)],
@@ -1408,7 +1309,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					}
 					obj => {
 						let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-						let type_name = self.types.type_name(self.syms, obj.type_id());
+						let type_name = self.types.name(self.syms, obj.type_id());
 						Err(Signal::Error(
 							Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
 							vec![(String::new(), loc)],
@@ -1417,7 +1318,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				},
 				val => {
 					let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-					let type_name = self.types.type_name(self.syms, val.type_id());
+					let type_name = self.types.name(self.syms, val.type_id());
 					Err(Signal::Error(
 						Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
 						vec![(String::new(), loc)],
@@ -1431,39 +1332,30 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			Expr::Assign(assign) => {
 				let val = self.eval_expr(chunk, assign.val)?;
 				match &assign.place {
-					Place::Name(name) => {
+					syn::Place::Name(name) => {
 						let sym = name.sym;
-						let local = Scope::local(&self.scope, sym);
-						if local.is_bound() && local.tier == Tier::Local {
-							local.set(val.clone());
-						} else if let Some(receiver) = &self.receiver
-							&& let Some(member) = receiver.member(sym, &self.types)
-						{
-							if let Err(()) = member.set(val.clone(), &self.types) {
-								let type_name = self
-									.types
-									.type_name(self.syms, receiver.namespace_type_id());
-								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-								return Err(Signal::Error(
-									Error::MemberError(MemberError::ReadOnly(
-										type_name.to_string(),
-										self.syms.resolve(sym).to_string(),
-									)),
-									vec![(String::new(), loc)],
-								));
-							}
-						} else {
-							local.set(val.clone());
+						if let Err(()) = self.resolve_name(sym).set(&self.types, val.clone()) {
+							let type_name = self.types.name(
+								self.syms,
+								self.receiver.as_ref().unwrap().namespace_type_id(),
+							);
+							let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
+							return Err(Signal::Error(
+								Error::MemberError(MemberError::ReadOnly(
+									type_name,
+									self.syms.resolve(sym).to_string(),
+								)),
+								vec![(String::new(), loc)],
+							));
 						}
 						Ok(val)
 					}
-					Place::Member(member) => {
+					syn::Place::Member(member) => {
 						let receiver = self.eval_expr(chunk, member.receiver)?;
-						if let Some(m) = receiver.member(member.name, &self.types) {
-							if let Err(()) = m.set(val.clone(), &self.types) {
-								let type_name = self
-									.types
-									.type_name(self.syms, receiver.namespace_type_id());
+						if let Some(m) = self.types.member(&receiver, member.name) {
+							if let Err(()) = Place::Member(m).set(&self.types, val.clone()) {
+								let type_name =
+									self.types.name(self.syms, receiver.namespace_type_id());
 								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
@@ -1475,9 +1367,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							Ok(val)
 						} else {
-							let type_name = self
-								.types
-								.type_name(self.syms, receiver.namespace_type_id());
+							let type_name =
+								self.types.name(self.syms, receiver.namespace_type_id());
 							let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
 							Err(Signal::Error(
 								Error::MemberError(MemberError::Missing(
@@ -1488,7 +1379,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							))
 						}
 					}
-					Place::Access(access) => {
+					syn::Place::Access(access) => {
 						let receiver = self.eval_expr(chunk, access.receiver)?;
 						match &receiver {
 							Val::Obj(rf) => match &mut *rf.borrow_mut() {
@@ -1509,7 +1400,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 								}
 								obj => {
 									let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-									let type_name = self.types.type_name(self.syms, obj.type_id());
+									let type_name = self.types.name(self.syms, obj.type_id());
 									Err(Signal::Error(
 										Error::ProtocolError(ProtocolError::NotAccessible(
 											type_name,
@@ -1520,7 +1411,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							},
 							val => {
 								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.types.type_name(self.syms, val.type_id());
+								let type_name = self.types.name(self.syms, val.type_id());
 								Err(Signal::Error(
 									Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
 									vec![(String::new(), loc)],
@@ -1599,7 +1490,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 										(_, Val::Num(_)) => lhs,
 										_ => lhs,
 									};
-									let type_name = self.types.type_name(self.syms, val.type_id());
+									let type_name = self.types.name(self.syms, val.type_id());
 									Err(Signal::Error(
 										Error::ProtocolError(ProtocolError::NotOrderable(
 											type_name,
@@ -1612,7 +1503,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 						BinaryOp::Append => {
 							let Val::Obj(rf) = lhs.clone() else {
 								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.types.type_name(self.syms, lhs.type_id());
+								let type_name = self.types.name(self.syms, lhs.type_id());
 								return Err(Signal::Error(
 									Error::ProtocolError(ProtocolError::NotAppendable(type_name)),
 									vec![(String::new(), loc)],
@@ -1620,8 +1511,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							};
 							let Obj::List(list) = &mut *rf.borrow_mut() else {
 								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-								let type_name =
-									self.types.type_name(self.syms, rf.borrow().type_id());
+								let type_name = self.types.name(self.syms, rf.borrow().type_id());
 								return Err(Signal::Error(
 									Error::ProtocolError(ProtocolError::NotAppendable(type_name)),
 									vec![(String::new(), loc)],
@@ -1644,7 +1534,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							(Val::Str(_), rhs) => {
 								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.types.type_name(self.syms, rhs.type_id());
+								let type_name = self.types.name(self.syms, rhs.type_id());
 								Err(Signal::Error(
 									Error::TypeError(TypeError::ConcatNonStr(type_name)),
 									vec![(String::new(), loc)],
@@ -1652,7 +1542,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 							}
 							(_, rhs) => {
 								let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.types.type_name(self.syms, rhs.type_id());
+								let type_name = self.types.name(self.syms, rhs.type_id());
 								Err(Signal::Error(
 									Error::TypeError(TypeError::ArithNonNum(type_name)),
 									vec![(String::new(), loc)],
@@ -1673,7 +1563,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 									(_, Val::Num(_)) => lhs,
 									_ => lhs,
 								};
-								let type_name = self.types.type_name(self.syms, val.type_id());
+								let type_name = self.types.name(self.syms, val.type_id());
 								Err(Signal::Error(
 									Error::TypeError(TypeError::ArithNonNum(type_name)),
 									vec![(String::new(), loc)],
@@ -1693,7 +1583,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					Val::Num(num) => Ok(Val::Num(Num(-num.0))),
 					val => {
 						let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-						let type_name = self.types.type_name(self.syms, val.type_id());
+						let type_name = self.types.name(self.syms, val.type_id());
 						Err(Signal::Error(
 							Error::TypeError(TypeError::ArithNonNum(type_name)),
 							vec![(String::new(), loc)],
@@ -1756,29 +1646,40 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 	}
 
-	fn eval_name_raw(&mut self, chunk: &Chunk, expr_id: ExprId, name: Sym) -> Result<Val, Signal> {
+	// Resolve a name to a place, following the canonical lookup chain:
+	//
+	//   locals > self's members > module's bindings > prelude
+	//
+	// The latter two cases are handled by checking the local's tier.
+	fn resolve_name(&self, name: Sym) -> Place {
 		let local = Scope::local(&self.scope, name);
 		if local.is_bound() && local.tier == Tier::Local {
-			Ok(local.get())
-		} else if let Some(receiver) = &self.receiver
-			&& let Some(member) = receiver.member(name, &self.types)
+			return Place::Local(local);
+		}
+		if let Some(receiver) = &self.receiver
+			&& let Some(member) = self.types.member(receiver, name)
 		{
-			match member.get(&self.types) {
-				Ok(val) => Ok(val),
-				Err(err) => {
-					let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-					Err(Signal::Error(err, vec![(String::new(), loc)]))
-				}
-			}
-		} else if local.is_bound() {
-			Ok(local.get())
-		} else {
+			return Place::Member(member);
+		}
+		Place::Local(local)
+	}
+
+	fn eval_name_raw(&mut self, chunk: &Chunk, expr_id: ExprId, name: Sym) -> Result<Val, Signal> {
+		let place = self.resolve_name(name);
+		if !place.is_bound() {
 			let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
 			let name = self.syms.resolve(name);
-			Err(Signal::Error(
+			return Err(Signal::Error(
 				Error::NameError(name.to_string()),
 				vec![(String::new(), loc)],
-			))
+			));
+		}
+		match place.get(&self.types) {
+			Ok(val) => Ok(val),
+			Err(err) => {
+				let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
+				Err(Signal::Error(err, vec![(String::new(), loc)]))
+			}
 		}
 	}
 
@@ -1791,8 +1692,8 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	) -> Result<Val, Signal> {
 		let val = self.eval_expr(chunk, val_id)?;
 
-		if let Some(member) = val.member(name, &self.types) {
-			match member.get(&self.types) {
+		if let Some(member) = self.types.member(&val, name) {
+			match Place::Member(member).get(&self.types) {
 				Ok(val) => Ok(val),
 				Err(err) => {
 					let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
@@ -1800,7 +1701,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 				}
 			}
 		} else {
-			let type_name = self.types.type_name(self.syms, val.namespace_type_id());
+			let type_name = self.types.name(self.syms, val.namespace_type_id());
 			let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
 			Err(Signal::Error(
 				Error::MemberError(MemberError::Missing(
@@ -1867,7 +1768,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 		}
 
 		let loc = self.pkg.loc(chunk.get_expr_span(expr_id));
-		let type_name = self.types.type_name(self.syms, val.type_id());
+		let type_name = self.types.name(self.syms, val.type_id());
 		Err(Signal::Error(
 			Error::TypeError(TypeError::NotInvokable(type_name)),
 			vec![(String::new(), loc)],
@@ -2178,7 +2079,27 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	}
 }
 
-fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
+fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
+	let mut res = String::new();
+	let name = syms.resolve(proc.name);
+	res.push_str(&format!("def {}", name));
+	if !proc.params.is_empty() {
+		res.push('(');
+	}
+	for (i, param) in proc.params.iter().enumerate() {
+		let param = syms.resolve(param.name);
+		res.push_str(param);
+		if i + 1 != proc.params.len() {
+			res.push_str(", ");
+		}
+	}
+	if !proc.params.is_empty() {
+		res.push(')');
+	}
+	res
+}
+
+fn rt_print_val(syms: &Interner, types: &Types, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num.0),
 		Val::Bool(bool) => format!("{}", bool.0),
@@ -2189,7 +2110,7 @@ fn rt_print_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
 	}
 }
 
-fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
+fn rt_print_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
 	match obj {
 		Obj::List(list) => {
 			let mut res = String::new();
@@ -2220,14 +2141,14 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 		Obj::Proc(proc) => rt_print_proc(syms, proc),
 		Obj::Type(type_id) => match type_id {
 			TypeId::User(type_id) => {
-				let typ = types.get_user_type(*type_id);
-				let name = types.type_name(syms, TypeId::User(*type_id));
+				let desc = types.descs.get_type(*type_id);
+				let name = types.name(syms, TypeId::User(*type_id));
 				let mut res = String::new();
 				res.push_str(&format!("type {}(", name));
-				for (i, field) in typ.ctor_fields.iter().enumerate() {
+				for (i, field) in desc.ctor_fields.iter().enumerate() {
 					let field = syms.resolve(field.name);
 					res.push_str(field);
-					if i + 1 != typ.ctor_fields.len() {
+					if i + 1 != desc.ctor_fields.len() {
 						res.push_str(", ");
 					}
 				}
@@ -2235,24 +2156,24 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 				res
 			}
 			TypeId::Native(type_id) => {
-				let typ = types.get_native_type(*type_id);
+				let typ = types.native(*type_id);
 				let name = syms.resolve(typ.name);
 				format!("type {}", name)
 			}
 		},
 		Obj::Proto(proto_id) => {
-			let proto = types.get_proto(*proto_id);
+			let proto = types.descs.get_proto(*proto_id);
 			format!("proto {}", syms.resolve(proto.name))
 		}
 		Obj::Instance(inst) => {
-			let typ = types.get_user_type(inst.typ);
-			let name = types.type_name(syms, TypeId::User(inst.typ));
+			let desc = types.descs.get_type(inst.typ);
+			let name = types.name(syms, TypeId::User(inst.typ));
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
-			for (i, field) in typ.ctor_fields.iter().enumerate() {
+			for (i, field) in desc.ctor_fields.iter().enumerate() {
 				let val = inst.fields.get(&field.name).unwrap();
 				res.push_str(&rt_print_val(syms, types, val));
-				if i + 1 != typ.ctor_fields.len() {
+				if i + 1 != desc.ctor_fields.len() {
 					res.push_str(", ");
 				}
 			}
@@ -2268,27 +2189,7 @@ fn rt_print_obj(syms: &Interner, types: &TypeRegistry, obj: &Obj) -> String {
 	}
 }
 
-fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
-	let mut res = String::new();
-	let name = syms.resolve(proc.name);
-	res.push_str(&format!("def {}", name));
-	if !proc.params.is_empty() {
-		res.push('(');
-	}
-	for (i, param) in proc.params.iter().enumerate() {
-		let param = syms.resolve(param.name);
-		res.push_str(param);
-		if i + 1 != proc.params.len() {
-			res.push_str(", ");
-		}
-	}
-	if !proc.params.is_empty() {
-		res.push(')');
-	}
-	res
-}
-
-fn rt_debug_val(syms: &Interner, types: &TypeRegistry, val: &Val) -> String {
+fn rt_debug_val(syms: &Interner, types: &Types, val: &Val) -> String {
 	match val {
 		Val::Char(char) => format!("'{}'", char.0),
 		Val::Str(str) => format!("\"{}\"", str.text),

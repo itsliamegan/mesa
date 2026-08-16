@@ -185,6 +185,45 @@ fn test_reports_declaration_shadowing_child_module() {
 	);
 }
 
+#[test]
+fn test_acquires_a_provided_member_across_files() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\n\
+				 import Test.Order.Order\n\
+				 type Task(priority)\n\
+				 \timpl Order\n\
+				 \tdef compare(other)\n\
+				 \t\treturn self.priority - other.priority\n\
+				 \tend\n\
+				 end\n\
+				 $print(Task(1).min(Task(5)).priority)\n\
+				 $print(Task(5).min(Task(1)).priority)\n",
+			),
+			(
+				"order.ms",
+				"module Test.Order\n\
+				 proto Order\n\
+				 \tdef compare(other) end\n\
+				 \tdef min(other)\n\
+				 \t\twhen self.compare(other) <= 0 then return self else return other end\n\
+				 \tend\n\
+				 end\n",
+			),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["1", "1"], stdout.lines().collect::<Vec<_>>());
+}
+
 fn assert_eval(file: &str, input: &str) {
 	let test_dir = make_test_dir();
 

@@ -34,7 +34,7 @@ fn main() {
 		}
 	};
 
-	let (_modules, _types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
+	let (_modules, types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
@@ -44,7 +44,7 @@ fn main() {
 		}
 	};
 
-	match Interpreter::new(&mut syms, &pkg).eval(root_chunk_id) {
+	match Interpreter::new(&mut syms, &pkg, &types, root_chunk_id).eval() {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{

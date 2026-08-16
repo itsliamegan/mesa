@@ -37,7 +37,7 @@ impl Package {
 		self.get_src(self.get_chunk(id).src).file()
 	}
 
-	pub fn chunk_ids(&self) -> impl Iterator<Item = ChunkId> {
+	pub fn chunk_ids(&self) -> impl ExactSizeIterator<Item = ChunkId> {
 		(0..self.chunks.len() as u32).map(ChunkId::new)
 	}
 
