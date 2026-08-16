@@ -756,7 +756,7 @@ impl<Node, Id: NodeId> Nodes<Node, Id> {
 	}
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ModuleItemId(u32);
 
 impl NodeId for ModuleItemId {
@@ -1060,7 +1060,7 @@ pub struct Block {
 	pub exprs: Vec<ExprId>,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ChunkId(u32);
 
 impl ChunkId {

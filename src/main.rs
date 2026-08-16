@@ -34,8 +34,8 @@ fn main() {
 		}
 	};
 
-	let _modules = match sem::check(&mut syms, &pkg, &tree.dirs) {
-		Ok(modules) => modules,
+	let (_modules, _types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
+		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
 				eprintln!("{}", err);

@@ -1,5 +1,6 @@
 pub mod load;
 pub mod modules;
+pub mod types;
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
@@ -7,10 +8,11 @@ use std::fmt::{self, Display, Formatter};
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
 use crate::pkg::Package;
 use crate::sem::modules::{ModuleId, Modules};
+use crate::sem::types::Types;
 use crate::src::{Location, Span};
 use crate::syn::{
-	BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param,
-	Place, Proto, Type, TypeItem, TypeItemId,
+	self, BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Member, Method, ModuleItem,
+	Param, Place, TypeItem, TypeItemId,
 };
 
 #[derive(Debug)]
@@ -160,7 +162,11 @@ impl Display for Error {
 	}
 }
 
-pub fn check(syms: &mut Interner, pkg: &Package, dirs: &[String]) -> Result<Modules, Vec<Error>> {
+pub fn check(
+	syms: &mut Interner,
+	pkg: &Package,
+	dirs: &[String],
+) -> Result<(Modules, Types), Vec<Error>> {
 	let mods = modules::check(syms, pkg, dirs)?;
 
 	// Every chunk is a module by now, module checking having failed otherwise,
@@ -173,10 +179,13 @@ pub fn check(syms: &mut Interner, pkg: &Package, dirs: &[String]) -> Result<Modu
 	}
 
 	if !errs.is_empty() {
-		Err(errs)
-	} else {
-		Ok(mods)
+		return Err(errs);
 	}
+
+	// Describing runs only once every check has passed, so it can read the
+	// package as valid rather than re-deciding what checking already decided.
+	let types = types::describe(pkg, &mods);
+	Ok((mods, types))
 }
 
 fn check_chunk(
@@ -244,7 +253,7 @@ fn check_type(
 	chunk: &Chunk,
 	pkg: &Package,
 	span: Span,
-	type_: &Type,
+	type_: &syn::Type,
 	inherited: Option<&HashMap<Sym, (Span, &Def)>>,
 	mods: &Modules,
 	module: ModuleId,
@@ -312,7 +321,7 @@ fn check_proto(
 	chunk: &Chunk,
 	pkg: &Package,
 	span: Span,
-	proto: &Proto,
+	proto: &syn::Proto,
 ) -> Result<(), Error> {
 	let mut members = HashSet::new();
 	for item_id in &proto.items {
@@ -502,7 +511,7 @@ fn resolve_proto<'pkg>(
 	mods: &Modules,
 	module: ModuleId,
 	name: Sym,
-) -> Result<(ChunkId, &'pkg Proto), Error> {
+) -> Result<(ChunkId, &'pkg syn::Proto), Error> {
 	let (owner, member) = match mods.binding(module, name) {
 		Some(modules::Binding::Member(owner, member)) => (owner, member),
 		// An imported module is a name the file knows, and so is not unknown,
@@ -538,7 +547,7 @@ fn check_conformance(
 	chunk: &Chunk,
 	pkg: &Package,
 	span: Span,
-	type_: &Type,
+	type_: &syn::Type,
 	methods: &HashMap<Sym, (Span, &Def)>,
 	mods: &Modules,
 	module: ModuleId,
