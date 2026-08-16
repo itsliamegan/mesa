@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
 use crate::pkg::Package;
-use crate::sem::modules::Modules;
+use crate::sem::modules::{ModuleId, Modules};
 use crate::src::{Location, Span};
 use crate::syn::{
 	BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param,
@@ -22,6 +22,7 @@ pub enum Error {
 	FieldOnCaseParent(Location, String, String),
 	ProvidedWithoutRequired(Location, String),
 	UnknownProtocol(Location, String),
+	NotAProtocol(Location, String),
 	MissingMember(Location, String, String, String),
 	SignatureMismatch(Location, String, String, String),
 	ProtocolConflict(Location, String, String, String),
@@ -33,7 +34,10 @@ pub enum Error {
 	UnpairedDirectory(Location),
 	ReservedDirectory(Location),
 	PrefixMismatch(Location, String, String),
+	DuplicateModuleName(Location, String),
 	DuplicateMember(Location, String),
+	UnknownImport(Location, String),
+	ImportCycle(Location, String),
 }
 
 impl Error {
@@ -46,6 +50,7 @@ impl Error {
 			Self::FieldOnCaseParent(loc, ..) => loc,
 			Self::ProvidedWithoutRequired(loc, _) => loc,
 			Self::UnknownProtocol(loc, _) => loc,
+			Self::NotAProtocol(loc, _) => loc,
 			Self::MissingMember(loc, ..) => loc,
 			Self::SignatureMismatch(loc, ..) => loc,
 			Self::ProtocolConflict(loc, ..) => loc,
@@ -57,7 +62,10 @@ impl Error {
 			Self::UnpairedDirectory(loc) => loc,
 			Self::ReservedDirectory(loc) => loc,
 			Self::PrefixMismatch(loc, ..) => loc,
+			Self::DuplicateModuleName(loc, _) => loc,
 			Self::DuplicateMember(loc, _) => loc,
+			Self::UnknownImport(loc, _) => loc,
+			Self::ImportCycle(loc, _) => loc,
 		}
 	}
 }
@@ -87,6 +95,7 @@ impl Display for Error {
 				write!(f, "protocol '{}' provides members but requires none", proto)
 			}
 			Self::UnknownProtocol(_, proto) => write!(f, "unknown protocol '{}'", proto),
+			Self::NotAProtocol(_, name) => write!(f, "'{}' is not a protocol", name),
 			Self::MissingMember(_, name, proto, member) => {
 				write!(
 					f,
@@ -143,7 +152,10 @@ impl Display for Error {
 					declared, prefix
 				)
 			}
+			Self::DuplicateModuleName(_, name) => write!(f, "duplicate module '{}'", name),
 			Self::DuplicateMember(_, name) => write!(f, "duplicate member '{}'", name),
+			Self::UnknownImport(_, path) => write!(f, "unknown import '{}'", path),
+			Self::ImportCycle(_, cycle) => write!(f, "import cycle: {}", cycle),
 		}
 	}
 }
@@ -151,9 +163,11 @@ impl Display for Error {
 pub fn check(syms: &mut Interner, pkg: &Package, dirs: &[String]) -> Result<Modules, Vec<Error>> {
 	let mods = modules::check(syms, pkg, dirs)?;
 
+	// Every chunk is a module by now, module checking having failed otherwise,
+	// and the modules are held in chunk order, so this reports in file order.
 	let mut errs = Vec::new();
-	for chunk_id in pkg.chunk_ids() {
-		if let Err(mut chunk_errs) = check_chunk(syms, pkg, chunk_id) {
+	for id in mods.ids() {
+		if let Err(mut chunk_errs) = check_chunk(syms, pkg, &mods, id) {
 			errs.append(&mut chunk_errs);
 		}
 	}
@@ -165,8 +179,13 @@ pub fn check(syms: &mut Interner, pkg: &Package, dirs: &[String]) -> Result<Modu
 	}
 }
 
-fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<(), Vec<Error>> {
-	let chunk = pkg.get_chunk(chunk_id);
+fn check_chunk(
+	syms: &mut Interner,
+	pkg: &Package,
+	mods: &Modules,
+	module: ModuleId,
+) -> Result<(), Vec<Error>> {
+	let chunk = pkg.get_chunk(mods.chunk(module));
 	let mut errs = Vec::new();
 
 	let mut prelude = HashSet::new();
@@ -174,10 +193,6 @@ fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<
 		prelude.insert(syms.intern(name));
 	}
 
-	// Iterate all declarations first so that they can be checked
-	// order-independently. A protocol is kept with the chunk it was declared
-	// in, since its member ids only index that chunk's arena.
-	let mut protos = HashMap::new();
 	for item_id in &chunk.top {
 		let span = chunk.get_module_item_span(*item_id);
 		let name = match chunk.get_module_item(*item_id) {
@@ -185,10 +200,7 @@ fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<
 			ModuleItem::Import(_) => continue,
 			ModuleItem::Export(_) => continue,
 			ModuleItem::Type(type_) => type_.name,
-			ModuleItem::Proto(proto) => {
-				protos.insert(proto.name, (chunk_id, proto));
-				proto.name
-			}
+			ModuleItem::Proto(proto) => proto.name,
 			ModuleItem::Def(def) => def.name,
 			ModuleItem::Expr(_) => continue,
 		};
@@ -208,7 +220,9 @@ fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<
 			ModuleItem::Module(_) => Ok(()),
 			ModuleItem::Import(_) => Ok(()),
 			ModuleItem::Export(_) => Ok(()),
-			ModuleItem::Type(type_) => check_type(syms, chunk, pkg, span, type_, None, &protos),
+			ModuleItem::Type(type_) => {
+				check_type(syms, chunk, pkg, span, type_, None, mods, module)
+			}
 			ModuleItem::Proto(proto) => check_proto(syms, chunk, pkg, span, proto),
 			ModuleItem::Def(def) => check_def(syms, chunk, pkg, span, def),
 			ModuleItem::Expr(expr_id) => check_expr(chunk, pkg, *expr_id, 0),
@@ -218,7 +232,11 @@ fn check_chunk(syms: &mut Interner, pkg: &Package, chunk_id: ChunkId) -> Result<
 		}
 	}
 
-	if !errs.is_empty() { Err(errs) } else { Ok(()) }
+	if !errs.is_empty() {
+		return Err(errs);
+	}
+
+	Ok(())
 }
 
 fn check_type(
@@ -228,7 +246,8 @@ fn check_type(
 	span: Span,
 	type_: &Type,
 	inherited: Option<&HashMap<Sym, (Span, &Def)>>,
-	protos: &HashMap<Sym, (ChunkId, &Proto)>,
+	mods: &Modules,
+	module: ModuleId,
 ) -> Result<(), Error> {
 	ensure_required_precede_defaults(syms, pkg, span, &type_.params)?;
 
@@ -249,14 +268,21 @@ fn check_type(
 	}
 
 	let methods = collect_methods(chunk, &type_.items, inherited);
-	check_conformance(syms, chunk, pkg, span, type_, &methods, protos)?;
+	check_conformance(syms, chunk, pkg, span, type_, &methods, mods, module)?;
 
 	for item_id in &type_.items {
 		let span = chunk.get_type_item_span(*item_id);
 		match chunk.get_type_item(*item_id) {
-			TypeItem::Case(variant) => {
-				check_type(syms, chunk, pkg, span, variant, Some(&methods), protos)?
-			}
+			TypeItem::Case(variant) => check_type(
+				syms,
+				chunk,
+				pkg,
+				span,
+				variant,
+				Some(&methods),
+				mods,
+				module,
+			)?,
 			TypeItem::Field(field) => {
 				if has_cases {
 					let loc = pkg.loc(span);
@@ -268,7 +294,7 @@ fn check_type(
 				}
 			}
 			TypeItem::Type(inner_type) => {
-				check_type(syms, chunk, pkg, span, inner_type, None, protos)?
+				check_type(syms, chunk, pkg, span, inner_type, None, mods, module)?
 			}
 			TypeItem::Method(Method::Instance(def)) => {
 				check_def(syms, chunk, pkg, span, def)?;
@@ -307,6 +333,7 @@ fn check_proto(
 			requires = true;
 		}
 	}
+
 	// A protocol must either provide a method or only require methods.
 	if provides && !requires {
 		let loc = pkg.loc(span);
@@ -315,6 +342,7 @@ fn check_proto(
 			syms.resolve(proto.name).to_string(),
 		));
 	}
+
 	Ok(())
 }
 
@@ -462,6 +490,49 @@ fn is_provided(chunk: &Chunk, def: &Def) -> bool {
 	!block.exprs.is_empty()
 }
 
+// The protocol a type names in its 'impl' line, read from the module the type
+// was declared in: the name is bound in that module, by its own declarations or
+// by one of its imports, and it names a protocol rather than some other member.
+// The protocol comes back with the chunk that holds it, which is the importing
+// module's only when the protocol was declared alongside the type.
+fn resolve_proto<'pkg>(
+	syms: &Interner,
+	pkg: &'pkg Package,
+	span: Span,
+	mods: &Modules,
+	module: ModuleId,
+	name: Sym,
+) -> Result<(ChunkId, &'pkg Proto), Error> {
+	let (owner, member) = match mods.binding(module, name) {
+		Some(modules::Binding::Member(owner, member)) => (owner, member),
+		// An imported module is a name the file knows, and so is not unknown,
+		// however little it resembles a protocol.
+		Some(modules::Binding::Module(_)) => {
+			let loc = pkg.loc(span);
+			return Err(Error::NotAProtocol(loc, syms.resolve(name).to_string()));
+		}
+		None => {
+			let loc = pkg.loc(span);
+			return Err(Error::UnknownProtocol(loc, syms.resolve(name).to_string()));
+		}
+	};
+	let item_id = match member {
+		modules::Member::Proto(item_id) => item_id,
+		modules::Member::Type(_)
+		| modules::Member::Proc(_)
+		| modules::Member::Var(_)
+		| modules::Member::Child(_) => {
+			let loc = pkg.loc(span);
+			return Err(Error::NotAProtocol(loc, syms.resolve(name).to_string()));
+		}
+	};
+	let chunk_id = mods.chunk(owner);
+	let ModuleItem::Proto(proto) = pkg.get_chunk(chunk_id).get_module_item(item_id) else {
+		panic!();
+	};
+	Ok((chunk_id, proto))
+}
+
 fn check_conformance(
 	syms: &Interner,
 	chunk: &Chunk,
@@ -469,7 +540,8 @@ fn check_conformance(
 	span: Span,
 	type_: &Type,
 	methods: &HashMap<Sym, (Span, &Def)>,
-	protos: &HashMap<Sym, (ChunkId, &Proto)>,
+	mods: &Modules,
+	module: ModuleId,
 ) -> Result<(), Error> {
 	if type_.impls.is_empty() {
 		return Ok(());
@@ -478,19 +550,10 @@ fn check_conformance(
 	// Provided members this type acquires, against the protocol each came from.
 	let mut acquired: HashMap<Sym, Sym> = HashMap::new();
 	for impl_name in &type_.impls {
-		let (proto_chunk_id, proto) = match protos.get(impl_name) {
-			Some(proto) => proto,
-			None => {
-				let loc = pkg.loc(span);
-				return Err(Error::UnknownProtocol(
-					loc,
-					syms.resolve(*impl_name).to_string(),
-				));
-			}
-		};
+		let (proto_chunk_id, proto) = resolve_proto(syms, pkg, span, mods, module, *impl_name)?;
 		// A protocol need not share a chunk with the type implementing it, so
 		// its member ids are read through its own arena and never this type's.
-		let proto_chunk = pkg.get_chunk(*proto_chunk_id);
+		let proto_chunk = pkg.get_chunk(proto_chunk_id);
 		for member_id in &proto.items {
 			let item = proto_chunk.get_proto_item(*member_id);
 			let def = &item.def;
@@ -761,4 +824,103 @@ fn ensure_required_precede_defaults(
 		}
 	}
 	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	use crate::sem::load::{self, ROOT_FILE};
+
+	// The errors a package built from literal source text reports, which is how
+	// the cross-module cases below are checked without running the binary: an
+	// 'impl' reaching another module passes 'sem' but cannot yet be evaluated.
+	fn checked(files: &[(&str, &str)]) -> Vec<String> {
+		let mut syms = Interner::new();
+		let files = files
+			.iter()
+			.map(|(file, text)| (file.to_string(), text.to_string()))
+			.collect();
+		let (pkg, _) = load::parse(&mut syms, files).unwrap();
+		match check(&mut syms, &pkg, &["src/protos".to_string()]) {
+			Ok(_) => Vec::new(),
+			Err(errs) => errs.iter().map(|err| err.to_string()).collect(),
+		}
+	}
+
+	const PROTOS: &str =
+		"module Test.Protos\nproto Order\ndef compare(other) end\nend\ndef helper()\nend\n";
+	const IMPLEMENTS: &str = "type Task\nimpl Order\ndef compare(other)\nend\nend\n";
+
+	#[test]
+	fn test_resolves_protocols_through_imports() {
+		// A protocol implemented in the module declaring it, which is the case
+		// every fixture covers, and the same one implemented across files.
+		assert!(
+			checked(&[
+				(ROOT_FILE, "module Test\n"),
+				("src/protos.ms", &format!("{}{}", PROTOS, IMPLEMENTS)),
+			])
+			.is_empty()
+		);
+		assert!(
+			checked(&[
+				(ROOT_FILE, "module Test\n"),
+				("src/protos.ms", PROTOS),
+				(
+					"src/task.ms",
+					&format!("module Test.Task\nimport Test.Protos.Order\n{}", IMPLEMENTS),
+				),
+			])
+			.is_empty()
+		);
+	}
+
+	#[test]
+	fn test_reports_protocols_a_module_cannot_see() {
+		// Without the import the protocol is another module's business, which
+		// is what the per-chunk table used to enforce by having nothing else in
+		// it, and the conformance checks behind it never run.
+		assert_eq!(
+			vec!["src/task.ms:2,1: semantic error: unknown protocol 'Order'"],
+			checked(&[
+				(ROOT_FILE, "module Test\n"),
+				("src/protos.ms", PROTOS),
+				("src/task.ms", &format!("module Test.Task\n{}", IMPLEMENTS)),
+			])
+		);
+
+		// An imported module named where a protocol belongs is known, and so
+		// reports as the wrong kind of name rather than as no name at all.
+		assert_eq!(
+			vec!["src/task.ms:3,1: semantic error: 'Protos' is not a protocol"],
+			checked(&[
+				(ROOT_FILE, "module Test\n"),
+				("src/protos.ms", PROTOS),
+				(
+					"src/task.ms",
+					&format!(
+						"module Test.Task\nimport Test.Protos\n{}",
+						IMPLEMENTS.replace("impl Order", "impl Protos")
+					),
+				),
+			])
+		);
+
+		// A name that resolves but names something other than a protocol.
+		assert_eq!(
+			vec!["src/task.ms:3,1: semantic error: 'helper' is not a protocol"],
+			checked(&[
+				(ROOT_FILE, "module Test\n"),
+				("src/protos.ms", PROTOS),
+				(
+					"src/task.ms",
+					&format!(
+						"module Test.Task\nimport Test.Protos.helper\n{}",
+						IMPLEMENTS.replace("impl Order", "impl helper")
+					),
+				),
+			])
+		);
+	}
 }
