@@ -144,3 +144,33 @@ end
 $print(Shape.Circle(2).min(Shape.Circle(9)).r)
 $print(Shape.Square(9).max(Shape.Square(4)).s)
 $print(Shape.Square(9).min(Shape.Square(4)).s)
+
+#---
+
+#> parent
+#> x
+
+proto Named
+	def name() end
+
+	def label()
+		return "provided"
+	end
+end
+
+type Expr
+	case Ident(n)
+		impl Named
+		def name()
+			return self.n
+		end
+	end
+
+	def label()
+		return "parent"
+	end
+end
+
+ident := Expr.Ident("x")
+$print(ident.label())
+$print(ident.name())
