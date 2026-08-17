@@ -2,13 +2,14 @@ use std::collections::HashMap;
 
 use ordermap::OrderMap;
 
-use crate::intern::Sym;
+use crate::intern::{Interner, Sym};
 use crate::pkg::Package;
-use crate::sem::is_provided;
 use crate::sem::modules::{Binding, Member, ModuleId, Modules};
+use crate::sem::{Error, ensure_required_precede_optional};
+use crate::src::Span;
 use crate::syn::{
-	self, Chunk, ChunkId, ExprId, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem,
-	TypeItemId,
+	self, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId,
+	TypeItem, TypeItemId,
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -41,14 +42,20 @@ pub struct Types {
 	// Where a protocol's declaration lives, so an 'impl' name resolved through
 	// the module map arrives at the description built for it.
 	proto_by_item: HashMap<(ChunkId, ModuleItemId), ProtoId>,
+	// Which protocol a proto item belongs to, so a flat walk over a chunk's
+	// 'proto_items' arena (which does not itself know which 'ModuleItem::Proto'
+	// grouped it) can still name the protocol and look up whether the item is
+	// required or provided.
+	proto_by_proto_item: HashMap<(ChunkId, ProtoItemId), ProtoId>,
 }
 
 #[derive(Debug)]
 pub struct Type {
 	pub name: Sym,
 	pub chunk: ChunkId,
+	pub span: Span,
 	pub ctor_fields: Vec<Param>,
-	pub body_fields: OrderMap<Sym, ExprId>,
+	pub body_fields: OrderMap<Sym, Field>,
 	// Every member reachable on an instance, flattened. Includes what this type
 	// declares, what it inherits as a case variant, and what it acquires from
 	// the protocols it implements.
@@ -61,11 +68,22 @@ pub struct Type {
 	pub variants: Option<Vec<TypeId>>,
 }
 
+// A declared protocol, its members split by whether they are required to be
+// implemented by or provided directly to the implementing type.
 #[derive(Debug)]
 pub struct Proto {
 	pub name: Sym,
 	pub chunk: ChunkId,
-	pub members: HashMap<Sym, ProtoItemId>,
+	pub span: Span,
+	pub required: OrderMap<Sym, ProtoItemId>,
+	pub provided: OrderMap<Sym, ProtoItemId>,
+}
+
+// A body field's initializer. Carries a span for more precise error reporting.
+#[derive(Debug)]
+pub struct Field {
+	pub span: Span,
+	pub init: ExprId,
 }
 
 // The declaration implementing a member. Includes a reference to the
@@ -109,6 +127,11 @@ impl Types {
 		self.type_by_item[&(chunk, item_id)]
 	}
 
+	// Every protocol the package declares, in the order they were described.
+	pub fn proto_ids(&self) -> impl ExactSizeIterator<Item = ProtoId> {
+		(0..self.protos.len() as u32).map(ProtoId)
+	}
+
 	pub fn get_proto(&self, id: ProtoId) -> &Proto {
 		&self.protos[id.index()]
 	}
@@ -118,24 +141,34 @@ impl Types {
 		self.proto_by_item[&(chunk, item_id)]
 	}
 
+	// The protocol a proto item belongs to.
+	pub fn get_proto_by_proto_item(&self, chunk: ChunkId, item_id: ProtoItemId) -> ProtoId {
+		self.proto_by_proto_item[&(chunk, item_id)]
+	}
+
 	fn add_proto(&mut self, chunk: ChunkId, item_id: ModuleItemId, proto: Proto) -> ProtoId {
 		let id = ProtoId(self.protos.len() as u32);
+		for member_item in proto.required.values().chain(proto.provided.values()) {
+			self.proto_by_proto_item.insert((chunk, *member_item), id);
+		}
 		self.protos.push(proto);
 		self.proto_by_item.insert((chunk, item_id), id);
 		id
 	}
 }
 
-// Describe every type and protocol in the package. This must run *after*
-// checking has validated all invariants about conformance, 'impl' resolution,
-// etc.
-pub fn describe(pkg: &Package, mods: &Modules) -> Types {
+// Describe every type and protocol in the package, resolving 'impl' names and
+// deciding conformance as it goes. Unresolved names and conformance failures
+// are reported here rather than assumed impossible.
+pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Error>) {
 	let mut types = Types {
 		types: Vec::new(),
 		protos: Vec::new(),
 		type_by_item: HashMap::new(),
 		proto_by_item: HashMap::new(),
+		proto_by_proto_item: HashMap::new(),
 	};
+	let mut errs = Vec::new();
 
 	// Describe protocols first, package-wide, so a type can implement one
 	// declared in any file.
@@ -144,55 +177,91 @@ pub fn describe(pkg: &Package, mods: &Modules) -> Types {
 		let chunk = pkg.get_chunk(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
-				let desc = describe_proto(chunk, chunk_id, proto);
+				let span = chunk.get_module_item_span(*item_id);
+				let desc = describe_proto(chunk, chunk_id, span, proto);
 				types.add_proto(chunk_id, *item_id, desc);
 			}
 		}
 	}
+	errs.append(&mut check_protos(syms, pkg, &types));
 
 	for module in mods.ids() {
 		let chunk_id = mods.chunk(module);
 		let chunk = pkg.get_chunk(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Type(type_) = chunk.get_module_item(*item_id) {
+				let span = chunk.get_module_item_span(*item_id);
 				let id = describe_type(
-					&mut types, pkg, mods, module, chunk_id, type_, None, None, false,
+					&mut types, syms, pkg, mods, module, chunk_id, span, type_, None, None, false,
+					&mut errs,
 				);
 				types.type_by_item.insert((chunk_id, *item_id), id);
 			}
 		}
 	}
 
-	types
+	errs.append(&mut check_structure(syms, pkg, &types));
+
+	(types, errs)
 }
 
-// Describe a protocol declaration, producing a description which simply names
-// its members, both required and provided.
-fn describe_proto(chunk: &Chunk, chunk_id: ChunkId, proto: &syn::Proto) -> Proto {
-	let mut members = HashMap::new();
+// Describe a protocol declaration, sorting its members into what a type
+// implementing it must declare and what it may inherit as-is.
+fn describe_proto(chunk: &Chunk, chunk_id: ChunkId, span: Span, proto: &syn::Proto) -> Proto {
+	let mut required = OrderMap::new();
+	let mut provided = OrderMap::new();
 	for item_id in &proto.items {
 		let item = chunk.get_proto_item(*item_id);
-		members.insert(item.def.name, *item_id);
+		// A proc is provided if its def block is not empty, otherwise it is
+		// required.
+		if !chunk.get_block(item.def.body).exprs.is_empty() {
+			provided.insert(item.def.name, *item_id);
+		} else {
+			required.insert(item.def.name, *item_id);
+		}
 	}
 	Proto {
 		name: proto.name,
 		chunk: chunk_id,
-		members,
+		span,
+		required,
+		provided,
 	}
 }
 
+// A protocol must either provide members or only require them: a protocol
+// that provides members but requires none has nothing a type must declare to
+// implement it.
+fn check_protos(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> {
+	let mut errs = Vec::new();
+	for id in types.proto_ids() {
+		let proto = types.get_proto(id);
+		if !proto.provided.is_empty() && proto.required.is_empty() {
+			errs.push(Error::ProvidedWithoutRequired(
+				pkg.loc(proto.span),
+				syms.resolve(proto.name).to_string(),
+			));
+		}
+	}
+	errs
+}
+
 // Describe a type declaration, producing a description that reduces all later
-// member resolution to a single table lookup.
+// member resolution to a single table lookup. Resolve the type's 'impl' names
+// and decide conformance against each.
 fn describe_type(
 	types: &mut Types,
+	syms: &Interner,
 	pkg: &Package,
 	mods: &Modules,
 	module: ModuleId,
 	chunk_id: ChunkId,
+	span: Span,
 	type_: &syn::Type,
 	inherited: Option<&Inherited>,
 	enclosing: Option<TypeId>,
 	is_case: bool,
+	errs: &mut Vec<Error>,
 ) -> TypeId {
 	let chunk = pkg.get_chunk(chunk_id);
 	// Claim the id before the body is walked so that a nested type can name the
@@ -201,6 +270,7 @@ fn describe_type(
 	types.types.push(Type {
 		name: type_.name,
 		chunk: chunk_id,
+		span,
 		ctor_fields: type_.params.to_vec(),
 		body_fields: OrderMap::new(),
 		members: HashMap::new(),
@@ -212,8 +282,14 @@ fn describe_type(
 
 	let mut body_fields = OrderMap::new();
 	let mut statics = HashMap::new();
+	// Every static's span, case and inner types included, kept only to report
+	// where a member acquired from a protocol collides with one. The 'statics'
+	// map above cannot serve this because a case/inner type's 'Static::Type'
+	// is not known until it is described, below.
+	let mut static_spans: HashMap<Sym, Span> = HashMap::new();
 	let mut declared = HashMap::new();
 	for item_id in &type_.items {
+		let item_span = chunk.get_type_item_span(*item_id);
 		match chunk.get_type_item(*item_id) {
 			// Ignore cases and inner types here because they are described below.
 			//
@@ -222,31 +298,57 @@ fn describe_type(
 			//
 			// An inner type inherits nothing but describing here would
 			// interleave unrelated work.
-			TypeItem::Case(..) => {}
-			TypeItem::Field(field) => {
-				body_fields.insert(field.name, field.init);
+			TypeItem::Case(variant) => {
+				static_spans.insert(variant.name, item_span);
 			}
-			TypeItem::Type(..) => {}
+			TypeItem::Field(field) => {
+				body_fields.insert(
+					field.name,
+					Field {
+						span: item_span,
+						init: field.init,
+					},
+				);
+			}
+			TypeItem::Type(inner) => {
+				static_spans.insert(inner.name, item_span);
+			}
 			TypeItem::Method(syn::Method::Instance(def)) => {
 				declared.insert(def.name, MemberSite::Declared(chunk_id, *item_id));
 			}
 			TypeItem::Method(syn::Method::Static(def)) => {
 				statics.insert(def.name, Static::Proc(chunk_id, *item_id));
+				static_spans.insert(def.name, item_span);
 			}
 		}
 	}
 
-	let impls = resolve_impls(types, mods, module, type_);
-	let acquired = acquired_members(types, pkg, &impls);
+	let impls = resolve_impls(types, syms, pkg, mods, module, span, type_, errs);
+	let acquired = acquire_members(
+		types,
+		syms,
+		pkg,
+		type_.name,
+		span,
+		&declared,
+		inherited,
+		&static_spans,
+		&impls,
+		errs,
+	);
 
-	// Statically compute the members by overwriting in the inverse order of
-	// their precedence.
+	// Union the four tiers by overwriting in the inverse order of their
+	// precedence.
 	//
 	//   own declared > parent declared > own acquired > parent acquired
 	//
-	// Declared beats acquired at both levels, which is what lets a type
-	// override a protocol. Notably, a parent can declare a method to override a
-	// method that a variant acquires from a protocol it implements.
+	// An own declared method always overrides a parent's declared method, and
+	// own acquired overrides a parent's acquired one.
+	//
+	// The four merges below account for these, but they also do redundant work:
+	// declared overriddes the acquisitions even though that is already
+	// accounted for by acquire_members. They stay as-is so that 'members' reads
+	// clearly as "these four tiers, most specific wins".
 	let mut members = HashMap::new();
 	if let Some(inherited) = inherited {
 		members.extend(&inherited.acquired);
@@ -263,18 +365,22 @@ fn describe_type(
 	};
 	let mut variants = Vec::new();
 	for item_id in &type_.items {
+		let item_span = chunk.get_type_item_span(*item_id);
 		match chunk.get_type_item(*item_id) {
 			TypeItem::Case(variant) => {
 				let variant_id = describe_type(
 					types,
+					syms,
 					pkg,
 					mods,
 					module,
 					chunk_id,
+					item_span,
 					variant,
 					Some(&own),
 					Some(id),
 					true,
+					errs,
 				);
 				statics.insert(variant.name, Static::Type(variant_id));
 				variants.push(variant_id);
@@ -285,14 +391,17 @@ fn describe_type(
 			TypeItem::Type(inner) => {
 				let inner_id = describe_type(
 					types,
+					syms,
 					pkg,
 					mods,
 					module,
 					chunk_id,
+					item_span,
 					inner,
 					None,
 					Some(id),
 					false,
+					errs,
 				);
 				statics.insert(inner.name, Static::Type(inner_id));
 			}
@@ -312,45 +421,250 @@ fn describe_type(
 	id
 }
 
+// Check that the structure of a type is valid. It must not have fields if it is
+// a case parent, and it must declare params in the standard
+// required-before-optional order.
+fn check_structure(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> {
+	let mut errs = Vec::new();
+	for id in types.ids() {
+		let type_ = types.get_type(id);
+
+		if let Err(err) =
+			ensure_required_precede_optional(syms, pkg, type_.span, &type_.ctor_fields)
+		{
+			errs.push(err);
+		}
+
+		let has_cases = if let Some(variants) = &type_.variants
+			&& !variants.is_empty()
+		{
+			true
+		} else {
+			false
+		};
+		if !has_cases {
+			continue;
+		}
+		if !type_.ctor_fields.is_empty() {
+			errs.push(Error::ParamsOnCaseParent(
+				pkg.loc(type_.span),
+				syms.resolve(type_.name).to_string(),
+			));
+		}
+		if let Some((name, field)) = type_.body_fields.iter().next() {
+			errs.push(Error::FieldOnCaseParent(
+				pkg.loc(field.span),
+				syms.resolve(type_.name).to_string(),
+				syms.resolve(*name).to_string(),
+			));
+		}
+	}
+	errs
+}
+
 // Resolve the protocols an 'impl' line names against the symbols that the
-// declaring file binds.
+// declaring file binds. A name that fails to resolve contributes no 'ProtoId'.
 fn resolve_impls(
 	types: &Types,
+	syms: &Interner,
+	pkg: &Package,
 	mods: &Modules,
 	module: ModuleId,
+	span: Span,
 	type_: &syn::Type,
+	errs: &mut Vec<Error>,
 ) -> Vec<ProtoId> {
 	let mut impls = Vec::with_capacity(type_.impls.len());
 	for impl_name in &type_.impls {
-		let Some(Binding::Member(owner, Member::Proto(item_id))) = mods.binding(module, *impl_name)
-		else {
-			panic!()
+		let (owner, member) = match mods.binding(module, *impl_name) {
+			Some(Binding::Member(owner, member)) => (owner, member),
+			// An imported module is a name the file knows, but it is not a
+			// protocol.
+			Some(Binding::Module(_)) => {
+				errs.push(Error::NotAProtocol(
+					pkg.loc(span),
+					syms.resolve(*impl_name).to_string(),
+				));
+				continue;
+			}
+			None => {
+				errs.push(Error::UnknownProtocol(
+					pkg.loc(span),
+					syms.resolve(*impl_name).to_string(),
+				));
+				continue;
+			}
 		};
-		impls.push(types.proto_by_item[&(mods.chunk(owner), item_id)]);
+		let item_id = match member {
+			Member::Proto(item_id) => item_id,
+			Member::Type(_) | Member::Proc(_) | Member::Var(_) | Member::Child(_) => {
+				errs.push(Error::NotAProtocol(
+					pkg.loc(span),
+					syms.resolve(*impl_name).to_string(),
+				));
+				continue;
+			}
+		};
+		impls.push(types.get_proto_by_item(mods.chunk(owner), item_id));
 	}
 	impls
 }
 
-// Determine every member that *could* be acquired by a type which implements
-// the given protocols. If the type declares its own version of any of these
-// members, it will be overridden later. Two protocols never collide here,
-// because collision checking happened earlier.
-//
-// A required member is not provided and so is never acquired; thus it is not
-// included in this map.
-fn acquired_members(types: &Types, pkg: &Package, impls: &[ProtoId]) -> HashMap<Sym, MemberSite> {
-	let mut acquired = HashMap::new();
+// Determine every member that a type acquires from the protocols it implements,
+// deciding conformance against each protocol's members as it goes. Flattened to
+// just the *actual* protocol provisions, because every conformance error is a
+// statement about what the flattening would otherwise produce.
+fn acquire_members(
+	types: &Types,
+	syms: &Interner,
+	pkg: &Package,
+	type_name: Sym,
+	type_span: Span,
+	declared: &HashMap<Sym, MemberSite>,
+	inherited: Option<&Inherited>,
+	static_spans: &HashMap<Sym, Span>,
+	impls: &[ProtoId],
+	errs: &mut Vec<Error>,
+) -> HashMap<Sym, MemberSite> {
+	let mut acquired: HashMap<Sym, MemberSite> = HashMap::new();
+	// The protocol each acquired member came from, kept only to name both
+	// sides of a 'ProtocolConflict'.
+	let mut from: HashMap<Sym, Sym> = HashMap::new();
 	for proto_id in impls {
 		let proto = types.get_proto(*proto_id);
 		let proto_chunk = pkg.get_chunk(proto.chunk);
-		for (member, item_id) in &proto.members {
-			if !is_provided(proto_chunk, &proto_chunk.get_proto_item(*item_id).def) {
+		// Which map a member came from already answers whether it is provided,
+		// so nothing here re-asks the body the way a lookup against
+		// 'Proto.members' used to.
+		let required = proto
+			.required
+			.iter()
+			.map(|(member, item)| (member, item, false));
+		let provided = proto
+			.provided
+			.iter()
+			.map(|(member, item)| (member, item, true));
+		for (member, item_id, provided) in required.chain(provided) {
+			let item = proto_chunk.get_proto_item(*item_id);
+			let def = &item.def;
+
+			// A required member is satisfied, or a provided one overridden, by
+			// either the type's own declaration or one it inherits from a case
+			// parent. A parent's declared method outranks a member the variant
+			// would otherwise acquire from its own protocol.
+			let own = if let Some(declared) = declared.get(member) {
+				Some(declared)
+			} else if let Some(inherited) = inherited
+				&& let Some(declared) = inherited.declared.get(member)
+			{
+				Some(declared)
+			} else {
+				None
+			};
+			if let Some(MemberSite::Declared(site_chunk, site_item)) = own {
+				let site_chunk = pkg.get_chunk(*site_chunk);
+				let TypeItem::Method(syn::Method::Instance(method_def)) =
+					site_chunk.get_type_item(*site_item)
+				else {
+					panic!()
+				};
+				if !signatures_agree(proto_chunk, site_chunk, &def.params, &method_def.params) {
+					errs.push(Error::SignatureMismatch(
+						pkg.loc(site_chunk.get_type_item_span(*site_item)),
+						syms.resolve(type_name).to_string(),
+						syms.resolve(proto.name).to_string(),
+						syms.resolve(*member).to_string(),
+					));
+				}
 				continue;
 			}
+
+			if !provided {
+				errs.push(Error::MissingMember(
+					pkg.loc(type_span),
+					syms.resolve(type_name).to_string(),
+					syms.resolve(proto.name).to_string(),
+					syms.resolve(*member).to_string(),
+				));
+				continue;
+			}
+
+			if let Some(static_span) = static_spans.get(member) {
+				errs.push(Error::MemberCollision(
+					pkg.loc(*static_span),
+					syms.resolve(type_name).to_string(),
+					syms.resolve(proto.name).to_string(),
+					syms.resolve(*member).to_string(),
+				));
+				continue;
+			}
+
+			if let Some(first) = from.insert(*member, proto.name) {
+				errs.push(Error::ProtocolConflict(
+					pkg.loc(type_span),
+					syms.resolve(first).to_string(),
+					syms.resolve(proto.name).to_string(),
+					syms.resolve(*member).to_string(),
+				));
+				continue;
+			}
+
 			acquired.insert(*member, MemberSite::Provided(proto.chunk, *item_id));
 		}
 	}
 	acquired
+}
+
+fn signatures_agree(
+	proto_chunk: &Chunk,
+	type_chunk: &Chunk,
+	proto: &[Param],
+	typ: &[Param],
+) -> bool {
+	if proto.len() != typ.len() {
+		return false;
+	}
+	for (proto_param, param) in proto.iter().zip(typ) {
+		if proto_param.name != param.name {
+			return false;
+		}
+		if !defaults_agree(proto_chunk, type_chunk, proto_param.default, param.default) {
+			return false;
+		}
+	}
+	true
+}
+
+fn defaults_agree(
+	proto_chunk: &Chunk,
+	type_chunk: &Chunk,
+	proto: Option<ExprId>,
+	typ: Option<ExprId>,
+) -> bool {
+	let (proto, typ) = match (proto, typ) {
+		(Some(proto), Some(typ)) => (proto, typ),
+		(None, None) => return true,
+		_ => return false,
+	};
+	// Only literals are compared; anything else is taken to agree until there
+	// is a structural comparison over the arena.
+	match (proto_chunk.get_expr(proto), type_chunk.get_expr(typ)) {
+		(Expr::Lit(proto), Expr::Lit(typ)) => lits_agree(proto, typ),
+		_ => true,
+	}
+}
+
+fn lits_agree(proto: &Lit, typ: &Lit) -> bool {
+	match (proto, typ) {
+		(Lit::Str(proto), Lit::Str(typ)) => proto == typ,
+		(Lit::Char(proto), Lit::Char(typ)) => proto == typ,
+		(Lit::Num(proto), Lit::Num(typ)) => proto == typ,
+		(Lit::Bool(proto), Lit::Bool(typ)) => proto == typ,
+		(Lit::List(..), _) | (_, Lit::List(..)) => true,
+		(Lit::Dict(..), _) | (_, Lit::Dict(..)) => true,
+		(Lit::Nil, Lit::Nil) => true,
+		_ => false,
+	}
 }
 
 #[cfg(test)]

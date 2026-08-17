@@ -347,13 +347,13 @@ impl<'syms, 'pkg, 'descs> Interpreter<'syms, 'pkg, 'descs> {
 								let saved_scope = self.scope.clone();
 								let saved_receiver = self.receiver.clone();
 								self.receiver = Some(Val::Obj(inst_rf.clone()));
-								for (name, init_id) in body_fields {
+								for (name, field) in body_fields {
 									self.scope = Rc::new(RefCell::new(Scope {
 										locals: FxHashMap::default(),
 										outer: Some(type_scope.clone()),
 										tier: Tier::Local,
 									}));
-									let val = match self.eval_expr(type_chunk, *init_id) {
+									let val = match self.eval_expr(type_chunk, field.init) {
 										Ok(val) => val,
 										Err(signal) => {
 											self.scope = saved_scope;

@@ -2,7 +2,7 @@ pub mod load;
 pub mod modules;
 pub mod types;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
@@ -11,8 +11,8 @@ use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Span};
 use crate::syn::{
-	self, BlockId, Builtin, Chunk, ChunkId, Def, Expr, ExprId, Lit, Member, Method, ModuleItem,
-	Param, Place, TypeItem, TypeItemId,
+	BlockId, Builtin, Chunk, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param, Place,
+	TypeItem,
 };
 
 #[derive(Debug)]
@@ -169,11 +169,16 @@ pub fn check(
 ) -> Result<(Modules, Types), Vec<Error>> {
 	let mods = modules::check(syms, pkg, dirs)?;
 
+	// Describing resolves 'impl' names and decides conformance itself, so it
+	// tolerates the package not yet being known valid; it runs before the
+	// chunk walk rather than after, and its errors precede that walk's in the
+	// bundle, mirroring how module errors already precede every chunk error.
+	let (types, mut errs) = types::check(syms, pkg, &mods);
+
 	// Every chunk is a module by now, module checking having failed otherwise,
 	// and the modules are held in chunk order, so this reports in file order.
-	let mut errs = Vec::new();
 	for id in mods.ids() {
-		if let Err(mut chunk_errs) = check_chunk(syms, pkg, &mods, id) {
+		if let Err(mut chunk_errs) = check_chunk(syms, pkg, &mods, &types, id) {
 			errs.append(&mut chunk_errs);
 		}
 	}
@@ -182,9 +187,6 @@ pub fn check(
 		return Err(errs);
 	}
 
-	// Describing runs only once every check has passed, so it can read the
-	// package as valid rather than re-deciding what checking already decided.
-	let types = types::describe(pkg, &mods);
 	Ok((mods, types))
 }
 
@@ -192,9 +194,11 @@ fn check_chunk(
 	syms: &mut Interner,
 	pkg: &Package,
 	mods: &Modules,
+	types: &Types,
 	module: ModuleId,
 ) -> Result<(), Vec<Error>> {
-	let chunk = pkg.get_chunk(mods.chunk(module));
+	let chunk_id = mods.chunk(module);
+	let chunk = pkg.get_chunk(chunk_id);
 	let mut errs = Vec::new();
 
 	let mut prelude = HashSet::new();
@@ -223,16 +227,18 @@ fn check_chunk(
 		return Err(errs);
 	}
 
+	// 'Def' has no expression-level variant so every def in the chunk is
+	// reachable as a 'ModuleItem', a 'TypeItem::Method' or a 'ProtoItem'. A
+	// flat walk over the three arenas finds all of them, once each, with no
+	// structure to descend, however deeply the type declaring one is nested.
 	for item_id in &chunk.top {
 		let span = chunk.get_module_item_span(*item_id);
 		let result = match chunk.get_module_item(*item_id) {
 			ModuleItem::Module(_) => Ok(()),
 			ModuleItem::Import(_) => Ok(()),
 			ModuleItem::Export(_) => Ok(()),
-			ModuleItem::Type(type_) => {
-				check_type(syms, chunk, pkg, span, type_, None, mods, module)
-			}
-			ModuleItem::Proto(proto) => check_proto(syms, chunk, pkg, span, proto),
+			ModuleItem::Type(_) => Ok(()),
+			ModuleItem::Proto(_) => Ok(()),
 			ModuleItem::Def(def) => check_def(syms, chunk, pkg, span, def),
 			ModuleItem::Expr(expr_id) => check_expr(chunk, pkg, *expr_id, 0),
 		};
@@ -241,115 +247,40 @@ fn check_chunk(
 		}
 	}
 
+	for item_id in chunk.type_item_ids() {
+		let def = match chunk.get_type_item(item_id) {
+			TypeItem::Method(Method::Instance(def)) => def,
+			TypeItem::Method(Method::Static(def)) => def,
+			TypeItem::Case(..) | TypeItem::Field(..) | TypeItem::Type(..) => continue,
+		};
+		let span = chunk.get_type_item_span(item_id);
+		if let Err(err) = check_def(syms, chunk, pkg, span, def) {
+			errs.push(err);
+		}
+	}
+
+	// Check that none of the provided members violate standard block-level
+	// invariants or reach the implementing instance outside of the protocol's
+	// declared members.
+	for item_id in chunk.proto_item_ids() {
+		let item_span = chunk.get_proto_item_span(item_id);
+		let item = chunk.get_proto_item(item_id);
+		let def = &item.def;
+		if let Err(err) = check_def(syms, chunk, pkg, item_span, def) {
+			errs.push(err);
+			continue;
+		}
+		let proto_id = types.get_proto_by_proto_item(chunk_id, item_id);
+		let desc = types.get_proto(proto_id);
+		if desc.provided.contains_key(&def.name)
+			&& let Err(err) = check_reach_block(syms, chunk, pkg, def.body, desc.name, desc)
+		{
+			errs.push(err);
+		}
+	}
+
 	if !errs.is_empty() {
 		return Err(errs);
-	}
-
-	Ok(())
-}
-
-fn check_type(
-	syms: &Interner,
-	chunk: &Chunk,
-	pkg: &Package,
-	span: Span,
-	type_: &syn::Type,
-	inherited: Option<&HashMap<Sym, (Span, &Def)>>,
-	mods: &Modules,
-	module: ModuleId,
-) -> Result<(), Error> {
-	ensure_required_precede_defaults(syms, pkg, span, &type_.params)?;
-
-	// A case type's parent cannot have any fields.
-	let has_cases = type_
-		.items
-		.iter()
-		.any(|item_id| match chunk.get_type_item(*item_id) {
-			TypeItem::Case(..) => true,
-			_ => false,
-		});
-	if has_cases && !type_.params.is_empty() {
-		let loc = pkg.loc(span);
-		return Err(Error::ParamsOnCaseParent(
-			loc,
-			syms.resolve(type_.name).to_string(),
-		));
-	}
-
-	let methods = collect_methods(chunk, &type_.items, inherited);
-	check_conformance(syms, chunk, pkg, span, type_, &methods, mods, module)?;
-
-	for item_id in &type_.items {
-		let span = chunk.get_type_item_span(*item_id);
-		match chunk.get_type_item(*item_id) {
-			TypeItem::Case(variant) => check_type(
-				syms,
-				chunk,
-				pkg,
-				span,
-				variant,
-				Some(&methods),
-				mods,
-				module,
-			)?,
-			TypeItem::Field(field) => {
-				if has_cases {
-					let loc = pkg.loc(span);
-					return Err(Error::FieldOnCaseParent(
-						loc,
-						syms.resolve(type_.name).to_string(),
-						syms.resolve(field.name).to_string(),
-					));
-				}
-			}
-			TypeItem::Type(inner_type) => {
-				check_type(syms, chunk, pkg, span, inner_type, None, mods, module)?
-			}
-			TypeItem::Method(Method::Instance(def)) => {
-				check_def(syms, chunk, pkg, span, def)?;
-			}
-			TypeItem::Method(Method::Static(def)) => {
-				check_def(syms, chunk, pkg, span, def)?;
-			}
-		}
-	}
-	Ok(())
-}
-
-fn check_proto(
-	syms: &Interner,
-	chunk: &Chunk,
-	pkg: &Package,
-	span: Span,
-	proto: &syn::Proto,
-) -> Result<(), Error> {
-	let mut members = HashSet::new();
-	for item_id in &proto.items {
-		let item = chunk.get_proto_item(*item_id);
-		members.insert(item.def.name);
-	}
-	let mut requires = false;
-	let mut provides = false;
-	for item_id in &proto.items {
-		let item_span = chunk.get_proto_item_span(*item_id);
-		let item = chunk.get_proto_item(*item_id);
-		let def = &item.def;
-		check_def(syms, chunk, pkg, item_span, def)?;
-		if is_provided(chunk, def) {
-			provides = true;
-			check_reach_block(syms, chunk, pkg, def.body, proto.name, &members)?;
-		} else {
-			requires = true;
-		}
-	}
-
-	// A protocol must either provide a method or only require methods.
-	if provides && !requires {
-		let loc = pkg.loc(span);
-		return Err(Error::ProvidedWithoutRequired(
-			loc,
-			syms.resolve(proto.name).to_string(),
-		));
 	}
 
 	Ok(())
@@ -363,11 +294,11 @@ fn check_reach_block(
 	pkg: &Package,
 	block_id: BlockId,
 	proto: Sym,
-	members: &HashSet<Sym>,
+	desc: &types::Proto,
 ) -> Result<(), Error> {
 	let block = chunk.get_block(block_id);
 	for expr_id in &block.exprs {
-		check_reach_expr(syms, chunk, pkg, *expr_id, proto, members)?;
+		check_reach_expr(syms, chunk, pkg, *expr_id, proto, desc)?;
 	}
 	Ok(())
 }
@@ -378,92 +309,92 @@ fn check_reach_expr(
 	pkg: &Package,
 	expr_id: ExprId,
 	proto: Sym,
-	members: &HashSet<Sym>,
+	desc: &types::Proto,
 ) -> Result<(), Error> {
 	match chunk.get_expr(expr_id) {
 		Expr::Each(each) => {
-			check_reach_expr(syms, chunk, pkg, each.iter, proto, members)?;
-			check_reach_block(syms, chunk, pkg, each.body, proto, members)
+			check_reach_expr(syms, chunk, pkg, each.iter, proto, desc)?;
+			check_reach_block(syms, chunk, pkg, each.body, proto, desc)
 		}
-		Expr::Loop(loop_) => check_reach_block(syms, chunk, pkg, loop_.body, proto, members),
+		Expr::Loop(loop_) => check_reach_block(syms, chunk, pkg, loop_.body, proto, desc),
 		Expr::When(when) => {
-			check_reach_expr(syms, chunk, pkg, when.cond, proto, members)?;
-			check_reach_block(syms, chunk, pkg, when.then_branch, proto, members)?;
+			check_reach_expr(syms, chunk, pkg, when.cond, proto, desc)?;
+			check_reach_block(syms, chunk, pkg, when.then_branch, proto, desc)?;
 			if let Some(else_branch) = when.else_branch {
-				check_reach_block(syms, chunk, pkg, else_branch, proto, members)?;
+				check_reach_block(syms, chunk, pkg, else_branch, proto, desc)?;
 			}
 			Ok(())
 		}
 		Expr::Match(match_) => {
-			check_reach_expr(syms, chunk, pkg, match_.scrutinee, proto, members)?;
+			check_reach_expr(syms, chunk, pkg, match_.scrutinee, proto, desc)?;
 			for arm in &match_.arms {
-				check_reach_expr(syms, chunk, pkg, arm.path, proto, members)?;
-				check_reach_block(syms, chunk, pkg, arm.body, proto, members)?;
+				check_reach_expr(syms, chunk, pkg, arm.path, proto, desc)?;
+				check_reach_block(syms, chunk, pkg, arm.body, proto, desc)?;
 			}
 			if let Some(else_branch) = match_.else_branch {
-				check_reach_block(syms, chunk, pkg, else_branch, proto, members)?;
+				check_reach_block(syms, chunk, pkg, else_branch, proto, desc)?;
 			}
 			Ok(())
 		}
 		Expr::Return(return_) => match return_.val {
-			Some(val) => check_reach_expr(syms, chunk, pkg, val, proto, members),
+			Some(val) => check_reach_expr(syms, chunk, pkg, val, proto, desc),
 			None => Ok(()),
 		},
 		Expr::Break(break_) => match break_.val {
-			Some(val) => check_reach_expr(syms, chunk, pkg, val, proto, members),
+			Some(val) => check_reach_expr(syms, chunk, pkg, val, proto, desc),
 			None => Ok(()),
 		},
 		Expr::Self_ => Ok(()),
 		Expr::Call(call) => {
-			check_reach_expr(syms, chunk, pkg, call.callee, proto, members)?;
+			check_reach_expr(syms, chunk, pkg, call.callee, proto, desc)?;
 			for arg in &call.args {
-				check_reach_expr(syms, chunk, pkg, arg.val, proto, members)?;
+				check_reach_expr(syms, chunk, pkg, arg.val, proto, desc)?;
 			}
 			Ok(())
 		}
 		Expr::Member(member) => {
-			ensure_reaches_member(syms, chunk, pkg, expr_id, proto, members, member)?;
-			check_reach_expr(syms, chunk, pkg, member.receiver, proto, members)
+			ensure_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
+			check_reach_expr(syms, chunk, pkg, member.receiver, proto, desc)
 		}
 		Expr::Access(access) => {
-			check_reach_expr(syms, chunk, pkg, access.receiver, proto, members)?;
-			check_reach_expr(syms, chunk, pkg, access.key, proto, members)
+			check_reach_expr(syms, chunk, pkg, access.receiver, proto, desc)?;
+			check_reach_expr(syms, chunk, pkg, access.key, proto, desc)
 		}
-		Expr::Mention(mention) => check_reach_expr(syms, chunk, pkg, mention.val, proto, members),
+		Expr::Mention(mention) => check_reach_expr(syms, chunk, pkg, mention.val, proto, desc),
 		Expr::Assign(assign) => {
 			match &assign.place {
 				Place::Name(_) => {}
 				Place::Member(member) => {
-					ensure_reaches_member(syms, chunk, pkg, expr_id, proto, members, member)?;
-					check_reach_expr(syms, chunk, pkg, member.receiver, proto, members)?;
+					ensure_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
+					check_reach_expr(syms, chunk, pkg, member.receiver, proto, desc)?;
 				}
 				Place::Access(access) => {
-					check_reach_expr(syms, chunk, pkg, access.receiver, proto, members)?;
-					check_reach_expr(syms, chunk, pkg, access.key, proto, members)?;
+					check_reach_expr(syms, chunk, pkg, access.receiver, proto, desc)?;
+					check_reach_expr(syms, chunk, pkg, access.key, proto, desc)?;
 				}
 			}
-			check_reach_expr(syms, chunk, pkg, assign.val, proto, members)
+			check_reach_expr(syms, chunk, pkg, assign.val, proto, desc)
 		}
 		Expr::Binary(binary) => {
-			check_reach_expr(syms, chunk, pkg, binary.lhs, proto, members)?;
-			check_reach_expr(syms, chunk, pkg, binary.rhs, proto, members)
+			check_reach_expr(syms, chunk, pkg, binary.lhs, proto, desc)?;
+			check_reach_expr(syms, chunk, pkg, binary.rhs, proto, desc)
 		}
-		Expr::Unary(unary) => check_reach_expr(syms, chunk, pkg, unary.val, proto, members),
+		Expr::Unary(unary) => check_reach_expr(syms, chunk, pkg, unary.val, proto, desc),
 		Expr::Name(_) => Ok(()),
 		Expr::Builtin(Builtin::Print { val }) => {
-			check_reach_expr(syms, chunk, pkg, *val, proto, members)
+			check_reach_expr(syms, chunk, pkg, *val, proto, desc)
 		}
 		Expr::Lit(lit) => match lit {
 			Lit::List(items) => {
 				for item in items {
-					check_reach_expr(syms, chunk, pkg, *item, proto, members)?;
+					check_reach_expr(syms, chunk, pkg, *item, proto, desc)?;
 				}
 				Ok(())
 			}
 			Lit::Dict(pairs) => {
 				for (key, val) in pairs {
-					check_reach_expr(syms, chunk, pkg, *key, proto, members)?;
-					check_reach_expr(syms, chunk, pkg, *val, proto, members)?;
+					check_reach_expr(syms, chunk, pkg, *key, proto, desc)?;
+					check_reach_expr(syms, chunk, pkg, *val, proto, desc)?;
 				}
 				Ok(())
 			}
@@ -478,11 +409,11 @@ fn ensure_reaches_member(
 	pkg: &Package,
 	expr_id: ExprId,
 	proto: Sym,
-	members: &HashSet<Sym>,
+	desc: &types::Proto,
 	member: &Member,
 ) -> Result<(), Error> {
 	if let Expr::Self_ = chunk.get_expr(member.receiver) {
-		if !members.contains(&member.name) {
+		if !desc.required.contains_key(&member.name) && !desc.provided.contains_key(&member.name) {
 			let span = chunk.get_expr_span(expr_id);
 			return Err(Error::ProtocolReach(
 				pkg.loc(span),
@@ -494,209 +425,6 @@ fn ensure_reaches_member(
 	Ok(())
 }
 
-fn is_provided(chunk: &Chunk, def: &Def) -> bool {
-	let block = chunk.get_block(def.body);
-	!block.exprs.is_empty()
-}
-
-// The protocol a type names in its 'impl' line, read from the module the type
-// was declared in: the name is bound in that module, by its own declarations or
-// by one of its imports, and it names a protocol rather than some other member.
-// The protocol comes back with the chunk that holds it, which is the importing
-// module's only when the protocol was declared alongside the type.
-fn resolve_proto<'pkg>(
-	syms: &Interner,
-	pkg: &'pkg Package,
-	span: Span,
-	mods: &Modules,
-	module: ModuleId,
-	name: Sym,
-) -> Result<(ChunkId, &'pkg syn::Proto), Error> {
-	let (owner, member) = match mods.binding(module, name) {
-		Some(modules::Binding::Member(owner, member)) => (owner, member),
-		// An imported module is a name the file knows, and so is not unknown,
-		// however little it resembles a protocol.
-		Some(modules::Binding::Module(_)) => {
-			let loc = pkg.loc(span);
-			return Err(Error::NotAProtocol(loc, syms.resolve(name).to_string()));
-		}
-		None => {
-			let loc = pkg.loc(span);
-			return Err(Error::UnknownProtocol(loc, syms.resolve(name).to_string()));
-		}
-	};
-	let item_id = match member {
-		modules::Member::Proto(item_id) => item_id,
-		modules::Member::Type(_)
-		| modules::Member::Proc(_)
-		| modules::Member::Var(_)
-		| modules::Member::Child(_) => {
-			let loc = pkg.loc(span);
-			return Err(Error::NotAProtocol(loc, syms.resolve(name).to_string()));
-		}
-	};
-	let chunk_id = mods.chunk(owner);
-	let ModuleItem::Proto(proto) = pkg.get_chunk(chunk_id).get_module_item(item_id) else {
-		panic!();
-	};
-	Ok((chunk_id, proto))
-}
-
-fn check_conformance(
-	syms: &Interner,
-	chunk: &Chunk,
-	pkg: &Package,
-	span: Span,
-	type_: &syn::Type,
-	methods: &HashMap<Sym, (Span, &Def)>,
-	mods: &Modules,
-	module: ModuleId,
-) -> Result<(), Error> {
-	if type_.impls.is_empty() {
-		return Ok(());
-	}
-	let statics = collect_statics(chunk, &type_.items);
-	// Provided members this type acquires, against the protocol each came from.
-	let mut acquired: HashMap<Sym, Sym> = HashMap::new();
-	for impl_name in &type_.impls {
-		let (proto_chunk_id, proto) = resolve_proto(syms, pkg, span, mods, module, *impl_name)?;
-		// A protocol need not share a chunk with the type implementing it, so
-		// its member ids are read through its own arena and never this type's.
-		let proto_chunk = pkg.get_chunk(proto_chunk_id);
-		for member_id in &proto.items {
-			let item = proto_chunk.get_proto_item(*member_id);
-			let def = &item.def;
-			let member = &def.name;
-			if let Some((method_span, method_def)) = methods.get(member) {
-				if !signatures_agree(proto_chunk, chunk, &def.params, &method_def.params) {
-					let loc = pkg.loc(*method_span);
-					return Err(Error::SignatureMismatch(
-						loc,
-						syms.resolve(type_.name).to_string(),
-						syms.resolve(proto.name).to_string(),
-						syms.resolve(*member).to_string(),
-					));
-				}
-				continue;
-			}
-			if !is_provided(proto_chunk, def) {
-				let loc = pkg.loc(span);
-				return Err(Error::MissingMember(
-					loc,
-					syms.resolve(type_.name).to_string(),
-					syms.resolve(proto.name).to_string(),
-					syms.resolve(*member).to_string(),
-				));
-			}
-			if let Some(static_span) = statics.get(member) {
-				let loc = pkg.loc(*static_span);
-				return Err(Error::MemberCollision(
-					loc,
-					syms.resolve(type_.name).to_string(),
-					syms.resolve(proto.name).to_string(),
-					syms.resolve(*member).to_string(),
-				));
-			}
-			if let Some(first) = acquired.insert(*member, proto.name) {
-				let loc = pkg.loc(span);
-				return Err(Error::ProtocolConflict(
-					loc,
-					syms.resolve(first).to_string(),
-					syms.resolve(proto.name).to_string(),
-					syms.resolve(*member).to_string(),
-				));
-			}
-		}
-	}
-	Ok(())
-}
-
-fn collect_methods<'chunk>(
-	chunk: &'chunk Chunk,
-	items: &[TypeItemId],
-	inherited: Option<&HashMap<Sym, (Span, &'chunk Def)>>,
-) -> HashMap<Sym, (Span, &'chunk Def)> {
-	let mut methods = match inherited {
-		Some(inherited) => inherited.clone(),
-		None => HashMap::new(),
-	};
-	for item_id in items {
-		let span = chunk.get_type_item_span(*item_id);
-		if let TypeItem::Method(Method::Instance(def)) = chunk.get_type_item(*item_id) {
-			methods.insert(def.name, (span, def));
-		}
-	}
-	methods
-}
-
-fn collect_statics(chunk: &Chunk, items: &[TypeItemId]) -> HashMap<Sym, Span> {
-	let mut statics = HashMap::new();
-	for item_id in items {
-		let span = chunk.get_type_item_span(*item_id);
-		let name = match chunk.get_type_item(*item_id) {
-			TypeItem::Case(type_) => type_.name,
-			TypeItem::Field(..) => continue,
-			TypeItem::Type(type_) => type_.name,
-			TypeItem::Method(Method::Instance(..)) => continue,
-			TypeItem::Method(Method::Static(def)) => def.name,
-		};
-		statics.insert(name, span);
-	}
-	statics
-}
-
-fn signatures_agree(
-	proto_chunk: &Chunk,
-	type_chunk: &Chunk,
-	proto: &[Param],
-	typ: &[Param],
-) -> bool {
-	if proto.len() != typ.len() {
-		return false;
-	}
-	for (proto_param, param) in proto.iter().zip(typ) {
-		if proto_param.name != param.name {
-			return false;
-		}
-		if !defaults_agree(proto_chunk, type_chunk, proto_param.default, param.default) {
-			return false;
-		}
-	}
-	true
-}
-
-fn defaults_agree(
-	proto_chunk: &Chunk,
-	type_chunk: &Chunk,
-	proto: Option<ExprId>,
-	typ: Option<ExprId>,
-) -> bool {
-	let (proto, typ) = match (proto, typ) {
-		(Some(proto), Some(typ)) => (proto, typ),
-		(None, None) => return true,
-		_ => return false,
-	};
-	// Only literals are compared; anything else is taken to agree until there
-	// is a structural comparison over the arena.
-	match (proto_chunk.get_expr(proto), type_chunk.get_expr(typ)) {
-		(Expr::Lit(proto), Expr::Lit(typ)) => lits_agree(proto, typ),
-		_ => true,
-	}
-}
-
-fn lits_agree(proto: &Lit, typ: &Lit) -> bool {
-	match (proto, typ) {
-		(Lit::Str(proto), Lit::Str(typ)) => proto == typ,
-		(Lit::Char(proto), Lit::Char(typ)) => proto == typ,
-		(Lit::Num(proto), Lit::Num(typ)) => proto == typ,
-		(Lit::Bool(proto), Lit::Bool(typ)) => proto == typ,
-		(Lit::List(..), _) | (_, Lit::List(..)) => true,
-		(Lit::Dict(..), _) | (_, Lit::Dict(..)) => true,
-		(Lit::Nil, Lit::Nil) => true,
-		_ => false,
-	}
-}
-
 fn check_def(
 	syms: &Interner,
 	chunk: &Chunk,
@@ -704,7 +432,7 @@ fn check_def(
 	span: Span,
 	def: &Def,
 ) -> Result<(), Error> {
-	ensure_required_precede_defaults(syms, pkg, span, &def.params)?;
+	ensure_required_precede_optional(syms, pkg, span, &def.params)?;
 	// A proc body resets the loop-depth counter. break inside a proc can't
 	// reach an outer loop, even if the proc itself is lexically nested in one.
 	check_block(chunk, pkg, def.body, 0)
@@ -809,9 +537,9 @@ fn check_expr(chunk: &Chunk, pkg: &Package, expr_id: ExprId, depth: u32) -> Resu
 	}
 }
 
-// Ensure that required params precede defaulted ones. This is a load-bearing
+// Ensure that required params precede optional ones. This is a load-bearing
 // invariant for virtually all arg/param handling.
-fn ensure_required_precede_defaults(
+pub fn ensure_required_precede_optional(
 	syms: &Interner,
 	pkg: &Package,
 	span: Span,

@@ -740,6 +740,10 @@ impl<Node, Id: NodeId> Nodes<Node, Id> {
 		}
 	}
 
+	fn len(&self) -> usize {
+		self.nodes.len()
+	}
+
 	fn get(&self, id: Id) -> &Node {
 		&self.nodes[id.index() as usize]
 	}
@@ -855,7 +859,7 @@ pub enum Method {
 	Static(Def),
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ProtoItemId(u32);
 
 impl NodeId for ProtoItemId {
@@ -1121,6 +1125,12 @@ impl Chunk {
 		self.type_items.add(span, item)
 	}
 
+	// Every type item in the chunk, cases and nested types included, at any
+	// nesting depth, in the order they were added.
+	pub fn type_item_ids(&self) -> impl ExactSizeIterator<Item = TypeItemId> {
+		(0..self.type_items.len() as u32).map(TypeItemId::from_index)
+	}
+
 	pub fn get_proto_item(&self, item_id: ProtoItemId) -> &ProtoItem {
 		self.proto_items.get(item_id)
 	}
@@ -1131,6 +1141,12 @@ impl Chunk {
 
 	pub fn add_proto_item(&mut self, span: Span, item: ProtoItem) -> ProtoItemId {
 		self.proto_items.add(span, item)
+	}
+
+	// Every protocol item in the chunk, across every protocol it declares, in
+	// the order they were added.
+	pub fn proto_item_ids(&self) -> impl ExactSizeIterator<Item = ProtoItemId> {
+		(0..self.proto_items.len() as u32).map(ProtoItemId::from_index)
 	}
 
 	pub fn get_expr(&self, expr_id: ExprId) -> &Expr {
