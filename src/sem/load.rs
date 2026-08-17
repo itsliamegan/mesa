@@ -9,7 +9,10 @@ use toml::{Table, Value};
 
 use crate::intern::Interner;
 use crate::pkg::Package;
-use crate::syn::{self, ChunkId, Lexer, Parser};
+use crate::syn;
+use crate::syn::lex::Lexer;
+use crate::syn::nodes::ChunkId;
+use crate::syn::parse::Parser;
 
 pub const ROOT_FILE: &str = "src/package.ms";
 pub const RESERVED_DIR: &str = "src/package";

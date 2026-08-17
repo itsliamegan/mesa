@@ -10,7 +10,8 @@ use crate::rt::Error;
 use crate::rt::scope::Scopes;
 use crate::rt::val::{Bool, Dict, List, Member, Nil, Num, Obj, Proc, Str, Val};
 use crate::sem::types::{self, MemberSite};
-use crate::syn::{self, ChunkId, TypeItem, TypeItemId};
+use crate::syn;
+use crate::syn::nodes::{ChunkId, TypeItem, TypeItemId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TypeId {
@@ -299,7 +300,7 @@ fn build_member_proc(pkg: &Package, scopes: &Scopes, site: MemberSite) -> Rc<Ref
 		MemberSite::Declared(chunk_id, item_id) => {
 			// Protocols don't involve static methods; assert that this is an
 			// instance method.
-			let TypeItem::Method(syn::Method::Instance(def)) =
+			let TypeItem::Method(syn::nodes::Method::Instance(def)) =
 				pkg.get_chunk(chunk_id).get_type_item(item_id)
 			else {
 				panic!()
@@ -331,7 +332,8 @@ fn build_static_proc(
 	chunk_id: ChunkId,
 	item_id: TypeItemId,
 ) -> Rc<RefCell<Proc>> {
-	let TypeItem::Method(syn::Method::Static(def)) = pkg.get_chunk(chunk_id).get_type_item(item_id)
+	let TypeItem::Method(syn::nodes::Method::Static(def)) =
+		pkg.get_chunk(chunk_id).get_type_item(item_id)
 	else {
 		panic!()
 	};

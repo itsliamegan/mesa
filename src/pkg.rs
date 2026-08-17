@@ -1,5 +1,5 @@
 use crate::src::{Location, Source, SourceId, Span};
-use crate::syn::{Chunk, ChunkId};
+use crate::syn::nodes::{Chunk, ChunkId};
 
 #[derive(Debug)]
 pub struct Package {

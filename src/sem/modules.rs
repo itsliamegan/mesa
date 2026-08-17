@@ -7,7 +7,7 @@ use crate::pkg::Package;
 use crate::sem::Error;
 use crate::sem::load::{RESERVED_DIR, ROOT_FILE};
 use crate::src::{Location, Span};
-use crate::syn::{Chunk, ChunkId, Expr, ExprId, ModuleItem, ModuleItemId, Place};
+use crate::syn::nodes::{Chunk, ChunkId, Expr, ExprId, ModuleItem, ModuleItemId, Place};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ModuleId(u32);

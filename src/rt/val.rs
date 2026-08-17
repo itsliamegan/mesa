@@ -12,7 +12,7 @@ use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMember, NativeTypeId, TypeId, Types};
 use crate::sem::modules::ModuleId;
 use crate::sem::types;
-use crate::syn::{BlockId, ChunkId, Param};
+use crate::syn::nodes::{BlockId, ChunkId, Param};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Num(pub f64);

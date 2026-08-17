@@ -7,9 +7,10 @@ use crate::pkg::Package;
 use crate::sem::modules::{Binding, Member, ModuleId, Modules};
 use crate::sem::{Error, check_required_precede_optional};
 use crate::src::Span;
-use crate::syn::{
-	self, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId,
-	TypeItem, TypeItemId,
+use crate::syn;
+use crate::syn::nodes::{
+	Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem,
+	TypeItemId,
 };
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -207,7 +208,12 @@ pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Erro
 
 // Describe a protocol declaration, sorting its members into what a type
 // implementing it must declare and what it may inherit as-is.
-fn describe_proto(chunk: &Chunk, chunk_id: ChunkId, span: Span, proto: &syn::Proto) -> Proto {
+fn describe_proto(
+	chunk: &Chunk,
+	chunk_id: ChunkId,
+	span: Span,
+	proto: &syn::nodes::Proto,
+) -> Proto {
 	let mut required = OrderMap::new();
 	let mut provided = OrderMap::new();
 	for item_id in &proto.items {
@@ -257,7 +263,7 @@ fn describe_type(
 	module: ModuleId,
 	chunk_id: ChunkId,
 	span: Span,
-	type_: &syn::Type,
+	type_: &syn::nodes::Type,
 	inherited: Option<&Inherited>,
 	enclosing: Option<TypeId>,
 	is_case: bool,
@@ -313,10 +319,10 @@ fn describe_type(
 			TypeItem::Type(inner) => {
 				static_spans.insert(inner.name, item_span);
 			}
-			TypeItem::Method(syn::Method::Instance(def)) => {
+			TypeItem::Method(syn::nodes::Method::Instance(def)) => {
 				declared.insert(def.name, MemberSite::Declared(chunk_id, *item_id));
 			}
-			TypeItem::Method(syn::Method::Static(def)) => {
+			TypeItem::Method(syn::nodes::Method::Static(def)) => {
 				statics.insert(def.name, Static::Proc(chunk_id, *item_id));
 				static_spans.insert(def.name, item_span);
 			}
@@ -470,7 +476,7 @@ fn resolve_impls(
 	mods: &Modules,
 	module: ModuleId,
 	span: Span,
-	type_: &syn::Type,
+	type_: &syn::nodes::Type,
 	errs: &mut Vec<Error>,
 ) -> Vec<ProtoId> {
 	let mut impls = Vec::with_capacity(type_.impls.len());
@@ -562,7 +568,7 @@ fn acquire_members(
 			};
 			if let Some(MemberSite::Declared(site_chunk, site_item)) = own {
 				let site_chunk = pkg.get_chunk(*site_chunk);
-				let TypeItem::Method(syn::Method::Instance(method_def)) =
+				let TypeItem::Method(syn::nodes::Method::Instance(method_def)) =
 					site_chunk.get_type_item(*site_item)
 				else {
 					panic!()

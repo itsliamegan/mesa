@@ -18,9 +18,10 @@ use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, Ty
 use crate::sem::modules;
 use crate::sem::types;
 use crate::src::{Location, Span};
-use crate::syn::{
-	self, BinaryOp, BlockId, Builtin, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId,
-	Param, UnaryOp,
+use crate::syn;
+use crate::syn::nodes::{
+	BinaryOp, BlockId, Builtin, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param,
+	UnaryOp,
 };
 
 pub struct Interpreter<'syms, 'pkg, 'descs, 'mods> {
@@ -509,7 +510,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 			Expr::Assign(assign) => {
 				let val = self.eval_expr(chunk, assign.val)?;
 				match &assign.place {
-					syn::Place::Name(name) => {
+					syn::nodes::Place::Name(name) => {
 						let sym = name.sym;
 						let place = self.resolve_name(sym);
 						if let Err(()) = place.set(&self.types, val.clone()) {
@@ -530,7 +531,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 						}
 						Ok(val)
 					}
-					syn::Place::Member(member) => {
+					syn::nodes::Place::Member(member) => {
 						let receiver = self.eval_expr(chunk, member.receiver)?;
 						if let Some(m) = self.member(&receiver, member.name) {
 							if let Err(()) = Place::Member(m).set(&self.types, val.clone()) {
@@ -557,7 +558,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 							))
 						}
 					}
-					syn::Place::Access(access) => {
+					syn::nodes::Place::Access(access) => {
 						let receiver = self.eval_expr(chunk, access.receiver)?;
 						match &receiver {
 							Val::Obj(rf) => match &mut *rf.borrow_mut() {

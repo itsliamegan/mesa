@@ -10,7 +10,7 @@ use crate::pkg::Package;
 use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Span};
-use crate::syn::{
+use crate::syn::nodes::{
 	BlockId, Builtin, Chunk, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param, Place,
 	TypeItem,
 };

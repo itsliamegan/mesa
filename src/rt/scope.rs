@@ -10,7 +10,7 @@ use crate::rt::types::{Static, TypeId, Types};
 use crate::rt::val::{Member, Method, Obj, Val};
 use crate::sem;
 use crate::sem::modules::ModuleId;
-use crate::syn::ChunkId;
+use crate::syn::nodes::ChunkId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
