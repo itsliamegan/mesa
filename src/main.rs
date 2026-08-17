@@ -25,8 +25,8 @@ fn main() {
 	};
 
 	let mut syms = Interner::new();
-	let (pkg, _root_chunk_id) = match load::parse(&mut syms, tree.files) {
-		Ok(parsed) => parsed,
+	let pkg = match load::parse(&mut syms, tree.files) {
+		Ok(pkg) => pkg,
 		Err(errs) => {
 			for err in errs {
 				eprintln!("{}", err);

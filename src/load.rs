@@ -11,7 +11,6 @@ use crate::intern::Interner;
 use crate::pkg::Package;
 use crate::syn;
 use crate::syn::lex::Lexer;
-use crate::syn::nodes::ChunkId;
 use crate::syn::parse::Parser;
 
 pub const ROOT_FILE: &str = "src/package.ms";
@@ -52,6 +51,8 @@ pub struct Tree {
 	pub files: Vec<(String, String)>,
 }
 
+// Find the root directory and manifest of the package in the current working
+// directory.
 pub fn find() -> Result<(PathBuf, Manifest), Error> {
 	let root_dir = env::current_dir().unwrap();
 
@@ -93,6 +94,7 @@ fn read_toml_str(table: &Table, key: &str) -> Result<Option<String>, Error> {
 	}
 }
 
+// Walk the package directory tree and collect all source files.
 pub fn collect(root_dir: &Path) -> Result<Tree, Error> {
 	let mut dirs = BTreeSet::new();
 	let mut files = BTreeMap::new();
@@ -140,16 +142,15 @@ fn collect_all_in_dir(
 	Ok(())
 }
 
+// Parse all source files in a package.
 pub fn parse(
 	syms: &mut Interner,
 	files: Vec<(String, String)>,
-) -> Result<(Package, ChunkId), Vec<syn::Error>> {
+) -> Result<Package, Vec<syn::Error>> {
 	let mut pkg = Package::new();
 	let mut errs = Vec::new();
-	let mut root_chunk_id = None;
 
 	for (file, text) in files {
-		let is_root_module = file == "src/package.ms";
 		let src_id = pkg.add_src(file, text);
 		let src = pkg.get_src(src_id);
 		let toks = match Lexer::new(syms, src).lex() {
@@ -166,15 +167,8 @@ pub fn parse(
 				continue;
 			}
 		};
-		let chunk_id = pkg.add_chunk(chunk);
-		if is_root_module {
-			root_chunk_id = Some(chunk_id);
-		}
+		pkg.add_chunk(chunk);
 	}
 
-	if !errs.is_empty() {
-		Err(errs)
-	} else {
-		Ok((pkg, root_chunk_id.unwrap()))
-	}
+	if !errs.is_empty() { Err(errs) } else { Ok(pkg) }
 }
