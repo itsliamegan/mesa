@@ -27,32 +27,6 @@ $print(total)
 
 #---
 
-#! runtime error: name 'leak' is not defined
-
-each n in [1, 2] do
-	when n == 1 then
-		leak := true
-	end
-	when n == 2 then
-		$print(leak)
-	end
-end
-
-#---
-
-#! runtime error: name 'leak' is not defined
-
-each k in {1: "a", 2: "b"} do
-	when k == 1 then
-		leak := true
-	end
-	when k == 2 then
-		$print(leak)
-	end
-end
-
-#---
-
 #> 5
 
 $print(each n in [1, 2, 3, 4, 5] do

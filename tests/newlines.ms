@@ -60,13 +60,6 @@ $print(result)
 
 #---
 
-#! syntax error: unexpected token EQ
-
-x
-:= 5
-
-#---
-
 #> 9
 
 def compute

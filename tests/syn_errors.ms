@@ -57,3 +57,29 @@ end
 type Point
 	(1)
 end
+
+#---
+
+#! syntax error: unexpected token IDENT
+
+type Bad
+	def m()
+		1
+	end
+	x := 1
+end
+
+#---
+
+#! syntax error: unexpected token NUM
+
+type T(a)
+	1 + 1
+end
+
+#---
+
+#! syntax error: unexpected token EQ
+
+x
+:= 5

@@ -10,7 +10,7 @@ macro_rules! test_files {
 		$(
 			#[test]
 			fn $name() {
-				assert_eval($file, include_str!($file));
+				assert_fixture_eval($file, include_str!($file));
 			}
 		)*
 	};
@@ -508,59 +508,6 @@ fn test_calls_a_sibling_proc_in_a_non_root_module() {
 	assert_eq!(vec!["1"], stdout.lines().collect::<Vec<_>>());
 }
 
-fn assert_eval(file: &str, input: &str) {
-	let test_dir = make_test_dir();
-
-	let lines = input.lines().collect::<Vec<_>>();
-	let mut start = 0;
-	while start < lines.len() {
-		let mut end = start;
-		while end < lines.len() && !lines[end].starts_with("#---") {
-			end += 1;
-		}
-		assert_case(&test_dir, file, &lines, start, end);
-		start = end + 1;
-	}
-
-	fs::remove_dir_all(&test_dir).unwrap();
-}
-
-fn assert_case(dir: &Path, file: &str, lines: &[&str], start: usize, end: usize) {
-	let mut src = String::new();
-	let mut out = String::new();
-	let mut err = String::new();
-	for (i, line) in lines.iter().enumerate() {
-		if i >= start && i < end {
-			src.push_str(line);
-			if let Some((_, text)) = line.split_once("#> ") {
-				out.push_str(text);
-				out.push('\n');
-			} else if let Some((_, text)) = line.split_once("#! ") {
-				err.push_str(text);
-				err.push('\n');
-			}
-		}
-		src.push('\n');
-	}
-
-	let (stdout, stderr) = eval(dir, &src);
-	assert_eq!(out, stdout, "stdout of {} case at line {}", file, start + 1);
-	for line in err.lines() {
-		assert!(
-			stderr.contains(line),
-			"stderr of {} case at line {}",
-			file,
-			start + 1
-		);
-	}
-}
-
-fn eval(dir: &Path, src: &str) -> (String, String) {
-	let src = format!("module Test\n{}", src);
-	write_package(dir, &[("package.ms", &src)]);
-	run(dir)
-}
-
 fn make_test_dir() -> PathBuf {
 	let temp_dir = env::temp_dir();
 	let test_dir = temp_dir.join(format!("mesa-test-{:x}", rand::random::<u32>()));
@@ -568,7 +515,7 @@ fn make_test_dir() -> PathBuf {
 	test_dir
 }
 
-fn write_package(dir: &Path, files: &[(&str, &str)]) {
+fn write_package(dir: &Path, files: &[(impl AsRef<Path>, impl AsRef<[u8]>)]) {
 	let src_dir = dir.join("src");
 	fs::create_dir_all(&src_dir).unwrap();
 	fs::write(dir.join("package.toml"), "").unwrap();
@@ -586,4 +533,126 @@ fn run(dir: &Path) -> (String, String) {
 		String::from_utf8(output.stdout).unwrap(),
 		String::from_utf8(output.stderr).unwrap(),
 	)
+}
+
+struct Fixture {
+	segments: Vec<Segment>,
+}
+
+struct Segment {
+	files: Vec<(String, String)>,
+	root: String,
+	out: String,
+	err: Vec<String>,
+	start_line: usize,
+}
+
+fn parse_fixture(src: &str) -> Fixture {
+	let mut segments = Vec::new();
+	let lines: Vec<&str> = src.lines().collect();
+	let mut i = 0;
+
+	while i < lines.len() {
+		let start_line = i;
+		let mut root = String::new();
+		let mut files: Vec<(String, String)> = Vec::new();
+		let mut out = String::new();
+		let mut err = Vec::new();
+		let mut in_file: Option<usize> = None;
+
+		while i < lines.len() && lines[i] != "#---" {
+			let line = lines[i];
+			i += 1;
+
+			if let Some(name) = line.strip_prefix("#:") {
+				files.push((name.trim().to_string(), String::new()));
+				in_file = Some(files.len() - 1);
+			} else if let Some((_, text)) = line.split_once("#> ") {
+				out.push_str(text);
+				out.push('\n');
+			} else if let Some((_, text)) = line.split_once("#! ") {
+				err.push(text.to_string());
+			} else {
+				let target = match in_file {
+					Some(idx) => &mut files[idx].1,
+					None => &mut root,
+				};
+				target.push_str(line);
+				target.push('\n');
+			}
+		}
+
+		if i < lines.len() {
+			i += 1;
+		}
+
+		segments.push(Segment {
+			files,
+			root,
+			out,
+			err,
+			start_line,
+		});
+	}
+
+	Fixture { segments }
+}
+
+fn write_segment_package(dir: &Path, segment: &Segment) {
+	let src_dir = dir.join("src");
+	if src_dir.exists() {
+		fs::remove_dir_all(&src_dir).unwrap();
+	}
+
+	let mut imports = String::new();
+	let mut package_files: Vec<(String, String)> = Vec::new();
+
+	for (filename, src) in &segment.files {
+		if let Some(module) = src
+			.lines()
+			.find(|l| l.starts_with("module "))
+			.and_then(|l| l.split_once(' '))
+			.map(|(_, name)| name)
+		{
+			imports.push_str(&format!("import {}\n", module));
+		}
+		package_files.push((filename.clone(), src.clone()));
+	}
+
+	let package_src = format!("module Test\n{}{}", imports, segment.root);
+	package_files.push(("package.ms".to_string(), package_src));
+
+	write_package(dir, &package_files);
+}
+
+fn assert_fixture_eval(file: &str, src: &str) {
+	let fixture = parse_fixture(src);
+	let test_dir = make_test_dir();
+
+	for (i, segment) in fixture.segments.iter().enumerate() {
+		write_segment_package(&test_dir, segment);
+		let (stdout, stderr) = run(&test_dir);
+
+		assert_eq!(
+			segment.out,
+			stdout,
+			"stdout of {} case {} (line {})",
+			file,
+			i + 1,
+			segment.start_line + 1
+		);
+		for err_line in &segment.err {
+			assert!(
+				stderr.contains(err_line.as_str()),
+				"stderr of {} case {} (line {}) missing: {}\nactual stderr: {}",
+				file,
+				i + 1,
+				segment.start_line + 1,
+				err_line,
+				stderr
+			);
+		}
+	}
+
+	fs::remove_dir_all(&test_dir).unwrap();
 }
