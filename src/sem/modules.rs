@@ -13,7 +13,7 @@ use crate::syn::{Chunk, ChunkId, Expr, ExprId, ModuleItem, ModuleItemId, Place};
 pub struct ModuleId(u32);
 
 impl ModuleId {
-	fn index(self) -> usize {
+	pub fn index(self) -> usize {
 		self.0 as usize
 	}
 }
@@ -23,6 +23,8 @@ pub struct Modules {
 	mods: Vec<Module>,
 	by_file: HashMap<String, ModuleId>,
 	by_name: HashMap<Vec<Sym>, ModuleId>,
+	by_chunk: HashMap<ChunkId, ModuleId>,
+	order: Vec<ModuleId>,
 }
 
 #[derive(Debug)]
@@ -94,6 +96,23 @@ impl Modules {
 
 	pub fn chunk(&self, id: ModuleId) -> ChunkId {
 		self.get(id).chunk
+	}
+
+	pub fn by_chunk(&self, chunk: ChunkId) -> ModuleId {
+		self.by_chunk[&chunk]
+	}
+
+	// The module's declared dotted path, e.g. for a qualified name or the
+	// module's printed form.
+	pub fn path(&self, id: ModuleId) -> &[Sym] {
+		&self.get(id).name
+	}
+
+	// The order that every module's top-level expression pass should run in. A
+	// post-order DFS over import edges, so a module's dependencies are always
+	// evaluated before it.
+	pub fn order(&self) -> &[ModuleId] {
+		&self.order
 	}
 
 	// A member of a module: what another module reaches through a dotted path,
@@ -181,6 +200,10 @@ pub fn check(syms: &Interner, pkg: &Package, dirs: &[String]) -> Result<Modules,
 		return Err(errs);
 	}
 
+	// The order walk needs to know that the import graph is acyclic, so it runs
+	// after.
+	mods.order = compute_order(&mods);
+
 	Ok(mods)
 }
 
@@ -189,6 +212,7 @@ fn build(syms: &Interner, pkg: &Package) -> Result<Modules, Vec<Error>> {
 	let mut mods = Vec::new();
 	let mut by_file = HashMap::new();
 	let mut by_name = HashMap::new();
+	let mut by_chunk = HashMap::new();
 	let mut errs = Vec::new();
 
 	for chunk_id in pkg.chunk_ids() {
@@ -202,6 +226,7 @@ fn build(syms: &Interner, pkg: &Package) -> Result<Modules, Vec<Error>> {
 		};
 		let id = ModuleId(mods.len() as u32);
 		by_file.insert(file.clone(), id);
+		by_chunk.insert(chunk_id, id);
 		// Nothing ties a module's last segment to its file name, so two files
 		// can declare one path; error only when encountering a duplicate
 		// *declared* name.
@@ -230,6 +255,8 @@ fn build(syms: &Interner, pkg: &Package) -> Result<Modules, Vec<Error>> {
 		mods,
 		by_file,
 		by_name,
+		by_chunk,
+		order: Vec::new(),
 	})
 }
 
@@ -514,6 +541,36 @@ fn render_cycle(syms: &Interner, mods: &Modules, path: &[ModuleId], back: Module
 		.collect();
 	names.push(dotted_path_to_string(syms, &mods.get(back).name));
 	names.join(" → ")
+}
+
+// Order every module for its top-level expression pass. Every non-root module
+// starts its own walk, in ModuleId order; the root module starts last, unless
+// an earlier walk already reached it as somebody's dependency, in which case it
+// is already in the order and dependencies still precede dependents.
+fn compute_order(mods: &Modules) -> Vec<ModuleId> {
+	let root = mods.by_file[ROOT_FILE];
+	let mut order = Vec::with_capacity(mods.mods.len());
+	let mut visited = vec![false; mods.mods.len()];
+	for id in mods.ids() {
+		if id != root {
+			walk_order(mods, id, &mut visited, &mut order);
+		}
+	}
+	walk_order(mods, root, &mut visited, &mut order);
+	order
+}
+
+// Post-order DFS over import edges, so a module's dependencies are always
+// evaluated before it.
+fn walk_order(mods: &Modules, id: ModuleId, visited: &mut [bool], order: &mut Vec<ModuleId>) {
+	if visited[id.index()] {
+		return;
+	}
+	visited[id.index()] = true;
+	for import in &mods.get(id).imports {
+		walk_order(mods, import.target.module(), visited, order);
+	}
+	order.push(id);
 }
 
 // The name that a top-level expression claims, if any.
@@ -928,6 +985,43 @@ mod tests {
 		]);
 		assert!(resolve_imports(&syms, &pkg, &mut mods).is_empty());
 		assert!(check_import_cycles(&syms, &pkg, &mods).is_empty());
+	}
+
+	#[test]
+	fn test_orders_dependencies_before_a_diamonds_reconvergence() {
+		// D is a dependency of both B and C, so it precedes both; the root
+		// imports nothing, so nothing forces it earlier than last.
+		let (syms, pkg) = package(&[
+			(ROOT_FILE, "module Test\n"),
+			("src/a.ms", "module Test.A\nimport Test.B\nimport Test.C\n"),
+			("src/b.ms", "module Test.B\nimport Test.D\n"),
+			("src/c.ms", "module Test.C\nimport Test.D\n"),
+			("src/d.ms", "module Test.D\n"),
+		]);
+		let mods = check(&syms, &pkg, &[]).unwrap();
+		let names: Vec<String> = mods
+			.order()
+			.iter()
+			.map(|id| dotted_path_to_string(&syms, mods.path(*id)))
+			.collect();
+		assert_eq!(vec!["Test.D", "Test.B", "Test.C", "Test.A", "Test"], names);
+	}
+
+	#[test]
+	fn test_orders_a_dependent_of_the_root_before_it() {
+		// A module importing the root forces the root earlier, so
+		// dependencies-before-dependents holds even for the root.
+		let (syms, pkg) = package(&[
+			(ROOT_FILE, "module Test\n"),
+			("src/a.ms", "module Test.A\nimport Test\n"),
+		]);
+		let mods = check(&syms, &pkg, &[]).unwrap();
+		let names: Vec<String> = mods
+			.order()
+			.iter()
+			.map(|id| dotted_path_to_string(&syms, mods.path(*id)))
+			.collect();
+		assert_eq!(vec!["Test", "Test.A"], names);
 	}
 
 	#[test]

@@ -110,6 +110,7 @@ pub const CORE_TYPES: &[(
 	(NativeTypeId::PROC, None, &[]),
 	(NativeTypeId::TYPE, None, &[]),
 	(NativeTypeId::PROTO, None, &[]),
+	(NativeTypeId::MODULE, None, &[]),
 ];
 
 impl NativeTypeId {
@@ -123,6 +124,7 @@ impl NativeTypeId {
 	pub const PROC: NativeTypeId = NativeTypeId(7);
 	pub const TYPE: NativeTypeId = NativeTypeId(8);
 	pub const PROTO: NativeTypeId = NativeTypeId(9);
+	pub const MODULE: NativeTypeId = NativeTypeId(10);
 }
 
 // Build a table of the core native types.

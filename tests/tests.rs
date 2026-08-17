@@ -224,6 +224,290 @@ fn test_acquires_a_provided_member_across_files() {
 	assert_eq!(vec!["1", "1"], stdout.lines().collect::<Vec<_>>());
 }
 
+#[test]
+fn test_reaches_a_def_and_a_var_through_a_module_form_import() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Utils\n$print(Utils.count)\n$print(Utils.helper())\n",
+			),
+			(
+				"utils.ms",
+				"module Test.Utils\ncount := 3\ndef helper()\n\treturn 9\nend\n",
+			),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["3", "9"], stdout.lines().collect::<Vec<_>>());
+}
+
+#[test]
+fn test_uses_a_member_form_import_as_a_plain_value() {
+	// The only other cross-file fixture uses a member-form import solely as
+	// an 'impl' target; this reaches the same proto and prints it directly.
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Protos.Order\n$print(Order)\n",
+			),
+			(
+				"protos.ms",
+				"module Test.Protos\nproto Order\n\tdef compare(other) end\nend\n",
+			),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["proto Order"], stdout.lines().collect::<Vec<_>>());
+}
+
+#[test]
+fn test_reaches_a_child_module_nobody_imported() {
+	// Only 'Test.Codec' is imported; 'Codec.Json' is reachable as a member of
+	// the module actually imported, not through an import of its own.
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Codec\n$print(Codec.Json.decode(4))\n",
+			),
+			("codec.ms", "module Test.Codec\n"),
+			(
+				"codec/json.ms",
+				"module Test.Codec.Json\ndef decode(x)\n\treturn x + 1\nend\n",
+			),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["5"], stdout.lines().collect::<Vec<_>>());
+}
+
+#[test]
+fn test_reads_a_module_member_live_rather_than_a_snapshot() {
+	// A member read goes straight to the owning module's scope each time, so
+	// a call that mutates a top-level var is visible on the very next read.
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Counter\nCounter.bump()\n$print(Counter.n)\n",
+			),
+			(
+				"counter.ms",
+				"module Test.Counter\nn := 0\ndef bump()\n\tn := n + 1\nend\n",
+			),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["1"], stdout.lines().collect::<Vec<_>>());
+}
+
+#[test]
+fn test_refuses_to_write_a_module_member() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Codec\nCodec.limit := 5\n",
+			),
+			("codec.ms", "module Test.Codec\nlimit := 8\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert!(
+		stderr.contains("member 'limit' on module Test.Codec is read-only"),
+		"stderr: {}",
+		stderr
+	);
+}
+
+#[test]
+fn test_reports_a_missing_module_member_against_the_modules_path() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Codec\n$print(Codec.missing)\n",
+			),
+			("codec.ms", "module Test.Codec\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert!(
+		stderr.contains("module Test.Codec has no such member 'missing'"),
+		"stderr: {}",
+		stderr
+	);
+}
+
+#[test]
+fn test_does_not_leak_an_imported_module_as_a_member() {
+	// codec.ms imports Test.Utils for its own use; that must not make
+	// 'Utils' reachable as a member of Codec from anywhere else.
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Codec\n$print(Codec.Utils)\n",
+			),
+			("codec.ms", "module Test.Codec\nimport Test.Utils\n"),
+			("utils.ms", "module Test.Utils\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert!(
+		stderr.contains("module Test.Codec has no such member 'Utils'"),
+		"stderr: {}",
+		stderr
+	);
+}
+
+#[test]
+fn test_prints_a_module_value() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			(
+				"package.ms",
+				"module Test\nimport Test.Codec\n$print(Codec)\n",
+			),
+			("codec.ms", "module Test.Codec\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(
+		vec!["module Test.Codec"],
+		stdout.lines().collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn test_reports_an_import_cycle_against_the_whole_cycle() {
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n"),
+			("a.ms", "module Test.A\nimport Test.B\n"),
+			("b.ms", "module Test.B\nimport Test.A\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stdout);
+	assert_eq!(
+		vec!["src/b.ms:2,1: semantic error: import cycle: Test.A → Test.B → Test.A"],
+		stderr.lines().collect::<Vec<_>>()
+	);
+}
+
+#[test]
+fn test_evaluates_every_module_in_import_order() {
+	// D is a dependency of both B and C, so it prints first; the root imports
+	// nothing and never claimed a print, so only the four children show up,
+	// in dependency-before-dependent order.
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n"),
+			(
+				"a.ms",
+				"module Test.A\nimport Test.B\nimport Test.C\n$print(\"A\")\n",
+			),
+			("b.ms", "module Test.B\nimport Test.D\n$print(\"B\")\n"),
+			("c.ms", "module Test.C\nimport Test.D\n$print(\"C\")\n"),
+			("d.ms", "module Test.D\n$print(\"D\")\n"),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["D", "B", "C", "A"], stdout.lines().collect::<Vec<_>>());
+}
+
+#[test]
+fn test_calls_a_sibling_proc_in_a_non_root_module() {
+	// Every module's own top level now runs, not just the root's, so a proc
+	// in a non-root file can call another declared in that same file.
+	let test_dir = make_test_dir();
+	write_package(
+		&test_dir,
+		&[
+			("package.ms", "module Test\n"),
+			(
+				"codec.ms",
+				"module Test.Codec\n\
+				 def helper()\n\
+				 \treturn 1\n\
+				 end\n\
+				 def main()\n\
+				 \treturn helper()\n\
+				 end\n\
+				 $print(main())\n",
+			),
+		],
+	);
+
+	let (stdout, stderr) = run(&test_dir);
+	fs::remove_dir_all(&test_dir).unwrap();
+
+	assert_eq!("", stderr);
+	assert_eq!(vec!["1"], stdout.lines().collect::<Vec<_>>());
+}
+
 fn assert_eval(file: &str, input: &str) {
 	let test_dir = make_test_dir();
 

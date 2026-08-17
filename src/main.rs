@@ -24,7 +24,7 @@ fn main() {
 	};
 
 	let mut syms = Interner::new();
-	let (pkg, root_chunk_id) = match load::parse(&mut syms, tree.files) {
+	let (pkg, _root_chunk_id) = match load::parse(&mut syms, tree.files) {
 		Ok(parsed) => parsed,
 		Err(errs) => {
 			for err in errs {
@@ -34,7 +34,7 @@ fn main() {
 		}
 	};
 
-	let (_modules, types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
+	let (modules, types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
@@ -44,7 +44,7 @@ fn main() {
 		}
 	};
 
-	match Interpreter::new(&mut syms, &pkg, &types, root_chunk_id).eval() {
+	match Interpreter::new(&mut syms, &pkg, &types, &modules).eval() {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{

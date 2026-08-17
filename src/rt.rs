@@ -1,4 +1,5 @@
 mod eval;
+mod modules;
 mod scope;
 mod types;
 mod val;
@@ -126,11 +127,11 @@ impl Display for TypeError {
 impl Display for MemberError {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self {
-			Self::Missing(type_name, name) => {
-				write!(f, "type {} has no such member '{}'", type_name, name)
+			Self::Missing(namespace, name) => {
+				write!(f, "{} has no such member '{}'", namespace, name)
 			}
-			Self::ReadOnly(type_name, name) => {
-				write!(f, "member '{}' on type {} is read-only", name, type_name)
+			Self::ReadOnly(namespace, name) => {
+				write!(f, "member '{}' on {} is read-only", name, namespace)
 			}
 		}
 	}

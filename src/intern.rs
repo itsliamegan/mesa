@@ -62,7 +62,7 @@ const KEYWORDS: &[(&str, Sym)] = &[
 ];
 
 pub const CORE_TYPE_NAMES: &[&str] = &[
-	"Nil", "Num", "Bool", "Char", "Str", "List", "Dict", "Proc", "Type", "Proto",
+	"Nil", "Num", "Bool", "Char", "Str", "List", "Dict", "Proc", "Type", "Proto", "Module",
 ];
 
 pub struct Interner {

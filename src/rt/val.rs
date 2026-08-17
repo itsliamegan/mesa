@@ -7,8 +7,10 @@ use rustc_hash::FxHashMap;
 
 use crate::intern::{Interner, Sym};
 use crate::rt::Error;
+use crate::rt::modules::Modules;
 use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMember, NativeTypeId, TypeId, Types};
+use crate::sem::modules::ModuleId;
 use crate::sem::types;
 use crate::syn::{BlockId, ChunkId, Param};
 
@@ -148,6 +150,7 @@ impl Hash for Val {
 
 #[derive(Debug)]
 pub enum Obj {
+	Module(ModuleId),
 	List(List),
 	Dict(Dict),
 	Proc(Proc),
@@ -160,6 +163,7 @@ pub enum Obj {
 impl Obj {
 	pub fn type_id(&self) -> TypeId {
 		match self {
+			Self::Module(_) => TypeId::Native(NativeTypeId::MODULE),
 			Self::List(_) => TypeId::Native(NativeTypeId::LIST),
 			Self::Dict(_) => TypeId::Native(NativeTypeId::DICT),
 			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
@@ -228,6 +232,10 @@ pub struct Instance {
 
 #[derive(Debug)]
 pub enum Member {
+	// A member of a module, named by ModuleId rather than a receiver Rc: a
+	// module's members live in its scope, not on the module's own Obj, so
+	// there is nothing to hold a Rc to.
+	Module(ModuleId, Sym),
 	Static(Rc<RefCell<Obj>>, Sym),
 	User(Rc<RefCell<Obj>>, Sym),
 	Native(Val, Sym),
@@ -259,24 +267,25 @@ pub fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	res
 }
 
-pub fn rt_print_val(syms: &Interner, types: &Types, val: &Val) -> String {
+pub fn rt_print_val(syms: &Interner, types: &Types, mods: &Modules, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num.0),
 		Val::Bool(bool) => format!("{}", bool.0),
 		Val::Char(char) => format!("{}", char.0),
 		Val::Str(str) => format!("{}", str.text),
-		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
+		Val::Obj(rf) => rt_print_obj(syms, types, mods, &rf.borrow()),
 		Val::Nil(_) => String::from("nil"),
 	}
 }
 
-pub fn rt_print_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
+pub fn rt_print_obj(syms: &Interner, types: &Types, mods: &Modules, obj: &Obj) -> String {
 	match obj {
+		Obj::Module(id) => format!("module {}", mods.name(syms, *id)),
 		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
 			for (i, item) in list.items.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, item));
+				res.push_str(&rt_debug_val(syms, types, mods, item));
 				if i + 1 != list.items.len() {
 					res.push_str(", ");
 				}
@@ -288,9 +297,9 @@ pub fn rt_print_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
 			let mut res = String::new();
 			res.push('{');
 			for (i, (key, val)) in dict.pairs.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, key));
+				res.push_str(&rt_debug_val(syms, types, mods, key));
 				res.push_str(": ");
-				res.push_str(&rt_debug_val(syms, types, val));
+				res.push_str(&rt_debug_val(syms, types, mods, val));
 				if i + 1 != dict.pairs.len() {
 					res.push_str(", ");
 				}
@@ -332,7 +341,7 @@ pub fn rt_print_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
 			res.push_str(&format!("{}(", name));
 			for (i, field) in desc.ctor_fields.iter().enumerate() {
 				let val = inst.fields.get(&field.name).unwrap();
-				res.push_str(&rt_print_val(syms, types, val));
+				res.push_str(&rt_print_val(syms, types, mods, val));
 				if i + 1 != desc.ctor_fields.len() {
 					res.push_str(", ");
 				}
@@ -349,11 +358,11 @@ pub fn rt_print_obj(syms: &Interner, types: &Types, obj: &Obj) -> String {
 	}
 }
 
-pub fn rt_debug_val(syms: &Interner, types: &Types, val: &Val) -> String {
+pub fn rt_debug_val(syms: &Interner, types: &Types, mods: &Modules, val: &Val) -> String {
 	match val {
 		Val::Char(char) => format!("'{}'", char.0),
 		Val::Str(str) => format!("\"{}\"", str.text),
-		Val::Obj(rf) => rt_print_obj(syms, types, &rf.borrow()),
-		val => rt_print_val(syms, types, val),
+		Val::Obj(rf) => rt_print_obj(syms, types, mods, &rf.borrow()),
+		val => rt_print_val(syms, types, mods, val),
 	}
 }
