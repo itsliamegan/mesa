@@ -5,7 +5,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::pkg::Package;
 use crate::sem::modules::{Binding, Member, ModuleId, Modules};
-use crate::sem::{Error, ensure_required_precede_optional};
+use crate::sem::{Error, check_required_precede_optional};
 use crate::src::Span;
 use crate::syn::{
 	self, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId,
@@ -429,8 +429,7 @@ fn check_structure(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> 
 	for id in types.ids() {
 		let type_ = types.get_type(id);
 
-		if let Err(err) =
-			ensure_required_precede_optional(syms, pkg, type_.span, &type_.ctor_fields)
+		if let Err(err) = check_required_precede_optional(syms, pkg, type_.span, &type_.ctor_fields)
 		{
 			errs.push(err);
 		}

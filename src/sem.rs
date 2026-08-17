@@ -353,7 +353,7 @@ fn check_reach_expr(
 			Ok(())
 		}
 		Expr::Member(member) => {
-			ensure_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
+			check_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
 			check_reach_expr(syms, chunk, pkg, member.receiver, proto, desc)
 		}
 		Expr::Access(access) => {
@@ -365,7 +365,7 @@ fn check_reach_expr(
 			match &assign.place {
 				Place::Name(_) => {}
 				Place::Member(member) => {
-					ensure_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
+					check_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
 					check_reach_expr(syms, chunk, pkg, member.receiver, proto, desc)?;
 				}
 				Place::Access(access) => {
@@ -403,7 +403,7 @@ fn check_reach_expr(
 	}
 }
 
-fn ensure_reaches_member(
+fn check_reaches_member(
 	syms: &Interner,
 	chunk: &Chunk,
 	pkg: &Package,
@@ -432,7 +432,7 @@ fn check_def(
 	span: Span,
 	def: &Def,
 ) -> Result<(), Error> {
-	ensure_required_precede_optional(syms, pkg, span, &def.params)?;
+	check_required_precede_optional(syms, pkg, span, &def.params)?;
 	// A proc body resets the loop-depth counter. break inside a proc can't
 	// reach an outer loop, even if the proc itself is lexically nested in one.
 	check_block(chunk, pkg, def.body, 0)
@@ -539,7 +539,7 @@ fn check_expr(chunk: &Chunk, pkg: &Package, expr_id: ExprId, depth: u32) -> Resu
 
 // Ensure that required params precede optional ones. This is a load-bearing
 // invariant for virtually all arg/param handling.
-pub fn ensure_required_precede_optional(
+pub fn check_required_precede_optional(
 	syms: &Interner,
 	pkg: &Package,
 	span: Span,
