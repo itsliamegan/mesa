@@ -3,8 +3,9 @@
 use std::process;
 
 use mesa::intern::Interner;
+use mesa::load;
 use mesa::rt::Interpreter;
-use mesa::sem::{self, load};
+use mesa::sem;
 
 fn main() {
 	let (root_dir, _manifest) = match load::find() {

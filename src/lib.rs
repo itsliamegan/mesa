@@ -1,4 +1,5 @@
 pub mod intern;
+pub mod load;
 pub mod pkg;
 pub mod rt;
 pub mod sem;

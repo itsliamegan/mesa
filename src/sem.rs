@@ -1,4 +1,3 @@
-pub mod load;
 pub mod modules;
 pub mod types;
 
