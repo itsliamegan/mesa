@@ -100,7 +100,11 @@ fn make_test_dir() -> PathBuf {
 fn write_package(dir: &Path, files: &[(impl AsRef<Path>, impl AsRef<[u8]>)]) {
 	let src_dir = dir.join("src");
 	fs::create_dir_all(&src_dir).unwrap();
-	fs::write(dir.join("package.toml"), "").unwrap();
+	fs::write(
+		dir.join("package.toml"),
+		"name = \"test\"\nversion = \"0.1.0\"",
+	)
+	.unwrap();
 	for (file, src) in files {
 		let path = src_dir.join(file);
 		fs::create_dir_all(path.parent().unwrap()).unwrap();

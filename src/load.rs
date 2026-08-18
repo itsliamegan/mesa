@@ -5,10 +5,10 @@ use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use toml::{Table, Value};
+use toml;
 
 use crate::intern::Interner;
-use crate::pkg::Package;
+use crate::pkg::{Manifest, Package};
 use crate::syn;
 use crate::syn::lex::Lexer;
 use crate::syn::parse::Parser;
@@ -33,16 +33,10 @@ impl Display for Error {
 			Self::NoManifest => write!(f, "missing package.toml manifest"),
 			Self::NoSrcDir => write!(f, "missing src/ directory"),
 			Self::NoRootModule => write!(f, "missing src/package.ms root module"),
-			Self::BadManifest(why) => write!(f, "malformed package.toml manifest: {}", why),
+			Self::BadManifest(detail) => write!(f, "malformed package.toml manifest: {}", detail),
 			Self::Unreadable(path) => write!(f, "cannot read file '{}'", path.to_string_lossy()),
 		}
 	}
-}
-
-#[derive(Debug)]
-pub struct Manifest {
-	pub name: Option<String>,
-	pub version: Option<String>,
 }
 
 #[derive(Debug)]
@@ -80,22 +74,8 @@ pub fn find(mut root_dir: &Path) -> Result<(PathBuf, Manifest), Error> {
 }
 
 fn read_manifest(text: &str) -> Result<Manifest, Error> {
-	let table = text
-		.parse::<Table>()
-		.map_err(|err| Error::BadManifest(err.message().to_string()))?;
-
-	Ok(Manifest {
-		name: read_toml_str(&table, "name")?,
-		version: read_toml_str(&table, "version")?,
-	})
-}
-
-fn read_toml_str(table: &Table, key: &str) -> Result<Option<String>, Error> {
-	match table.get(key) {
-		Some(Value::String(text)) => Ok(Some(text.clone())),
-		Some(_) => Err(Error::BadManifest(format!("'{}' is not a string", key))),
-		None => Ok(None),
-	}
+	toml::from_str(text)
+		.map_err(|err| Error::BadManifest(err.message().to_string()))
 }
 
 // Walk the package directory tree and collect all source files.
@@ -150,8 +130,9 @@ fn collect_all_in_dir(
 pub fn parse(
 	syms: &mut Interner,
 	files: Vec<(String, String)>,
+	manifest: Manifest,
 ) -> Result<Package, Vec<syn::Error>> {
-	let mut pkg = Package::new();
+	let mut pkg = Package::new(manifest);
 	let mut errs = Vec::new();
 
 	for (file, text) in files {

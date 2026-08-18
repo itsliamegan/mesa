@@ -1,15 +1,26 @@
+use serde::Deserialize;
+
 use crate::src::{Location, Source, SourceId, Span};
 use crate::syn::nodes::{Chunk, ChunkId};
 
 #[derive(Debug)]
 pub struct Package {
+	manifest: Manifest,
 	srcs: Vec<Source>,
 	chunks: Vec<Chunk>,
 }
 
-impl Package {
+#[derive(Debug, Deserialize)]
+pub struct Manifest {
+	pub name: String,
+	pub version: String,
+}
+
 	pub fn new() -> Self {
+impl Package {
+	pub fn new(manifest: Manifest) -> Self {
 		Self {
+			manifest,
 			srcs: Vec::new(),
 			chunks: Vec::new(),
 		}
