@@ -51,7 +51,6 @@ impl Local {
 pub enum Place {
 	Local(Local),
 	Member(Member),
-	Module(ModuleId),
 }
 
 impl Place {
@@ -62,14 +61,12 @@ impl Place {
 		match self {
 			Place::Local(local) => local.is_bound(),
 			Place::Member(_) => true,
-			Place::Module(_) => true,
 		}
 	}
 
 	pub fn get(&self, types: &Types, mods: &Modules) -> Result<Val, Error> {
 		match self {
 			Place::Local(local) => Ok(local.get()),
-			Place::Module(id) => Ok(Val::Obj(mods.obj(*id))),
 			Place::Member(Member::Module(id, name)) => {
 				match mods.descs.member(*id, *name).unwrap() {
 					sem::modules::Member::Child(child) => Ok(Val::Obj(mods.obj(child))),
@@ -130,7 +127,6 @@ impl Place {
 				local.set(val);
 				Ok(())
 			}
-			Place::Module(_) => Err(()),
 			Place::Member(Member::Module(_, _)) => Err(()),
 			// Statics cannot be reassigned.
 			Place::Member(Member::Static(_, _)) => Err(()),

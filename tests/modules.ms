@@ -32,11 +32,15 @@ end
 
 #> 3
 #> 9
+
 import Test.Utils
+
 $print(Utils.count)
 $print(Utils.helper())
+
 #:utils.ms
 module Test.Utils
+
 count := 3
 def helper()
 	return 9

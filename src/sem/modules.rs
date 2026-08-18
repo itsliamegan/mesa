@@ -41,25 +41,28 @@ pub struct Module {
 // A member of a module, named by the declaration that gives the module the
 // member. Every item id indexes the arena of the module's own chunk, except a
 // child's, which names the module that another file declares.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Member {
 	Type(ModuleItemId),
 	Proto(ModuleItemId),
 	Proc(ModuleItemId),
-	// A top-level 'x := ...', naming the assignment that first claimed the
-	// name, since a later one reassigns rather than redeclares.
+	// A top-level assignment. If there are later reassignments, this is the
+	// first one.
 	Var(ModuleItemId),
 	// A module declared in a subdirectory file, whose leaf segment is a member
 	// of this one.
 	Child(ModuleId),
 }
 
-// What a name means in the file declaring a module: a member of some module, or
-// a module itself, which only an import can bind.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum Binding {
-	Member(ModuleId, Member),
-	Module(ModuleId),
+// What a name means in the file declaring a module.
+#[derive(Debug, Clone)]
+pub struct Binding {
+	// Module which owns the data.
+	pub owner: ModuleId,
+	// Member of the owning module.
+	pub member: Member,
+	// Whether the binding refers to an imported name.
+	pub imported: bool,
 }
 
 #[derive(Debug)]
@@ -118,7 +121,7 @@ impl Modules {
 	// A member of a module: what another module reaches through a dotted path,
 	// and what this one makes available to anything importing it.
 	pub fn member(&self, id: ModuleId, name: Sym) -> Option<Member> {
-		self.get(id).members.get(&name).copied()
+		self.get(id).members.get(&name).cloned()
 	}
 
 	// A name as the file declaring this module sees it: the members it declares
@@ -135,12 +138,15 @@ impl Modules {
 		if let Some(member) = self.member(id, name) {
 			match member {
 				Member::Type(_) | Member::Proto(_) | Member::Proc(_) | Member::Var(_) => {
-					return Some(Binding::Member(id, member));
+					return Some(Binding {
+						owner: id,
+						member,
+						imported: false,
+					});
 				}
 				// A child module is a member of this one but is declared by
 				// another file, which this one no more sees into than any
-				// other. Naming the child takes an import like anything else,
-				// and that import binds it as a module rather than a member.
+				// other. Naming the child takes an import like anything else.
 				Member::Child(_) => {}
 			}
 		}
@@ -150,14 +156,26 @@ impl Modules {
 				// of its declared name.
 				Target::Module(owner) => {
 					if *self.get(owner).name.last().unwrap() == name {
-						return Some(Binding::Module(owner));
+						let parent = match self.parent(owner) {
+							Some(parent) => parent,
+							None => id,
+						};
+						return Some(Binding {
+							owner: parent,
+							member: Member::Child(owner),
+							imported: true,
+						});
 					}
 				}
 				// A member-form import binds that one member and nothing else
 				// of the module holding it.
 				Target::Member(owner, bound) => {
 					if bound == name {
-						return Some(Binding::Member(owner, self.member(owner, name)?));
+						return Some(Binding {
+							owner,
+							member: self.member(owner, name)?,
+							imported: true,
+						});
 					}
 				}
 			}
@@ -181,13 +199,9 @@ impl Modules {
 		// *bindings*, but subsequent parts must be resolved relative to each
 		// child module's *members*. Check the first part here, and the
 		// subsequent parts separately.
-		let (mut owner, mut member) = match self.binding(start, path[0]) {
-			// The name is bound to a value in the current module (possibly an import).
-			Some(Binding::Member(owner, member)) => (owner, member),
-			// The name is bound to a module imported by the current module.
-			Some(Binding::Module(id)) => (start, Member::Child(id)),
-			None => return None,
-		};
+		let binding = self.binding(start, path[0])?;
+		let mut owner = binding.owner;
+		let mut member = binding.member;
 		// For the remaining parts, look them up relative to each resolved part
 		// in turn.
 		for (i, part) in path[1..].iter().enumerate() {

@@ -515,8 +515,13 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 						let place = self.resolve_name(sym);
 						if let Err(()) = place.set(&self.types, val.clone()) {
 							let type_name = match &place {
-								Place::Member(Member::Module(id, _)) | Place::Module(id) => {
-									format!("module {}", self.mods.name(self.syms, *id))
+								Place::Member(Member::Module(id, name)) => {
+									match self.mods.descs.member(*id, *name) {
+										Some(modules::Member::Child(child)) => {
+											format!("module {}", self.mods.name(self.syms, child))
+										}
+										_ => format!("module {}", self.mods.name(self.syms, *id)),
+									}
 								}
 								_ => self.namespace_name(self.receiver.as_ref().unwrap()),
 							};
@@ -866,32 +871,34 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 	//
 	// Differentiate between a local and anything else by checking the local's
 	// tier. After that, check self's members. Following that, distinguish
-	// *within* a module's bindings between an imported module or an imported
-	// member.
+	// *within* a module's bindings between an imported name or a local name.
 	fn resolve_name(&self, name: Sym) -> Place {
 		let local = Scope::local(&self.scope, name);
 		if local.is_bound() && local.tier == Tier::Local {
-			return Place::Local(local);
-		}
-		if let Some(receiver) = &self.receiver
+			// The name is bound in the local scope chain.
+			Place::Local(local)
+		} else if let Some(receiver) = &self.receiver
 			&& let Some(member) = self.member(receiver, name)
 		{
-			return Place::Member(member);
-		}
-		if local.is_bound() {
-			return Place::Local(local);
-		}
-		// At this point, the only symbols the name could resolve to are from a
-		// module's imports; a declaration would've been found above. Look up
-		// the current scope's module and ask it whether the name is bound to an
-		// imported module or an imported member of another module.
-		let module_id = Scope::module(&self.scope);
-		match self.mods.descs.binding(module_id, name) {
-			Some(modules::Binding::Member(owner, _)) if owner != module_id => {
-				Place::Member(Member::Module(owner, name))
+			// The name is bound to a member of 'self'.
+			Place::Member(member)
+		} else if local.is_bound() {
+			// The name is bound at the module level.
+			Place::Local(local)
+		} else {
+			// At this point, the only thing the name could be bound to is an
+			// imported name; a declaration would've been found above. Look up
+			// the current scope's module and ask it whether the name is bound
+			// to something imported from another module.
+			let module_id = Scope::module(&self.scope);
+			match self.mods.descs.binding(module_id, name) {
+				Some(binding) if binding.imported => {
+					Place::Member(Member::Module(binding.owner, name))
+				}
+				// The name wasn't found at all; it's a new local at the lowest
+				// level of the scope chain.
+				_ => Place::Local(local),
 			}
-			Some(modules::Binding::Module(owner)) => Place::Module(owner),
-			_ => Place::Local(local),
 		}
 	}
 
