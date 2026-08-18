@@ -417,3 +417,18 @@ module Test.Codec
 
 type Frame
 end
+
+
+#---
+
+import Test.Protos
+
+type Point
+	impl Protos.Order
+end
+
+#:protos.ms
+module Test.Protos
+
+proto Order
+end

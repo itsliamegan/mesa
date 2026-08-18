@@ -95,7 +95,17 @@ impl Interner {
 		sym
 	}
 
+	// Resolve a single symbol to its string name.
 	pub fn resolve(&self, sym: Sym) -> &str {
 		self.names[sym.0 as usize]
+	}
+
+	// Resolve a path of symbols representing nested lookup to a dotted path
+	// string (e.g. "JSON.Codec.encode").
+	pub fn resolve_path(&self, path: &[Sym]) -> String {
+		path.iter()
+			.map(|sym| self.resolve(*sym))
+			.collect::<Vec<_>>()
+			.join(".")
 	}
 }

@@ -85,7 +85,7 @@ pub struct Export {
 pub struct Type {
 	pub name: Sym,
 	pub params: Vec<Param>,
-	pub impls: Vec<Sym>,
+	pub impls: Vec<Vec<Sym>>,
 	pub items: Vec<TypeItemId>,
 }
 

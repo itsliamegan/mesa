@@ -480,37 +480,25 @@ fn resolve_impls(
 	errs: &mut Vec<Error>,
 ) -> Vec<ProtoId> {
 	let mut impls = Vec::with_capacity(type_.impls.len());
-	for impl_name in &type_.impls {
-		let (owner, member) = match mods.binding(module, *impl_name) {
-			Some(Binding::Member(owner, member)) => (owner, member),
-			// An imported module is a name the file knows, but it is not a
-			// protocol.
-			Some(Binding::Module(_)) => {
-				errs.push(Error::NotAProtocol(
-					pkg.loc(span),
-					syms.resolve(*impl_name).to_string(),
-				));
-				continue;
+	for path in &type_.impls {
+		match mods.resolve_path_from(module, path) {
+			Some((owner, member, rest)) => {
+				if !rest.is_empty() {
+					errs.push(Error::NotAProtocol(pkg.loc(span), syms.resolve_path(path)));
+				}
+				let Member::Proto(item_id) = member else {
+					errs.push(Error::NotAProtocol(pkg.loc(span), syms.resolve_path(path)));
+					continue;
+				};
+				impls.push(types.get_proto_by_item(mods.chunk(owner), item_id));
 			}
 			None => {
 				errs.push(Error::UnknownProtocol(
 					pkg.loc(span),
-					syms.resolve(*impl_name).to_string(),
+					syms.resolve_path(path),
 				));
-				continue;
 			}
-		};
-		let item_id = match member {
-			Member::Proto(item_id) => item_id,
-			Member::Type(_) | Member::Proc(_) | Member::Var(_) | Member::Child(_) => {
-				errs.push(Error::NotAProtocol(
-					pkg.loc(span),
-					syms.resolve(*impl_name).to_string(),
-				));
-				continue;
-			}
-		};
-		impls.push(types.get_proto_by_item(mods.chunk(owner), item_id));
+		}
 	}
 	impls
 }

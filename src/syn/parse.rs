@@ -236,8 +236,8 @@ impl<'src> Parser<'src> {
 	fn parse_type(&mut self, open: TokenTag, allow_cases: bool) -> Result<(Type, Span), Error> {
 		let tok = self.take(open)?;
 		let name = self.take_type_name()?;
-		let fields = self.parse_params()?;
-		let protos = self.parse_impl_line()?;
+		let params = self.parse_params()?;
+		let impls = self.parse_impl_line()?;
 		let mut items = Vec::new();
 		let mut seen_field = false;
 		let mut seen_method = false;
@@ -270,8 +270,8 @@ impl<'src> Parser<'src> {
 		Ok((
 			Type {
 				name,
-				params: fields,
-				impls: protos,
+				params,
+				impls,
 				items,
 			},
 			tok.into(),
@@ -395,16 +395,16 @@ impl<'src> Parser<'src> {
 		Ok(self.chunk.add_block(Block { exprs: body }))
 	}
 
-	fn parse_impl_line(&mut self) -> Result<Vec<Sym>, Error> {
+	fn parse_impl_line(&mut self) -> Result<Vec<Vec<Sym>>, Error> {
 		let mut impls = Vec::new();
 		if self.tag() != TokenTag::Impl {
 			return Ok(impls);
 		}
 		self.take(TokenTag::Impl)?;
-		impls.push(self.take_type_name()?);
+		impls.push(self.parse_dotted_path()?);
 		while self.tag() == TokenTag::Comma {
 			self.take(TokenTag::Comma)?;
-			impls.push(self.take_type_name()?);
+			impls.push(self.parse_dotted_path()?);
 		}
 		Ok(impls)
 	}

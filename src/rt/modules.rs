@@ -39,11 +39,6 @@ impl<'descs> Modules<'descs> {
 
 	// A module's qualified dotted name.
 	pub fn name(&self, syms: &Interner, id: ModuleId) -> String {
-		self.descs
-			.path(id)
-			.iter()
-			.map(|sym| syms.resolve(*sym))
-			.collect::<Vec<_>>()
-			.join(".")
+		syms.resolve_path(self.descs.path(id))
 	}
 }

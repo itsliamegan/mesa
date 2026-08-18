@@ -165,6 +165,41 @@ impl Modules {
 		None
 	}
 
+	// Resolve a dotted path, starting from a particular module, to the member
+	// it points at and the module that contains it. Only resolves *module*
+	// member lookups, not *type* member lookups; the rest of the path that
+	// couldn't be traversed (if any) is returned.
+	//
+	// Because the path is relative to the 'start' module, it can begin with a
+	// *binding* of that module in addition to a member of it.
+	pub fn resolve_path_from<'path>(
+		&self,
+		start: ModuleId,
+		path: &'path [Sym],
+	) -> Option<(ModuleId, Member, &'path [Sym])> {
+		// The first part must be resolved relative to the current module's
+		// *bindings*, but subsequent parts must be resolved relative to each
+		// child module's *members*. Check the first part here, and the
+		// subsequent parts separately.
+		let (mut owner, mut member) = match self.binding(start, path[0]) {
+			// The name is bound to a value in the current module (possibly an import).
+			Some(Binding::Member(owner, member)) => (owner, member),
+			// The name is bound to a module imported by the current module.
+			Some(Binding::Module(id)) => (start, Member::Child(id)),
+			None => return None,
+		};
+		// For the remaining parts, look them up relative to each resolved part
+		// in turn.
+		for (i, part) in path[1..].iter().enumerate() {
+			let Member::Child(id) = member else {
+				return Some((owner, member, &path[i + 1..]));
+			};
+			owner = id;
+			member = self.member(owner, *part)?;
+		}
+		Some((owner, member, &[]))
+	}
+
 	fn parent(&self, id: ModuleId) -> Option<ModuleId> {
 		let file = parent_file(&self.get(id).file)?;
 		self.by_file.get(&file).copied()
@@ -233,7 +268,7 @@ fn build(syms: &Interner, pkg: &Package) -> Result<Modules, Vec<Error>> {
 		if by_name.insert(name.clone(), id).is_some() {
 			errs.push(Error::DuplicateModuleName(
 				pkg.loc(name_span),
-				dotted_path_to_string(syms, &name),
+				syms.resolve_path(&name),
 			));
 		}
 		mods.push(Module {
@@ -348,18 +383,11 @@ fn check_child_prefixes_match(syms: &Interner, pkg: &Package, mods: &Modules) ->
 		}
 		errs.push(Error::PrefixMismatch(
 			pkg.loc(module.name_span),
-			dotted_path_to_string(syms, &module.name),
-			dotted_path_to_string(syms, &parent.name),
+			syms.resolve_path(&module.name),
+			syms.resolve_path(&parent.name),
 		));
 	}
 	errs
-}
-
-fn dotted_path_to_string(syms: &Interner, path: &[Sym]) -> String {
-	path.iter()
-		.map(|seg| syms.resolve(*seg))
-		.collect::<Vec<_>>()
-		.join(".")
 }
 
 // For every member in a module—which *includes* direct submodules—check that it
@@ -433,16 +461,15 @@ fn resolve_imports(syms: &Interner, pkg: &Package, mods: &mut Modules) -> Vec<Er
 		let chunk = pkg.get_chunk(mods.get(id).chunk);
 		let mut imports = Vec::new();
 		for item_id in &chunk.top {
-			let import = match chunk.get_module_item(*item_id) {
-				ModuleItem::Import(import) => import,
-				_ => continue,
+			let ModuleItem::Import(import) = chunk.get_module_item(*item_id) else {
+				continue;
 			};
 			let span = chunk.get_module_item_span(*item_id);
-			match resolve_path(mods, &import.path) {
+			match resolve_import_path(mods, &import.path) {
 				Some(target) => imports.push(Import { target, span }),
 				None => errs.push(Error::UnknownImport(
 					pkg.loc(span),
-					dotted_path_to_string(syms, &import.path),
+					syms.resolve_path(&import.path),
 				)),
 			}
 		}
@@ -454,7 +481,7 @@ fn resolve_imports(syms: &Interner, pkg: &Package, mods: &mut Modules) -> Vec<Er
 
 // Resolve a dotted path to an import target. An import target can either be a
 // module itself or a member of a module.
-fn resolve_path(mods: &Modules, path: &[Sym]) -> Option<Target> {
+fn resolve_import_path(mods: &Modules, path: &[Sym]) -> Option<Target> {
 	if let Some(id) = mods.by_name.get(path) {
 		return Some(Target::Module(*id));
 	}
@@ -537,9 +564,9 @@ fn render_cycle(syms: &Interner, mods: &Modules, path: &[ModuleId], back: Module
 	let start = path.iter().position(|id| *id == back).unwrap();
 	let mut names: Vec<String> = path[start..]
 		.iter()
-		.map(|id| dotted_path_to_string(syms, &mods.get(*id).name))
+		.map(|id| syms.resolve_path(&mods.get(*id).name))
 		.collect();
-	names.push(dotted_path_to_string(syms, &mods.get(back).name));
+	names.push(syms.resolve_path(&mods.get(back).name));
 	names.join(" → ")
 }
 
