@@ -51,14 +51,13 @@ pub struct Tree {
 	pub files: Vec<(String, String)>,
 }
 
-// Find the root directory and manifest of the package. Start in the current
-// working directory and check for a manifest, walking parents up to $HOME.
-pub fn find() -> Result<(PathBuf, Manifest), Error> {
+// Find the root directory and manifest of the package. Start in the given
+// directory and check for a manifest, walking parents up to $HOME.
+pub fn find(mut root_dir: &Path) -> Result<(PathBuf, Manifest), Error> {
 	let home_dir = env::home_dir().unwrap();
-	let mut root_dir = env::current_dir().unwrap();
 	let mut manifest_file = root_dir.join(MANIFEST_FILE);
 	while !manifest_file.exists() && root_dir != home_dir {
-		root_dir = root_dir.parent().unwrap().to_path_buf();
+		root_dir = root_dir.parent().unwrap();
 		manifest_file = root_dir.join(MANIFEST_FILE);
 	}
 	if !manifest_file.exists() || root_dir == home_dir {
@@ -77,7 +76,7 @@ pub fn find() -> Result<(PathBuf, Manifest), Error> {
 		return Err(Error::NoRootModule);
 	}
 
-	Ok((root_dir, manifest))
+	Ok((root_dir.to_path_buf(), manifest))
 }
 
 fn read_manifest(text: &str) -> Result<Manifest, Error> {

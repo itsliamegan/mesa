@@ -9,7 +9,8 @@ use mesa::rt::Interpreter;
 use mesa::sem;
 
 fn main() {
-	let (root_dir, _manifest) = match load::find() {
+	let current_dir = env::current_dir().unwrap();
+	let (root_dir, _manifest) = match load::find(&current_dir) {
 		Ok(found) => found,
 		Err(err) => {
 			eprintln!("{}", err);
