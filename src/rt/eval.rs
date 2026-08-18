@@ -784,6 +784,14 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 					println!("{}", rt_print_val(self.syms, &self.types, &self.mods, &val));
 					Ok(val)
 				}
+				Builtin::Type { val: val_id } => {
+					let val = self.eval_expr(chunk, *val_id)?;
+					let type_id = val.type_id();
+					match type_id {
+						TypeId::User(id) => Ok(Val::Obj(self.types.user(id).val.clone())),
+						TypeId::Native(id) => Ok(Val::Obj(self.types.native(id).val.clone())),
+					}
+				}
 			},
 			Expr::Lit(lit) => Ok(match lit {
 				Lit::Str(str) => Val::Str(Rc::new(Str {

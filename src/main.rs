@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use std::env;
 use std::process;
 
 use mesa::intern::Interner;

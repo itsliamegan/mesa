@@ -285,6 +285,7 @@ pub struct Name {
 #[derive(Debug, Clone)]
 pub enum Builtin {
 	Print { val: ExprId },
+	Type { val: ExprId },
 }
 
 #[derive(Debug)]

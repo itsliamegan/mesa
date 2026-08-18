@@ -380,9 +380,10 @@ fn check_reach_expr(
 		}
 		Expr::Unary(unary) => check_reach_expr(syms, chunk, pkg, unary.val, proto, desc),
 		Expr::Name(_) => Ok(()),
-		Expr::Builtin(Builtin::Print { val }) => {
-			check_reach_expr(syms, chunk, pkg, *val, proto, desc)
-		}
+		Expr::Builtin(builtin) => match builtin {
+			Builtin::Print { val } => check_reach_expr(syms, chunk, pkg, *val, proto, desc),
+			Builtin::Type { val } => check_reach_expr(syms, chunk, pkg, *val, proto, desc),
+		},
 		Expr::Lit(lit) => match lit {
 			Lit::List(items) => {
 				for item in items {
@@ -516,7 +517,10 @@ fn check_expr(chunk: &Chunk, pkg: &Package, expr_id: ExprId, depth: u32) -> Resu
 		}
 		Expr::Unary(unary) => check_expr(chunk, pkg, unary.val, depth),
 		Expr::Name(_) => Ok(()),
-		Expr::Builtin(Builtin::Print { val }) => check_expr(chunk, pkg, *val, depth),
+		Expr::Builtin(builtin) => match builtin {
+			Builtin::Print { val } => check_expr(chunk, pkg, *val, depth),
+			Builtin::Type { val } => check_expr(chunk, pkg, *val, depth),
+		},
 		Expr::Lit(lit) => match lit {
 			Lit::List(items) => {
 				for item in items {

@@ -822,6 +822,14 @@ impl<'src> Parser<'src> {
 				let expr_id = self.chunk.add_expr(tok.into(), expr);
 				Ok(expr_id)
 			}
+			"$type" => {
+				self.take(TokenTag::LParen)?;
+				let val = self.parse_expr()?;
+				self.take(TokenTag::RParen)?;
+				let expr = Expr::Builtin(Builtin::Type { val });
+				let expr_id = self.chunk.add_expr(tok.into(), expr);
+				Ok(expr_id)
+			}
 			_ => Err(Error::UnknownBuiltin(
 				self.src.loc(tok.pos),
 				span.to_string(),

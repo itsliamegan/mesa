@@ -69,6 +69,7 @@ impl NativeMember {
 
 #[derive(Debug)]
 pub struct NativeType {
+	pub val: Rc<RefCell<Obj>>,
 	pub name: Sym,
 	pub new: Option<fn() -> Val>,
 	pub members: FxHashMap<Sym, NativeMember>,
@@ -143,6 +144,7 @@ pub fn build_core_types(syms: &mut Interner) -> Vec<NativeType> {
 			);
 		}
 		core.push(NativeType {
+			val: Rc::new(RefCell::new(Obj::Type(TypeId::Native(*id)))),
 			name: syms.intern(CORE_TYPE_NAMES[id.0 as usize]),
 			new: *new,
 			members,
