@@ -65,12 +65,19 @@ end
 #---
 
 #> 5
+
 import Test.Codec
+
 $print(Codec.Json.decode(4))
+
 #:codec.ms
+
 module Test.Codec
+
 #:codec/json.ms
+
 module Test.Codec.Json
+
 def decode(x)
 	return x + 1
 end

@@ -5,14 +5,13 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
-use crate::pkg::Package;
 use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
-use crate::src::{Location, Span};
-use crate::syn::Chunk;
+use crate::src::{Location, Sources, Span};
 use crate::syn::nodes::{
 	BlockId, Builtin, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param, Place, TypeItem,
 };
+use crate::syn::{Chunk, Chunks};
 
 #[derive(Debug)]
 pub enum Error {
@@ -163,21 +162,21 @@ impl Display for Error {
 
 pub fn check(
 	syms: &mut Interner,
-	pkg: &Package,
-	dirs: &[String],
+	sources: &Sources,
+	chunks: &Chunks,
 ) -> Result<(Modules, Types), Vec<Error>> {
-	let mods = modules::check(syms, pkg, dirs)?;
+	let mods = modules::check(syms, sources, chunks)?;
 
 	// Describing resolves 'impl' names and decides conformance itself, so it
 	// tolerates the package not yet being known valid; it runs before the
 	// chunk walk rather than after, and its errors precede that walk's in the
 	// bundle, mirroring how module errors already precede every chunk error.
-	let (types, mut errs) = types::check(syms, pkg, &mods);
+	let (types, mut errs) = types::check(syms, sources, chunks, &mods);
 
 	// Every chunk is a module by now, module checking having failed otherwise,
 	// and the modules are held in chunk order, so this reports in file order.
 	for id in mods.ids() {
-		if let Err(mut chunk_errs) = check_chunk(syms, pkg, &mods, &types, id) {
+		if let Err(mut chunk_errs) = check_chunk(syms, sources, chunks, &mods, &types, id) {
 			errs.append(&mut chunk_errs);
 		}
 	}
@@ -191,13 +190,14 @@ pub fn check(
 
 fn check_chunk(
 	syms: &mut Interner,
-	pkg: &Package,
+	sources: &Sources,
+	chunks: &Chunks,
 	mods: &Modules,
 	types: &Types,
 	module: ModuleId,
 ) -> Result<(), Vec<Error>> {
 	let chunk_id = mods.chunk(module);
-	let chunk = pkg.chunks.get(chunk_id);
+	let chunk = chunks.get(chunk_id);
 	let mut errs = Vec::new();
 
 	let mut prelude = HashSet::new();
@@ -217,7 +217,7 @@ fn check_chunk(
 			ModuleItem::Expr(_) => continue,
 		};
 		if prelude.contains(&name) {
-			let loc = pkg.loc(span);
+			let loc = sources.loc(span);
 			errs.push(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
 		}
 	}
@@ -238,8 +238,8 @@ fn check_chunk(
 			ModuleItem::Export(_) => Ok(()),
 			ModuleItem::Type(_) => Ok(()),
 			ModuleItem::Proto(_) => Ok(()),
-			ModuleItem::Def(def) => check_def(syms, chunk, pkg, span, def),
-			ModuleItem::Expr(expr_id) => check_expr(chunk, pkg, *expr_id, 0),
+			ModuleItem::Def(def) => check_def(syms, sources, chunk, span, def),
+			ModuleItem::Expr(expr_id) => check_expr(sources, chunk, *expr_id, 0),
 		};
 		if let Err(err) = result {
 			errs.push(err);
@@ -253,7 +253,7 @@ fn check_chunk(
 			TypeItem::Case(..) | TypeItem::Field(..) | TypeItem::Type(..) => continue,
 		};
 		let span = chunk.get_type_item_span(item_id);
-		if let Err(err) = check_def(syms, chunk, pkg, span, def) {
+		if let Err(err) = check_def(syms, sources, chunk, span, def) {
 			errs.push(err);
 		}
 	}
@@ -265,14 +265,14 @@ fn check_chunk(
 		let item_span = chunk.get_proto_item_span(item_id);
 		let item = chunk.get_proto_item(item_id);
 		let def = &item.def;
-		if let Err(err) = check_def(syms, chunk, pkg, item_span, def) {
+		if let Err(err) = check_def(syms, sources, chunk, item_span, def) {
 			errs.push(err);
 			continue;
 		}
 		let proto_id = types.get_proto_by_proto_item(chunk_id, item_id);
 		let desc = types.get_proto(proto_id);
 		if desc.provided.contains_key(&def.name)
-			&& let Err(err) = check_reach_block(syms, chunk, pkg, def.body, desc.name, desc)
+			&& let Err(err) = check_reach_block(syms, sources, chunk, def.body, desc.name, desc)
 		{
 			errs.push(err);
 		}
@@ -289,112 +289,112 @@ fn check_chunk(
 // members its own protocol declares.
 fn check_reach_block(
 	syms: &Interner,
+	sources: &Sources,
 	chunk: &Chunk,
-	pkg: &Package,
 	block_id: BlockId,
 	proto: Sym,
 	desc: &types::Proto,
 ) -> Result<(), Error> {
 	let block = chunk.get_block(block_id);
 	for expr_id in &block.exprs {
-		check_reach_expr(syms, chunk, pkg, *expr_id, proto, desc)?;
+		check_reach_expr(syms, sources, chunk, *expr_id, proto, desc)?;
 	}
 	Ok(())
 }
 
 fn check_reach_expr(
 	syms: &Interner,
+	sources: &Sources,
 	chunk: &Chunk,
-	pkg: &Package,
 	expr_id: ExprId,
 	proto: Sym,
 	desc: &types::Proto,
 ) -> Result<(), Error> {
 	match chunk.get_expr(expr_id) {
 		Expr::Each(each) => {
-			check_reach_expr(syms, chunk, pkg, each.iter, proto, desc)?;
-			check_reach_block(syms, chunk, pkg, each.body, proto, desc)
+			check_reach_expr(syms, sources, chunk, each.iter, proto, desc)?;
+			check_reach_block(syms, sources, chunk, each.body, proto, desc)
 		}
-		Expr::Loop(loop_) => check_reach_block(syms, chunk, pkg, loop_.body, proto, desc),
+		Expr::Loop(loop_) => check_reach_block(syms, sources, chunk, loop_.body, proto, desc),
 		Expr::When(when) => {
-			check_reach_expr(syms, chunk, pkg, when.cond, proto, desc)?;
-			check_reach_block(syms, chunk, pkg, when.then_branch, proto, desc)?;
+			check_reach_expr(syms, sources, chunk, when.cond, proto, desc)?;
+			check_reach_block(syms, sources, chunk, when.then_branch, proto, desc)?;
 			if let Some(else_branch) = when.else_branch {
-				check_reach_block(syms, chunk, pkg, else_branch, proto, desc)?;
+				check_reach_block(syms, sources, chunk, else_branch, proto, desc)?;
 			}
 			Ok(())
 		}
 		Expr::Match(match_) => {
-			check_reach_expr(syms, chunk, pkg, match_.scrutinee, proto, desc)?;
+			check_reach_expr(syms, sources, chunk, match_.scrutinee, proto, desc)?;
 			for arm in &match_.arms {
-				check_reach_expr(syms, chunk, pkg, arm.path, proto, desc)?;
-				check_reach_block(syms, chunk, pkg, arm.body, proto, desc)?;
+				check_reach_expr(syms, sources, chunk, arm.path, proto, desc)?;
+				check_reach_block(syms, sources, chunk, arm.body, proto, desc)?;
 			}
 			if let Some(else_branch) = match_.else_branch {
-				check_reach_block(syms, chunk, pkg, else_branch, proto, desc)?;
+				check_reach_block(syms, sources, chunk, else_branch, proto, desc)?;
 			}
 			Ok(())
 		}
 		Expr::Return(return_) => match return_.val {
-			Some(val) => check_reach_expr(syms, chunk, pkg, val, proto, desc),
+			Some(val) => check_reach_expr(syms, sources, chunk, val, proto, desc),
 			None => Ok(()),
 		},
 		Expr::Break(break_) => match break_.val {
-			Some(val) => check_reach_expr(syms, chunk, pkg, val, proto, desc),
+			Some(val) => check_reach_expr(syms, sources, chunk, val, proto, desc),
 			None => Ok(()),
 		},
 		Expr::Self_ => Ok(()),
 		Expr::Call(call) => {
-			check_reach_expr(syms, chunk, pkg, call.callee, proto, desc)?;
+			check_reach_expr(syms, sources, chunk, call.callee, proto, desc)?;
 			for arg in &call.args {
-				check_reach_expr(syms, chunk, pkg, arg.val, proto, desc)?;
+				check_reach_expr(syms, sources, chunk, arg.val, proto, desc)?;
 			}
 			Ok(())
 		}
 		Expr::Member(member) => {
-			check_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
-			check_reach_expr(syms, chunk, pkg, member.receiver, proto, desc)
+			check_reaches_member(syms, sources, chunk, expr_id, proto, desc, member)?;
+			check_reach_expr(syms, sources, chunk, member.receiver, proto, desc)
 		}
 		Expr::Access(access) => {
-			check_reach_expr(syms, chunk, pkg, access.receiver, proto, desc)?;
-			check_reach_expr(syms, chunk, pkg, access.key, proto, desc)
+			check_reach_expr(syms, sources, chunk, access.receiver, proto, desc)?;
+			check_reach_expr(syms, sources, chunk, access.key, proto, desc)
 		}
-		Expr::Mention(mention) => check_reach_expr(syms, chunk, pkg, mention.val, proto, desc),
+		Expr::Mention(mention) => check_reach_expr(syms, sources, chunk, mention.val, proto, desc),
 		Expr::Assign(assign) => {
 			match &assign.place {
 				Place::Name(_) => {}
 				Place::Member(member) => {
-					check_reaches_member(syms, chunk, pkg, expr_id, proto, desc, member)?;
-					check_reach_expr(syms, chunk, pkg, member.receiver, proto, desc)?;
+					check_reaches_member(syms, sources, chunk, expr_id, proto, desc, member)?;
+					check_reach_expr(syms, sources, chunk, member.receiver, proto, desc)?;
 				}
 				Place::Access(access) => {
-					check_reach_expr(syms, chunk, pkg, access.receiver, proto, desc)?;
-					check_reach_expr(syms, chunk, pkg, access.key, proto, desc)?;
+					check_reach_expr(syms, sources, chunk, access.receiver, proto, desc)?;
+					check_reach_expr(syms, sources, chunk, access.key, proto, desc)?;
 				}
 			}
-			check_reach_expr(syms, chunk, pkg, assign.val, proto, desc)
+			check_reach_expr(syms, sources, chunk, assign.val, proto, desc)
 		}
 		Expr::Binary(binary) => {
-			check_reach_expr(syms, chunk, pkg, binary.lhs, proto, desc)?;
-			check_reach_expr(syms, chunk, pkg, binary.rhs, proto, desc)
+			check_reach_expr(syms, sources, chunk, binary.lhs, proto, desc)?;
+			check_reach_expr(syms, sources, chunk, binary.rhs, proto, desc)
 		}
-		Expr::Unary(unary) => check_reach_expr(syms, chunk, pkg, unary.val, proto, desc),
+		Expr::Unary(unary) => check_reach_expr(syms, sources, chunk, unary.val, proto, desc),
 		Expr::Name(_) => Ok(()),
 		Expr::Builtin(builtin) => match builtin {
-			Builtin::Print { val } => check_reach_expr(syms, chunk, pkg, *val, proto, desc),
-			Builtin::Type { val } => check_reach_expr(syms, chunk, pkg, *val, proto, desc),
+			Builtin::Print { val } => check_reach_expr(syms, sources, chunk, *val, proto, desc),
+			Builtin::Type { val } => check_reach_expr(syms, sources, chunk, *val, proto, desc),
 		},
 		Expr::Lit(lit) => match lit {
 			Lit::List(items) => {
 				for item in items {
-					check_reach_expr(syms, chunk, pkg, *item, proto, desc)?;
+					check_reach_expr(syms, sources, chunk, *item, proto, desc)?;
 				}
 				Ok(())
 			}
 			Lit::Dict(pairs) => {
 				for (key, val) in pairs {
-					check_reach_expr(syms, chunk, pkg, *key, proto, desc)?;
-					check_reach_expr(syms, chunk, pkg, *val, proto, desc)?;
+					check_reach_expr(syms, sources, chunk, *key, proto, desc)?;
+					check_reach_expr(syms, sources, chunk, *val, proto, desc)?;
 				}
 				Ok(())
 			}
@@ -405,8 +405,8 @@ fn check_reach_expr(
 
 fn check_reaches_member(
 	syms: &Interner,
+	sources: &Sources,
 	chunk: &Chunk,
-	pkg: &Package,
 	expr_id: ExprId,
 	proto: Sym,
 	desc: &types::Proto,
@@ -416,7 +416,7 @@ fn check_reaches_member(
 		if !desc.required.contains_key(&member.name) && !desc.provided.contains_key(&member.name) {
 			let span = chunk.get_expr_span(expr_id);
 			return Err(Error::ProtocolReach(
-				pkg.loc(span),
+				sources.loc(span),
 				syms.resolve(proto).to_string(),
 				syms.resolve(member.name).to_string(),
 			));
@@ -427,111 +427,116 @@ fn check_reaches_member(
 
 fn check_def(
 	syms: &Interner,
+	sources: &Sources,
 	chunk: &Chunk,
-	pkg: &Package,
 	span: Span,
 	def: &Def,
 ) -> Result<(), Error> {
-	check_required_precede_optional(syms, pkg, span, &def.params)?;
+	check_required_precede_optional(syms, sources, span, &def.params)?;
 	// A proc body resets the loop-depth counter. break inside a proc can't
 	// reach an outer loop, even if the proc itself is lexically nested in one.
-	check_block(chunk, pkg, def.body, 0)
+	check_block(sources, chunk, def.body, 0)
 }
 
-fn check_block(chunk: &Chunk, pkg: &Package, block_id: BlockId, depth: u32) -> Result<(), Error> {
+fn check_block(
+	sources: &Sources,
+	chunk: &Chunk,
+	block_id: BlockId,
+	depth: u32,
+) -> Result<(), Error> {
 	let block = chunk.get_block(block_id);
 	for expr_id in &block.exprs {
-		check_expr(chunk, pkg, *expr_id, depth)?;
+		check_expr(sources, chunk, *expr_id, depth)?;
 	}
 	Ok(())
 }
 
-fn check_expr(chunk: &Chunk, pkg: &Package, expr_id: ExprId, depth: u32) -> Result<(), Error> {
+fn check_expr(sources: &Sources, chunk: &Chunk, expr_id: ExprId, depth: u32) -> Result<(), Error> {
 	match chunk.get_expr(expr_id) {
 		Expr::Each(each) => {
-			check_expr(chunk, pkg, each.iter, depth)?;
-			check_block(chunk, pkg, each.body, depth + 1)
+			check_expr(sources, chunk, each.iter, depth)?;
+			check_block(sources, chunk, each.body, depth + 1)
 		}
-		Expr::Loop(loop_) => check_block(chunk, pkg, loop_.body, depth + 1),
+		Expr::Loop(loop_) => check_block(sources, chunk, loop_.body, depth + 1),
 		Expr::When(when) => {
-			check_expr(chunk, pkg, when.cond, depth)?;
-			check_block(chunk, pkg, when.then_branch, depth)?;
+			check_expr(sources, chunk, when.cond, depth)?;
+			check_block(sources, chunk, when.then_branch, depth)?;
 			if let Some(else_branch) = when.else_branch {
-				check_block(chunk, pkg, else_branch, depth)?;
+				check_block(sources, chunk, else_branch, depth)?;
 			}
 			Ok(())
 		}
 		Expr::Match(match_) => {
-			check_expr(chunk, pkg, match_.scrutinee, depth)?;
+			check_expr(sources, chunk, match_.scrutinee, depth)?;
 			for arm in &match_.arms {
-				check_expr(chunk, pkg, arm.path, depth)?;
-				check_block(chunk, pkg, arm.body, depth)?;
+				check_expr(sources, chunk, arm.path, depth)?;
+				check_block(sources, chunk, arm.body, depth)?;
 			}
 			if let Some(else_branch) = match_.else_branch {
-				check_block(chunk, pkg, else_branch, depth)?;
+				check_block(sources, chunk, else_branch, depth)?;
 			}
 			Ok(())
 		}
 		Expr::Return(return_) => match return_.val {
-			Some(val) => check_expr(chunk, pkg, val, depth),
+			Some(val) => check_expr(sources, chunk, val, depth),
 			None => Ok(()),
 		},
 		Expr::Break(break_) => {
 			if depth == 0 {
 				let span = chunk.get_expr_span(expr_id);
-				return Err(Error::BreakOutsideLoop(pkg.loc(span)));
+				return Err(Error::BreakOutsideLoop(sources.loc(span)));
 			}
 			match break_.val {
-				Some(val) => check_expr(chunk, pkg, val, depth),
+				Some(val) => check_expr(sources, chunk, val, depth),
 				None => Ok(()),
 			}
 		}
 		Expr::Self_ => Ok(()),
 		Expr::Call(call) => {
-			check_expr(chunk, pkg, call.callee, depth)?;
+			check_expr(sources, chunk, call.callee, depth)?;
 			for arg in &call.args {
-				check_expr(chunk, pkg, arg.val, depth)?;
+				check_expr(sources, chunk, arg.val, depth)?;
 			}
 			Ok(())
 		}
-		Expr::Member(member) => check_expr(chunk, pkg, member.receiver, depth),
+		Expr::Member(member) => check_expr(sources, chunk, member.receiver, depth),
 		Expr::Access(access) => {
-			check_expr(chunk, pkg, access.receiver, depth)?;
-			check_expr(chunk, pkg, access.key, depth)
+			check_expr(sources, chunk, access.receiver, depth)?;
+			check_expr(sources, chunk, access.key, depth)
 		}
-		Expr::Mention(mention) => check_expr(chunk, pkg, mention.val, depth),
+		Expr::Mention(mention) => check_expr(sources, chunk, mention.val, depth),
 		Expr::Assign(assign) => {
 			match &assign.place {
 				Place::Name(_) => {}
-				Place::Member(member) => check_expr(chunk, pkg, member.receiver, depth)?,
+				Place::Member(member) => check_expr(sources, chunk, member.receiver, depth)?,
 				Place::Access(access) => {
-					check_expr(chunk, pkg, access.receiver, depth)?;
-					check_expr(chunk, pkg, access.key, depth)?;
+					check_expr(sources, chunk, access.receiver, depth)?;
+					check_expr(sources, chunk, access.key, depth)?;
 				}
 			}
-			check_expr(chunk, pkg, assign.val, depth)
+			check_expr(sources, chunk, assign.val, depth)
 		}
 		Expr::Binary(binary) => {
-			check_expr(chunk, pkg, binary.lhs, depth)?;
-			check_expr(chunk, pkg, binary.rhs, depth)
+			check_expr(sources, chunk, binary.lhs, depth)?;
+			check_expr(sources, chunk, binary.rhs, depth)
 		}
-		Expr::Unary(unary) => check_expr(chunk, pkg, unary.val, depth),
+		Expr::Unary(unary) => check_expr(sources, chunk, unary.val, depth),
 		Expr::Name(_) => Ok(()),
 		Expr::Builtin(builtin) => match builtin {
-			Builtin::Print { val } => check_expr(chunk, pkg, *val, depth),
-			Builtin::Type { val } => check_expr(chunk, pkg, *val, depth),
+			Builtin::Print { val } => check_expr(sources, chunk, *val, depth),
+			Builtin::Type { val } => check_expr(sources, chunk, *val, depth),
 		},
 		Expr::Lit(lit) => match lit {
 			Lit::List(items) => {
 				for item in items {
-					check_expr(chunk, pkg, *item, depth)?;
+					check_expr(sources, chunk, *item, depth)?;
 				}
 				Ok(())
 			}
 			Lit::Dict(pairs) => {
 				for (key, val) in pairs {
-					check_expr(chunk, pkg, *key, depth)?;
-					check_expr(chunk, pkg, *val, depth)?;
+					check_expr(sources, chunk, *key, depth)?;
+					check_expr(sources, chunk, *val, depth)?;
 				}
 				Ok(())
 			}
@@ -544,7 +549,7 @@ fn check_expr(chunk: &Chunk, pkg: &Package, expr_id: ExprId, depth: u32) -> Resu
 // invariant for virtually all arg/param handling.
 pub fn check_required_precede_optional(
 	syms: &Interner,
-	pkg: &Package,
+	sources: &Sources,
 	span: Span,
 	params: &[Param],
 ) -> Result<(), Error> {
@@ -555,7 +560,7 @@ pub fn check_required_precede_optional(
 		} else if let Some(earlier) = defaulted {
 			// A defaulted param came earlier, so this required one breaks the
 			// invariant.
-			let loc = pkg.loc(span);
+			let loc = sources.loc(span);
 			return Err(Error::RequiredAfterDefault(
 				loc,
 				syms.resolve(param.name).to_string(),

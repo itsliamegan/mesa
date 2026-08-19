@@ -6,7 +6,7 @@ use std::process;
 
 use mesa::intern::Interner;
 use mesa::load;
-use mesa::pkg::Packages;
+use mesa::pkg::{Package, Packages};
 use mesa::rt::Interpreter;
 use mesa::sem;
 
@@ -31,16 +31,16 @@ fn main() {
 			process::exit(1);
 		}
 	};
-	let tree = match load::collect(&stdlib_dir) {
-		Ok(tree) => tree,
+	let sources = match load::collect(&stdlib_dir) {
+		Ok(sources) => sources,
 		Err(err) => {
 			eprintln!("[Core] {}", err);
 			process::exit(1);
 		}
 	};
 
-	let pkg = match load::parse(&mut syms, tree.files, manifest) {
-		Ok(pkg) => pkg,
+	let chunks = match load::parse(&mut syms, &sources) {
+		Ok(chunks) => chunks,
 		Err(errs) => {
 			for err in errs {
 				eprintln!("[Core] {}", err);
@@ -49,7 +49,7 @@ fn main() {
 		}
 	};
 
-	let (modules, types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
+	let (modules, types) = match sem::check(&mut syms, &sources, &chunks) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
@@ -68,16 +68,16 @@ fn main() {
 		}
 	};
 
-	let tree = match load::collect(&root_dir) {
-		Ok(tree) => tree,
+	let sources = match load::collect(&root_dir) {
+		Ok(sources) => sources,
 		Err(err) => {
 			eprintln!("{}", err);
 			process::exit(1);
 		}
 	};
 
-	let pkg = match load::parse(&mut syms, tree.files, manifest) {
-		Ok(pkg) => pkg,
+	let chunks = match load::parse(&mut syms, &sources) {
+		Ok(chunks) => chunks,
 		Err(errs) => {
 			for err in errs {
 				eprintln!("{}", err);
@@ -86,7 +86,7 @@ fn main() {
 		}
 	};
 
-	let (modules, types) = match sem::check(&mut syms, &pkg, &tree.dirs) {
+	let (modules, types) = match sem::check(&mut syms, &sources, &chunks) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
@@ -95,6 +95,8 @@ fn main() {
 			process::exit(1);
 		}
 	};
+
+	let pkg = Package::new(manifest, sources, chunks);
 
 	match Interpreter::new(&mut syms, &pkg, &types, &modules).eval() {
 		Ok(()) => {}

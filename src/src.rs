@@ -1,26 +1,54 @@
+use std::collections::BTreeSet;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{Index, Range};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug)]
 pub struct Sources {
 	sources: Vec<Source>,
+	files: Vec<PathBuf>,
+	dirs: BTreeSet<PathBuf>,
 }
 
 impl Sources {
 	pub fn new() -> Self {
 		Self {
 			sources: Vec::new(),
+			files: Vec::new(),
+			dirs: BTreeSet::new(),
 		}
+	}
+
+	pub fn ids(&self) -> impl ExactSizeIterator<Item = SourceId> {
+		(0..self.sources.len()).map(SourceId::from_index)
+	}
+
+	pub fn files(&self) -> impl ExactSizeIterator<Item = &PathBuf> {
+		self.files.iter()
+	}
+
+	pub fn dirs(&self) -> impl ExactSizeIterator<Item = &PathBuf> {
+		self.dirs.iter()
 	}
 
 	pub fn get(&self, id: SourceId) -> &Source {
 		&self.sources[id.index()]
 	}
 
-	pub fn add(&mut self, file: String, text: String) -> SourceId {
+	pub fn add(&mut self, file: PathBuf, text: String) -> SourceId {
 		let id = SourceId::from_index(self.sources.len());
-		self.sources.push(Source { id, file, text });
+		self.sources.push(Source {
+			id,
+			file: file.clone(),
+			text,
+		});
+		self.files.push(file.clone());
+		self.dirs.insert(file.parent().unwrap().to_path_buf());
 		id
+	}
+
+	pub fn loc(&self, span: Span) -> Location {
+		self.get(span.src).loc(span.start)
 	}
 }
 
@@ -28,19 +56,19 @@ impl Sources {
 pub struct SourceId(u32);
 
 impl SourceId {
-	fn index(&self) -> usize {
-		self.0 as usize
-	}
-
 	fn from_index(index: usize) -> Self {
 		Self(index as u32)
+	}
+
+	fn index(&self) -> usize {
+		self.0 as usize
 	}
 }
 
 #[derive(Debug)]
 pub struct Source {
 	id: SourceId,
-	file: String,
+	file: PathBuf,
 	text: String,
 }
 
@@ -49,7 +77,7 @@ impl Source {
 		self.id
 	}
 
-	pub fn file(&self) -> &str {
+	pub fn file(&self) -> &Path {
 		&self.file
 	}
 
@@ -95,12 +123,12 @@ impl Index<Range<usize>> for Source {
 
 #[derive(Debug)]
 pub struct Location {
-	file: String,
+	file: PathBuf,
 	pos: Option<(usize, usize)>,
 }
 
 impl Location {
-	pub fn file(file: String) -> Self {
+	pub fn file(file: PathBuf) -> Self {
 		Self { file, pos: None }
 	}
 }
@@ -108,8 +136,8 @@ impl Location {
 impl Display for Location {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		match self.pos {
-			Some((lin, col)) => write!(f, "{}:{},{}", self.file, lin, col),
-			None => write!(f, "{}", self.file),
+			Some((lin, col)) => write!(f, "{}:{},{}", self.file.to_string_lossy(), lin, col),
+			None => write!(f, "{}", self.file.to_string_lossy()),
 		}
 	}
 }

@@ -3,10 +3,10 @@ use std::collections::HashMap;
 use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
-use crate::pkg::Package;
 use crate::sem::modules::{Member, ModuleId, Modules};
 use crate::sem::{Error, check_required_precede_optional};
-use crate::src::Span;
+use crate::src::{Sources, Span};
+use crate::syn::Chunks;
 use crate::syn::nodes::{
 	Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem, TypeItemId,
 };
@@ -160,7 +160,12 @@ impl Types {
 // Describe every type and protocol in the package, resolving 'impl' names and
 // deciding conformance as it goes. Unresolved names and conformance failures
 // are reported here rather than assumed impossible.
-pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Error>) {
+pub fn check(
+	syms: &Interner,
+	sources: &Sources,
+	chunks: &Chunks,
+	mods: &Modules,
+) -> (Types, Vec<Error>) {
 	let mut types = Types {
 		types: Vec::new(),
 		protos: Vec::new(),
@@ -174,7 +179,7 @@ pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Erro
 	// declared in any file.
 	for module in mods.ids() {
 		let chunk_id = mods.chunk(module);
-		let chunk = pkg.chunks.get(chunk_id);
+		let chunk = chunks.get(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
@@ -183,24 +188,24 @@ pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Erro
 			}
 		}
 	}
-	errs.append(&mut check_protos(syms, pkg, &types));
+	errs.append(&mut check_protos(syms, sources, &types));
 
 	for module in mods.ids() {
 		let chunk_id = mods.chunk(module);
-		let chunk = pkg.chunks.get(chunk_id);
+		let chunk = chunks.get(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Type(type_) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
 				let id = describe_type(
-					&mut types, syms, pkg, mods, module, chunk_id, span, type_, None, None, false,
-					&mut errs,
+					syms, sources, chunks, mods, &mut types, module, chunk_id, span, type_, None,
+					None, false, &mut errs,
 				);
 				types.type_by_item.insert((chunk_id, *item_id), id);
 			}
 		}
 	}
 
-	errs.append(&mut check_structure(syms, pkg, &types));
+	errs.append(&mut check_structure(syms, sources, &types));
 
 	(types, errs)
 }
@@ -237,13 +242,13 @@ fn describe_proto(
 // A protocol must either provide members or only require them: a protocol
 // that provides members but requires none has nothing a type must declare to
 // implement it.
-fn check_protos(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> {
+fn check_protos(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Error> {
 	let mut errs = Vec::new();
 	for id in types.proto_ids() {
 		let proto = types.get_proto(id);
 		if !proto.provided.is_empty() && proto.required.is_empty() {
 			errs.push(Error::ProvidedWithoutRequired(
-				pkg.loc(proto.span),
+				sources.loc(proto.span),
 				syms.resolve(proto.name).to_string(),
 			));
 		}
@@ -255,10 +260,11 @@ fn check_protos(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> {
 // member resolution to a single table lookup. Resolve the type's 'impl' names
 // and decide conformance against each.
 fn describe_type(
-	types: &mut Types,
 	syms: &Interner,
-	pkg: &Package,
+	sources: &Sources,
+	chunks: &Chunks,
 	mods: &Modules,
+	types: &mut Types,
 	module: ModuleId,
 	chunk_id: ChunkId,
 	span: Span,
@@ -268,7 +274,7 @@ fn describe_type(
 	is_case: bool,
 	errs: &mut Vec<Error>,
 ) -> TypeId {
-	let chunk = pkg.chunks.get(chunk_id);
+	let chunk = chunks.get(chunk_id);
 	// Claim the id before the body is walked so that a nested type can name the
 	// type enclosing it while that type is still being described.
 	let id = TypeId(types.types.len() as u32);
@@ -328,11 +334,12 @@ fn describe_type(
 		}
 	}
 
-	let impls = resolve_impls(types, syms, pkg, mods, module, span, type_, errs);
+	let impls = resolve_impls(syms, sources, mods, types, module, span, type_, errs);
 	let acquired = acquire_members(
-		types,
 		syms,
-		pkg,
+		sources,
+		chunks,
+		types,
 		type_.name,
 		span,
 		&declared,
@@ -374,10 +381,11 @@ fn describe_type(
 		match chunk.get_type_item(*item_id) {
 			TypeItem::Case(variant) => {
 				let variant_id = describe_type(
-					types,
 					syms,
-					pkg,
+					sources,
+					chunks,
 					mods,
+					types,
 					module,
 					chunk_id,
 					item_span,
@@ -395,10 +403,11 @@ fn describe_type(
 			// nothing: only a case refines the type it is written in.
 			TypeItem::Type(inner) => {
 				let inner_id = describe_type(
-					types,
 					syms,
-					pkg,
+					sources,
+					chunks,
 					mods,
+					types,
 					module,
 					chunk_id,
 					item_span,
@@ -429,12 +438,13 @@ fn describe_type(
 // Check that the structure of a type is valid. It must not have fields if it is
 // a case parent, and it must declare params in the standard
 // required-before-optional order.
-fn check_structure(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> {
+fn check_structure(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Error> {
 	let mut errs = Vec::new();
 	for id in types.ids() {
 		let type_ = types.get_type(id);
 
-		if let Err(err) = check_required_precede_optional(syms, pkg, type_.span, &type_.ctor_fields)
+		if let Err(err) =
+			check_required_precede_optional(syms, sources, type_.span, &type_.ctor_fields)
 		{
 			errs.push(err);
 		}
@@ -451,13 +461,13 @@ fn check_structure(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> 
 		}
 		if !type_.ctor_fields.is_empty() {
 			errs.push(Error::ParamsOnCaseParent(
-				pkg.loc(type_.span),
+				sources.loc(type_.span),
 				syms.resolve(type_.name).to_string(),
 			));
 		}
 		if let Some((name, field)) = type_.body_fields.iter().next() {
 			errs.push(Error::FieldOnCaseParent(
-				pkg.loc(field.span),
+				sources.loc(field.span),
 				syms.resolve(type_.name).to_string(),
 				syms.resolve(*name).to_string(),
 			));
@@ -469,10 +479,10 @@ fn check_structure(syms: &Interner, pkg: &Package, types: &Types) -> Vec<Error> 
 // Resolve the protocols an 'impl' line names against the symbols that the
 // declaring file binds. A name that fails to resolve contributes no 'ProtoId'.
 fn resolve_impls(
-	types: &Types,
 	syms: &Interner,
-	pkg: &Package,
+	sources: &Sources,
 	mods: &Modules,
+	types: &Types,
 	module: ModuleId,
 	span: Span,
 	type_: &syn::nodes::Type,
@@ -483,17 +493,23 @@ fn resolve_impls(
 		match mods.resolve_path_from(module, path) {
 			Some((owner, member, rest)) => {
 				if !rest.is_empty() {
-					errs.push(Error::NotAProtocol(pkg.loc(span), syms.resolve_path(path)));
+					errs.push(Error::NotAProtocol(
+						sources.loc(span),
+						syms.resolve_path(path),
+					));
 				}
 				let Member::Proto(item_id) = member else {
-					errs.push(Error::NotAProtocol(pkg.loc(span), syms.resolve_path(path)));
+					errs.push(Error::NotAProtocol(
+						sources.loc(span),
+						syms.resolve_path(path),
+					));
 					continue;
 				};
 				impls.push(types.get_proto_by_item(mods.chunk(owner), item_id));
 			}
 			None => {
 				errs.push(Error::UnknownProtocol(
-					pkg.loc(span),
+					sources.loc(span),
 					syms.resolve_path(path),
 				));
 			}
@@ -507,9 +523,10 @@ fn resolve_impls(
 // just the *actual* protocol provisions, because every conformance error is a
 // statement about what the flattening would otherwise produce.
 fn acquire_members(
-	types: &Types,
 	syms: &Interner,
-	pkg: &Package,
+	sources: &Sources,
+	chunks: &Chunks,
+	types: &Types,
 	type_name: Sym,
 	type_span: Span,
 	declared: &HashMap<Sym, MemberSite>,
@@ -524,7 +541,7 @@ fn acquire_members(
 	let mut from: HashMap<Sym, Sym> = HashMap::new();
 	for proto_id in impls {
 		let proto = types.get_proto(*proto_id);
-		let proto_chunk = pkg.chunks.get(proto.chunk);
+		let proto_chunk = chunks.get(proto.chunk);
 		// Which map a member came from already answers whether it is provided,
 		// so nothing here re-asks the body the way a lookup against
 		// 'Proto.members' used to.
@@ -554,7 +571,7 @@ fn acquire_members(
 				None
 			};
 			if let Some(MemberSite::Declared(site_chunk, site_item)) = own {
-				let site_chunk = pkg.chunks.get(*site_chunk);
+				let site_chunk = chunks.get(*site_chunk);
 				let TypeItem::Method(syn::nodes::Method::Instance(method_def)) =
 					site_chunk.get_type_item(*site_item)
 				else {
@@ -562,7 +579,7 @@ fn acquire_members(
 				};
 				if !signatures_agree(proto_chunk, site_chunk, &def.params, &method_def.params) {
 					errs.push(Error::SignatureMismatch(
-						pkg.loc(site_chunk.get_type_item_span(*site_item)),
+						sources.loc(site_chunk.get_type_item_span(*site_item)),
 						syms.resolve(type_name).to_string(),
 						syms.resolve(proto.name).to_string(),
 						syms.resolve(*member).to_string(),
@@ -573,7 +590,7 @@ fn acquire_members(
 
 			if !provided {
 				errs.push(Error::MissingMember(
-					pkg.loc(type_span),
+					sources.loc(type_span),
 					syms.resolve(type_name).to_string(),
 					syms.resolve(proto.name).to_string(),
 					syms.resolve(*member).to_string(),
@@ -583,7 +600,7 @@ fn acquire_members(
 
 			if let Some(static_span) = static_spans.get(member) {
 				errs.push(Error::MemberCollision(
-					pkg.loc(*static_span),
+					sources.loc(*static_span),
 					syms.resolve(type_name).to_string(),
 					syms.resolve(proto.name).to_string(),
 					syms.resolve(*member).to_string(),
@@ -593,7 +610,7 @@ fn acquire_members(
 
 			if let Some(first) = from.insert(*member, proto.name) {
 				errs.push(Error::ProtocolConflict(
-					pkg.loc(type_span),
+					sources.loc(type_span),
 					syms.resolve(first).to_string(),
 					syms.resolve(proto.name).to_string(),
 					syms.resolve(*member).to_string(),

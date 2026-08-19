@@ -40,12 +40,6 @@ impl Display for Error {
 	}
 }
 
-#[derive(Debug)]
-pub struct Tree {
-	pub dirs: Vec<String>,
-	pub files: Vec<(String, String)>,
-}
-
 // Find the root directory and manifest of the package. Start in the given
 // directory and check for a manifest, walking parents up to $HOME.
 pub fn find(mut root_dir: &Path) -> Result<(PathBuf, Manifest), Error> {
@@ -79,65 +73,54 @@ fn read_manifest(text: &str) -> Result<Manifest, Error> {
 }
 
 // Walk the package directory tree and collect all source files.
-pub fn collect(root_dir: &Path) -> Result<Tree, Error> {
-	let mut dirs = BTreeSet::new();
+pub fn collect(root_dir: &Path) -> Result<Sources, Error> {
+	let mut sources = Sources::new();
+
 	let mut files = BTreeMap::new();
-	collect_all_in_dir(root_dir, Path::new("src"), &mut dirs, &mut files)?;
-	Ok(Tree {
-		dirs: dirs.into_iter().collect(),
-		files: files.into_iter().collect(),
-	})
-}
+	let mut dirs = BTreeSet::from([PathBuf::from("src")]);
+	while let Some(dir) = dirs.pop_first() {
+		let entries =
+			fs::read_dir(root_dir.join(&dir)).map_err(|_| Error::Unreadable(dir.to_path_buf()))?;
 
-fn collect_all_in_dir(
-	root_dir: &Path,
-	dir: &Path,
-	dirs: &mut BTreeSet<String>,
-	files: &mut BTreeMap<String, String>,
-) -> Result<(), Error> {
-	let entries =
-		fs::read_dir(root_dir.join(dir)).map_err(|_| Error::Unreadable(dir.to_path_buf()))?;
+		for entry in entries {
+			let entry = entry.map_err(|_| Error::Unreadable(dir.to_path_buf()))?;
+			let path = dir.join(entry.file_name());
 
-	for entry in entries {
-		let entry = entry.map_err(|_| Error::Unreadable(dir.to_path_buf()))?;
-		let path = dir.join(entry.file_name());
-
-		if entry.file_name().to_string_lossy().starts_with(".") {
-			continue;
-		}
-
-		let file_type = entry
-			.file_type()
-			.map_err(|_| Error::Unreadable(path.clone()))?;
-
-		if file_type.is_dir() {
-			dirs.insert(path.to_string_lossy().to_string());
-			collect_all_in_dir(root_dir, &path, dirs, files)?;
-		} else {
-			if path.extension() != Some(OsStr::new("ms")) {
+			if entry.file_name().to_string_lossy().starts_with(".") {
 				continue;
 			}
-			let text = fs::read_to_string(root_dir.join(&path))
+
+			let file_type = entry
+				.file_type()
 				.map_err(|_| Error::Unreadable(path.clone()))?;
-			files.insert(path.to_string_lossy().to_string(), text);
+
+			if file_type.is_dir() {
+				dirs.insert(path.to_path_buf());
+			} else {
+				if path.extension() != Some(OsStr::new("ms")) {
+					continue;
+				}
+				let text = fs::read_to_string(root_dir.join(&path))
+					.map_err(|_| Error::Unreadable(path.clone()))?;
+				files.insert(path, text);
+			}
 		}
 	}
 
-	Ok(())
+	for (file, text) in files {
+		sources.add(file, text);
+	}
+
+	Ok(sources)
 }
 
 // Parse all source files in a package.
-pub fn parse(
-	syms: &mut Interner,
-	files: Vec<(String, String)>,
-	manifest: Manifest,
-) -> Result<Package, Vec<syn::Error>> {
-	let mut pkg = Package::new(manifest);
+pub fn parse(syms: &mut Interner, sources: &Sources) -> Result<Chunks, Vec<syn::Error>> {
+	let mut chunks = Chunks::new();
 	let mut errs = Vec::new();
 
-	for (file, text) in files {
-		let source_id = pkg.sources.add(file, text);
-		let source = pkg.sources.get(source_id);
+	for id in sources.ids() {
+		let source = sources.get(id);
 		let toks = match Lexer::new(syms, source).lex() {
 			Ok(toks) => toks,
 			Err(err) => {
@@ -152,12 +135,12 @@ pub fn parse(
 				continue;
 			}
 		};
-		pkg.chunks.add(chunk);
+		chunks.add(chunk);
 	}
 
 	if !errs.is_empty() {
 		return Err(errs);
 	}
 
-	Ok(pkg)
+	Ok(chunks)
 }

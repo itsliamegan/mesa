@@ -72,11 +72,10 @@ fn test_reports_layout_defects() {
 		&[
 			("package.ms", "module Test\n"),
 			("codec.ms", "module Test.Codec\n"),
+			("package/ext.ms", "module Test.Package.Ext\n"),
+			("codec/json/encode.ms", "module Test.Codec.JSON.Encode\n"),
 		],
 	);
-	fs::create_dir_all(test_dir.join("src/codec/json")).unwrap();
-	fs::create_dir(test_dir.join("src/package")).unwrap();
-
 	let (stdout, stderr) = run(&test_dir);
 	fs::remove_dir_all(&test_dir).unwrap();
 
@@ -220,6 +219,7 @@ fn assert_fixture_eval(file: &str, src: &str) {
 	for (i, segment) in fixture.segments.iter().enumerate() {
 		write_segment_package(&test_dir, segment);
 		let (stdout, stderr) = run(&test_dir);
+		dbg!(&stderr);
 
 		assert_eq!(
 			segment.out,

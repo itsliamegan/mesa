@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde::Deserialize;
 
 use crate::src::{Location, Sources, Span};
@@ -37,11 +39,11 @@ impl PackageId {
 }
 
 impl Package {
-	pub fn new(manifest: Manifest) -> Self {
+	pub fn new(manifest: Manifest, sources: Sources, chunks: Chunks) -> Self {
 		Self {
 			manifest,
-			sources: Sources::new(),
-			chunks: Chunks::new(),
+			sources,
+			chunks,
 		}
 	}
 
@@ -49,7 +51,7 @@ impl Package {
 		self.sources.get(span.src).loc(span.start)
 	}
 
-	pub fn file(&self, id: ChunkId) -> &str {
+	pub fn file(&self, id: ChunkId) -> &Path {
 		self.sources.get(self.chunks.get(id).src).file()
 	}
 }
