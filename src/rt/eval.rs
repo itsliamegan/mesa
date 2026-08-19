@@ -18,11 +18,10 @@ use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, Ty
 use crate::sem::modules;
 use crate::sem::types;
 use crate::src::{Location, Span};
-use crate::syn;
 use crate::syn::nodes::{
-	BinaryOp, BlockId, Builtin, Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param,
-	UnaryOp,
+	BinaryOp, BlockId, Builtin, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, UnaryOp,
 };
+use crate::syn::{self, Chunk, ChunkId};
 
 pub struct Interpreter<'syms, 'pkg, 'descs, 'mods> {
 	syms: &'syms Interner,
@@ -85,7 +84,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 		for id in self.mods.descs.ids() {
 			let chunk_id = self.mods.descs.chunk(id);
 			self.scope = self.mods.scope(chunk_id);
-			let chunk = self.pkg.get_chunk(chunk_id);
+			let chunk = self.pkg.chunks.get(chunk_id);
 			for item_id in &chunk.top {
 				self.bind_module_item(chunk, chunk_id, *item_id);
 			}
@@ -97,7 +96,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 		for id in self.mods.descs.order() {
 			let chunk_id = self.mods.descs.chunk(*id);
 			self.scope = self.mods.scope(chunk_id);
-			let chunk = self.pkg.get_chunk(chunk_id);
+			let chunk = self.pkg.chunks.get(chunk_id);
 			for item_id in &chunk.top {
 				match self.eval_module_expr(chunk, *item_id) {
 					Ok(()) => {}
@@ -362,7 +361,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 								// a reference to it.
 								let fields = Rc::try_unwrap(scope).unwrap().into_inner().locals;
 
-								let type_chunk = self.pkg.get_chunk(type_chunk_id);
+								let type_chunk = self.pkg.chunks.get(type_chunk_id);
 								let inst_rf = Rc::new(RefCell::new(Obj::Instance(Instance {
 									typ: type_id,
 									fields,
@@ -1232,7 +1231,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 			let val = match slot {
 				Some(val) => val,
 				None => {
-					let chunk = self.pkg.get_chunk(chunk_id);
+					let chunk = self.pkg.chunks.get(chunk_id);
 					match self.eval_expr(chunk, param.default.unwrap()) {
 						Ok(val) => val,
 						Err(signal) => {
@@ -1263,7 +1262,7 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 		}));
 		let saved_receiver = self.receiver.clone();
 		self.receiver = receiver;
-		let body_chunk = self.pkg.get_chunk(proc.chunk);
+		let body_chunk = self.pkg.chunks.get(proc.chunk);
 		let result = match self.bind_args(proc.chunk, &proc.params, slots, &scope) {
 			Ok(()) => self.eval_block(body_chunk, scope, proc.body),
 			Err(signal) => Err(signal),

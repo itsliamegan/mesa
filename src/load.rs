@@ -9,9 +9,10 @@ use toml;
 
 use crate::intern::Interner;
 use crate::pkg::{Manifest, Package};
-use crate::syn;
+use crate::src::Sources;
 use crate::syn::lex::Lexer;
 use crate::syn::parse::Parser;
+use crate::syn::{self, Chunks};
 
 pub const ROOT_FILE: &str = "src/package.ms";
 pub const RESERVED_DIR: &str = "src/package";
@@ -74,8 +75,7 @@ pub fn find(mut root_dir: &Path) -> Result<(PathBuf, Manifest), Error> {
 }
 
 fn read_manifest(text: &str) -> Result<Manifest, Error> {
-	toml::from_str(text)
-		.map_err(|err| Error::BadManifest(err.message().to_string()))
+	toml::from_str(text).map_err(|err| Error::BadManifest(err.message().to_string()))
 }
 
 // Walk the package directory tree and collect all source files.
@@ -136,24 +136,28 @@ pub fn parse(
 	let mut errs = Vec::new();
 
 	for (file, text) in files {
-		let src_id = pkg.add_src(file, text);
-		let src = pkg.get_src(src_id);
-		let toks = match Lexer::new(syms, src).lex() {
+		let source_id = pkg.sources.add(file, text);
+		let source = pkg.sources.get(source_id);
+		let toks = match Lexer::new(syms, source).lex() {
 			Ok(toks) => toks,
 			Err(err) => {
 				errs.push(err);
 				continue;
 			}
 		};
-		let chunk = match Parser::new(src, toks).parse() {
+		let chunk = match Parser::new(source, toks).parse() {
 			Ok(chunk) => chunk,
 			Err(err) => {
 				errs.push(err);
 				continue;
 			}
 		};
-		pkg.add_chunk(chunk);
+		pkg.chunks.add(chunk);
 	}
 
-	if !errs.is_empty() { Err(errs) } else { Ok(pkg) }
+	if !errs.is_empty() {
+		return Err(errs);
+	}
+
+	Ok(pkg)
 }

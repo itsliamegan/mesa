@@ -1,13 +1,21 @@
 use serde::Deserialize;
 
-use crate::src::{Location, Source, SourceId, Span};
-use crate::syn::nodes::{Chunk, ChunkId};
+use crate::src::{Location, Sources, Span};
+use crate::syn::{ChunkId, Chunks};
+
+#[derive(Debug)]
+pub struct Packages {
+	pkgs: Vec<Package>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PackageId(u32);
 
 #[derive(Debug)]
 pub struct Package {
-	manifest: Manifest,
-	srcs: Vec<Source>,
-	chunks: Vec<Chunk>,
+	pub manifest: Manifest,
+	pub sources: Sources,
+	pub chunks: Chunks,
 }
 
 #[derive(Debug, Deserialize)]
@@ -16,45 +24,32 @@ pub struct Manifest {
 	pub version: String,
 }
 
+impl Packages {
 	pub fn new() -> Self {
+		Self { pkgs: Vec::new() }
+	}
+}
+
+impl PackageId {
+	fn index(&self) -> usize {
+		self.0 as usize
+	}
+}
+
 impl Package {
 	pub fn new(manifest: Manifest) -> Self {
 		Self {
 			manifest,
-			srcs: Vec::new(),
-			chunks: Vec::new(),
+			sources: Sources::new(),
+			chunks: Chunks::new(),
 		}
 	}
 
-	pub fn get_src(&self, id: SourceId) -> &Source {
-		&self.srcs[id.index()]
-	}
-
-	pub fn add_src(&mut self, file: String, text: String) -> SourceId {
-		let id = SourceId::new(self.srcs.len() as u32);
-		self.srcs.push(Source::new(id, file, text));
-		id
-	}
-
 	pub fn loc(&self, span: Span) -> Location {
-		self.get_src(span.src).loc(span.start)
-	}
-
-	pub fn get_chunk(&self, id: ChunkId) -> &Chunk {
-		&self.chunks[id.index()]
+		self.sources.get(span.src).loc(span.start)
 	}
 
 	pub fn file(&self, id: ChunkId) -> &str {
-		self.get_src(self.get_chunk(id).src).file()
-	}
-
-	pub fn chunk_ids(&self) -> impl ExactSizeIterator<Item = ChunkId> {
-		(0..self.chunks.len() as u32).map(ChunkId::new)
-	}
-
-	pub fn add_chunk(&mut self, chunk: Chunk) -> ChunkId {
-		let id = ChunkId::new(self.chunks.len() as u32);
-		self.chunks.push(chunk);
-		id
+		self.sources.get(self.chunks.get(id).src).file()
 	}
 }

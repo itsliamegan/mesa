@@ -9,9 +9,9 @@ use crate::pkg::Package;
 use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Span};
+use crate::syn::Chunk;
 use crate::syn::nodes::{
-	BlockId, Builtin, Chunk, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param, Place,
-	TypeItem,
+	BlockId, Builtin, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param, Place, TypeItem,
 };
 
 #[derive(Debug)]
@@ -197,7 +197,7 @@ fn check_chunk(
 	module: ModuleId,
 ) -> Result<(), Vec<Error>> {
 	let chunk_id = mods.chunk(module);
-	let chunk = pkg.get_chunk(chunk_id);
+	let chunk = pkg.chunks.get(chunk_id);
 	let mut errs = Vec::new();
 
 	let mut prelude = HashSet::new();

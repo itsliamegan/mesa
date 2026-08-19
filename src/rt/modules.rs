@@ -5,7 +5,7 @@ use crate::intern::Interner;
 use crate::rt::scope::{Scope, Scopes};
 use crate::rt::val::Obj;
 use crate::sem::modules::{self, ModuleId};
-use crate::syn::nodes::ChunkId;
+use crate::syn::ChunkId;
 
 // The runtime image of every module in the package. Contains an object for each
 // module, keyed by its ModuleId, and a corresponding scope keyed by its

@@ -7,7 +7,8 @@ use crate::load::{RESERVED_DIR, ROOT_FILE};
 use crate::pkg::Package;
 use crate::sem::Error;
 use crate::src::{Location, Span};
-use crate::syn::nodes::{Chunk, ChunkId, Expr, ExprId, ModuleItem, ModuleItemId, Place};
+use crate::syn::nodes::{Expr, ExprId, ModuleItem, ModuleItemId, Place};
+use crate::syn::{Chunk, ChunkId, Chunks};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ModuleId(u32);
@@ -223,7 +224,11 @@ impl Modules {
 // Check all invariants about the module graph, returning as many errors as
 // possible.
 pub fn check(syms: &Interner, pkg: &Package, dirs: &[String]) -> Result<Modules, Vec<Error>> {
-	let files: Vec<String> = pkg.chunk_ids().map(|id| pkg.file(id).to_string()).collect();
+	let files: Vec<String> = pkg
+		.chunks
+		.ids()
+		.map(|id| pkg.file(id).to_string())
+		.collect();
 	let mut errs = check_sibling_files_exist(dirs, &files);
 
 	let mut mods = match build(syms, pkg) {
@@ -264,7 +269,7 @@ fn build(syms: &Interner, pkg: &Package) -> Result<Modules, Vec<Error>> {
 	let mut by_chunk = HashMap::new();
 	let mut errs = Vec::new();
 
-	for chunk_id in pkg.chunk_ids() {
+	for chunk_id in pkg.chunks.ids() {
 		let file = pkg.file(chunk_id).to_string();
 		let (name, name_span) = match read_header(pkg, chunk_id, &file) {
 			Ok(header) => header,
@@ -291,7 +296,7 @@ fn build(syms: &Interner, pkg: &Package) -> Result<Modules, Vec<Error>> {
 			name,
 			name_span,
 			members: OrderMap::new(),
-			exports: read_exports(pkg.get_chunk(chunk_id)),
+			exports: read_exports(pkg.chunks.get(chunk_id)),
 			imports: Vec::new(),
 		});
 	}
@@ -316,7 +321,7 @@ fn read_header(
 	chunk_id: ChunkId,
 	file: &str,
 ) -> Result<(Vec<Sym>, Span), Vec<Error>> {
-	let chunk = pkg.get_chunk(chunk_id);
+	let chunk = pkg.chunks.get(chunk_id);
 	let mut header = None;
 	let mut errs = Vec::new();
 
@@ -411,7 +416,7 @@ fn check_members_unique(syms: &Interner, pkg: &Package, mods: &mut Modules) -> V
 	let mut errs = Vec::new();
 
 	for id in mods.ids() {
-		let chunk = pkg.get_chunk(mods.get(id).chunk);
+		let chunk = pkg.chunks.get(mods.get(id).chunk);
 		let mut members = OrderMap::new();
 		for item_id in &chunk.top {
 			let span = chunk.get_module_item_span(*item_id);
@@ -472,7 +477,7 @@ fn resolve_imports(syms: &Interner, pkg: &Package, mods: &mut Modules) -> Vec<Er
 	let mut errs = Vec::new();
 
 	for id in mods.ids() {
-		let chunk = pkg.get_chunk(mods.get(id).chunk);
+		let chunk = pkg.chunks.get(mods.get(id).chunk);
 		let mut imports = Vec::new();
 		for item_id in &chunk.top {
 			let ModuleItem::Import(import) = chunk.get_module_item(*item_id) else {

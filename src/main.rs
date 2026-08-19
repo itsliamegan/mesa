@@ -6,11 +6,13 @@ use std::process;
 
 use mesa::intern::Interner;
 use mesa::load;
+use mesa::pkg::Packages;
 use mesa::rt::Interpreter;
 use mesa::sem;
 
 fn main() {
 	let mut syms = Interner::new();
+	let mut pkgs = Packages::new();
 
 	let home_dir = env::home_dir().unwrap();
 	let mesa_home = match env::var("MESA_HOME") {
@@ -22,7 +24,7 @@ fn main() {
 		process::exit(1);
 	}
 	let stdlib_dir = mesa_home.join("lib");
-	let (stdlib_dir, _manifest) = match load::find(&stdlib_dir) {
+	let (stdlib_dir, manifest) = match load::find(&stdlib_dir) {
 		Ok(found) => found,
 		Err(err) => {
 			eprintln!("[Core] {}", err);
@@ -37,7 +39,7 @@ fn main() {
 		}
 	};
 
-	let pkg = match load::parse(&mut syms, tree.files) {
+	let pkg = match load::parse(&mut syms, tree.files, manifest) {
 		Ok(pkg) => pkg,
 		Err(errs) => {
 			for err in errs {

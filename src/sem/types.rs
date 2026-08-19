@@ -4,16 +4,15 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::Package;
-use crate::sem::modules::{Binding, Member, ModuleId, Modules};
+use crate::sem::modules::{Member, ModuleId, Modules};
 use crate::sem::{Error, check_required_precede_optional};
 use crate::src::Span;
-use crate::syn;
 use crate::syn::nodes::{
-	Chunk, ChunkId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem,
-	TypeItemId,
+	Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem, TypeItemId,
 };
+use crate::syn::{self, Chunk, ChunkId};
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TypeId(u32);
 
 impl TypeId {
@@ -22,7 +21,7 @@ impl TypeId {
 	}
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy)]
 pub struct ProtoId(u32);
 
 impl ProtoId {
@@ -91,13 +90,13 @@ pub struct Field {
 // implementer's chunk, which may differ for e.g. an acquired protocol method.
 // Differentiates between a declared method and a provided method because a
 // provided method lives in a different arena.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub enum MemberSite {
 	Declared(ChunkId, TypeItemId),
 	Provided(ChunkId, ProtoItemId),
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub enum Static {
 	Type(TypeId),
 	Proc(ChunkId, TypeItemId),
@@ -175,7 +174,7 @@ pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Erro
 	// declared in any file.
 	for module in mods.ids() {
 		let chunk_id = mods.chunk(module);
-		let chunk = pkg.get_chunk(chunk_id);
+		let chunk = pkg.chunks.get(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
@@ -188,7 +187,7 @@ pub fn check(syms: &Interner, pkg: &Package, mods: &Modules) -> (Types, Vec<Erro
 
 	for module in mods.ids() {
 		let chunk_id = mods.chunk(module);
-		let chunk = pkg.get_chunk(chunk_id);
+		let chunk = pkg.chunks.get(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Type(type_) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
@@ -269,7 +268,7 @@ fn describe_type(
 	is_case: bool,
 	errs: &mut Vec<Error>,
 ) -> TypeId {
-	let chunk = pkg.get_chunk(chunk_id);
+	let chunk = pkg.chunks.get(chunk_id);
 	// Claim the id before the body is walked so that a nested type can name the
 	// type enclosing it while that type is still being described.
 	let id = TypeId(types.types.len() as u32);
@@ -525,7 +524,7 @@ fn acquire_members(
 	let mut from: HashMap<Sym, Sym> = HashMap::new();
 	for proto_id in impls {
 		let proto = types.get_proto(*proto_id);
-		let proto_chunk = pkg.get_chunk(proto.chunk);
+		let proto_chunk = pkg.chunks.get(proto.chunk);
 		// Which map a member came from already answers whether it is provided,
 		// so nothing here re-asks the body the way a lookup against
 		// 'Proto.members' used to.
@@ -555,7 +554,7 @@ fn acquire_members(
 				None
 			};
 			if let Some(MemberSite::Declared(site_chunk, site_item)) = own {
-				let site_chunk = pkg.get_chunk(*site_chunk);
+				let site_chunk = pkg.chunks.get(*site_chunk);
 				let TypeItem::Method(syn::nodes::Method::Instance(method_def)) =
 					site_chunk.get_type_item(*site_item)
 				else {

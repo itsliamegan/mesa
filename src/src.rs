@@ -1,16 +1,39 @@
 use std::fmt::{self, Display, Formatter};
 use std::ops::{Index, Range};
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug)]
+pub struct Sources {
+	sources: Vec<Source>,
+}
+
+impl Sources {
+	pub fn new() -> Self {
+		Self {
+			sources: Vec::new(),
+		}
+	}
+
+	pub fn get(&self, id: SourceId) -> &Source {
+		&self.sources[id.index()]
+	}
+
+	pub fn add(&mut self, file: String, text: String) -> SourceId {
+		let id = SourceId::from_index(self.sources.len());
+		self.sources.push(Source { id, file, text });
+		id
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct SourceId(u32);
 
 impl SourceId {
-	pub fn new(i: u32) -> Self {
-		Self(i)
+	fn index(&self) -> usize {
+		self.0 as usize
 	}
 
-	pub fn index(self) -> usize {
-		self.0 as usize
+	fn from_index(index: usize) -> Self {
+		Self(index as u32)
 	}
 }
 
@@ -22,10 +45,6 @@ pub struct Source {
 }
 
 impl Source {
-	pub fn new(id: SourceId, file: String, text: String) -> Self {
-		Self { id, file, text }
-	}
-
 	pub fn id(&self) -> SourceId {
 		self.id
 	}

@@ -1,8 +1,8 @@
 use crate::intern::Sym;
 use crate::src::{Source, Span};
-use crate::syn::Error;
 use crate::syn::lex::{Token, TokenId, TokenTag, Tokens};
 use crate::syn::nodes::*;
+use crate::syn::{Chunk, Error};
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 struct Precedence(u8);
