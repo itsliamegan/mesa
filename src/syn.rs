@@ -4,9 +4,41 @@ pub mod parse;
 
 use std::fmt::{self, Display, Formatter};
 
-use crate::src::{Location, SourceId, Span};
-use crate::syn::lex::TokenTag;
+use crate::intern::Interner;
+use crate::src::{Location, SourceId, Sources, Span};
+use crate::syn::lex::{Lexer, TokenTag};
 use crate::syn::nodes::*;
+use crate::syn::parse::Parser;
+
+pub fn parse(syms: &mut Interner, sources: &Sources) -> Result<Chunks, Vec<Error>> {
+	let mut chunks = Chunks::new();
+	let mut errs = Vec::new();
+
+	for id in sources.ids() {
+		let source = sources.get(id);
+		let toks = match Lexer::new(syms, source).lex() {
+			Ok(toks) => toks,
+			Err(err) => {
+				errs.push(err);
+				continue;
+			}
+		};
+		let chunk = match Parser::new(source, toks).parse() {
+			Ok(chunk) => chunk,
+			Err(err) => {
+				errs.push(err);
+				continue;
+			}
+		};
+		chunks.add(chunk);
+	}
+
+	if !errs.is_empty() {
+		return Err(errs);
+	}
+
+	Ok(chunks)
+}
 
 #[derive(Debug)]
 pub enum Error {

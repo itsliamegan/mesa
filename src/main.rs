@@ -9,6 +9,7 @@ use mesa::load;
 use mesa::pkg::{Package, Packages};
 use mesa::rt::Interpreter;
 use mesa::sem;
+use mesa::syn;
 
 fn main() {
 	let mut syms = Interner::new();
@@ -27,23 +28,23 @@ fn main() {
 	let (stdlib_dir, manifest) = match load::find(&stdlib_dir) {
 		Ok(found) => found,
 		Err(err) => {
-			eprintln!("[Core] {}", err);
+			eprintln!("[mesa] {}", err);
 			process::exit(1);
 		}
 	};
 	let sources = match load::collect(&stdlib_dir) {
 		Ok(sources) => sources,
 		Err(err) => {
-			eprintln!("[Core] {}", err);
+			eprintln!("[mesa] {}", err);
 			process::exit(1);
 		}
 	};
 
-	let chunks = match load::parse(&mut syms, &sources) {
+	let chunks = match syn::parse(&mut syms, &sources) {
 		Ok(chunks) => chunks,
 		Err(errs) => {
 			for err in errs {
-				eprintln!("[Core] {}", err);
+				eprintln!("[mesa] {}", err);
 			}
 			process::exit(1);
 		}
@@ -53,7 +54,7 @@ fn main() {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
-				eprintln!("[Core] {}", err);
+				eprintln!("[mesa] {}", err);
 			}
 			process::exit(1);
 		}
@@ -76,7 +77,7 @@ fn main() {
 		}
 	};
 
-	let chunks = match load::parse(&mut syms, &sources) {
+	let chunks = match syn::parse(&mut syms, &sources) {
 		Ok(chunks) => chunks,
 		Err(errs) => {
 			for err in errs {

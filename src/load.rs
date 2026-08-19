@@ -113,34 +113,3 @@ pub fn collect(root_dir: &Path) -> Result<Sources, Error> {
 
 	Ok(sources)
 }
-
-// Parse all source files in a package.
-pub fn parse(syms: &mut Interner, sources: &Sources) -> Result<Chunks, Vec<syn::Error>> {
-	let mut chunks = Chunks::new();
-	let mut errs = Vec::new();
-
-	for id in sources.ids() {
-		let source = sources.get(id);
-		let toks = match Lexer::new(syms, source).lex() {
-			Ok(toks) => toks,
-			Err(err) => {
-				errs.push(err);
-				continue;
-			}
-		};
-		let chunk = match Parser::new(source, toks).parse() {
-			Ok(chunk) => chunk,
-			Err(err) => {
-				errs.push(err);
-				continue;
-			}
-		};
-		chunks.add(chunk);
-	}
-
-	if !errs.is_empty() {
-		return Err(errs);
-	}
-
-	Ok(chunks)
-}
