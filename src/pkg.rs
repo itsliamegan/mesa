@@ -2,6 +2,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use crate::sem::modules::Modules;
+use crate::sem::types::Types;
 use crate::src::{Location, Sources, Span};
 use crate::syn::{ChunkId, Chunks};
 
@@ -18,6 +20,8 @@ pub struct Package {
 	pub manifest: Manifest,
 	pub sources: Sources,
 	pub chunks: Chunks,
+	pub modules: Modules,
+	pub types: Types,
 }
 
 #[derive(Debug, Deserialize)]
@@ -30,23 +34,32 @@ impl Packages {
 	pub fn new() -> Self {
 		Self { pkgs: Vec::new() }
 	}
+
+	pub fn reserve(&mut self) -> PackageId {
+		PackageId::from_index(self.pkgs.len())
+	}
+
+	pub fn insert(&mut self, id: PackageId, pkg: Package) {
+		debug_assert_eq!(id.index(), self.pkgs.len());
+		self.pkgs.push(pkg);
+	}
+
+	pub fn get(&self, id: PackageId) -> &Package {
+		&self.pkgs[id.index()]
+	}
 }
 
 impl PackageId {
+	fn from_index(index: usize) -> Self {
+		Self(index as u32)
+	}
+
 	fn index(&self) -> usize {
 		self.0 as usize
 	}
 }
 
 impl Package {
-	pub fn new(manifest: Manifest, sources: Sources, chunks: Chunks) -> Self {
-		Self {
-			manifest,
-			sources,
-			chunks,
-		}
-	}
-
 	pub fn loc(&self, span: Span) -> Location {
 		self.sources.get(span.src).loc(span.start)
 	}

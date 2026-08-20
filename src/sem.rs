@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
+use crate::pkg::PackageId;
 use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Sources, Span};
@@ -162,10 +163,11 @@ impl Display for Error {
 
 pub fn check(
 	syms: &mut Interner,
+	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
 ) -> Result<(Modules, Types), Vec<Error>> {
-	let mods = modules::check(syms, sources, chunks)?;
+	let mods = modules::check(syms, pkg_id, sources, chunks)?;
 
 	// Describing resolves 'impl' names and decides conformance itself, so it
 	// tolerates the package not yet being known valid; it runs before the

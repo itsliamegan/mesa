@@ -15,50 +15,50 @@ fn main() {
 	let mut syms = Interner::new();
 	let mut pkgs = Packages::new();
 
-	let home_dir = env::home_dir().unwrap();
-	let mesa_home = match env::var("MESA_HOME") {
-		Ok(path) => PathBuf::from(path),
-		Err(_) => home_dir.join(".mesa"),
-	};
-	if !mesa_home.exists() {
-		eprintln!("error: cannot locate standard library");
-		process::exit(1);
-	}
-	let stdlib_dir = mesa_home.join("lib");
-	let (stdlib_dir, manifest) = match load::find(&stdlib_dir) {
-		Ok(found) => found,
-		Err(err) => {
-			eprintln!("[mesa] {}", err);
-			process::exit(1);
-		}
-	};
-	let sources = match load::collect(&stdlib_dir) {
-		Ok(sources) => sources,
-		Err(err) => {
-			eprintln!("[mesa] {}", err);
-			process::exit(1);
-		}
-	};
+	// let home_dir = env::home_dir().unwrap();
+	// let mesa_home = match env::var("MESA_HOME") {
+	// 	Ok(path) => PathBuf::from(path),
+	// 	Err(_) => home_dir.join(".mesa"),
+	// };
+	// if !mesa_home.exists() {
+	// 	eprintln!("error: cannot locate standard library");
+	// 	process::exit(1);
+	// }
+	// let stdlib_dir = mesa_home.join("lib");
+	// let (stdlib_dir, manifest) = match load::find(&stdlib_dir) {
+	// 	Ok(found) => found,
+	// 	Err(err) => {
+	// 		eprintln!("[mesa] {}", err);
+	// 		process::exit(1);
+	// 	}
+	// };
+	// let sources = match load::collect(&stdlib_dir) {
+	// 	Ok(sources) => sources,
+	// 	Err(err) => {
+	// 		eprintln!("[mesa] {}", err);
+	// 		process::exit(1);
+	// 	}
+	// };
 
-	let chunks = match syn::parse(&mut syms, &sources) {
-		Ok(chunks) => chunks,
-		Err(errs) => {
-			for err in errs {
-				eprintln!("[mesa] {}", err);
-			}
-			process::exit(1);
-		}
-	};
+	// let chunks = match syn::parse(&mut syms, &package) {
+	// 	Ok(chunks) => chunks,
+	// 	Err(errs) => {
+	// 		for err in errs {
+	// 			eprintln!("[mesa] {}", err);
+	// 		}
+	// 		process::exit(1);
+	// 	}
+	// };
 
-	let (modules, types) = match sem::check(&mut syms, &sources, &chunks) {
-		Ok(checked) => checked,
-		Err(errs) => {
-			for err in errs {
-				eprintln!("[mesa] {}", err);
-			}
-			process::exit(1);
-		}
-	};
+	// let (modules, types) = match sem::check(&mut syms, &sources, &chunks) {
+	// 	Ok(checked) => checked,
+	// 	Err(errs) => {
+	// 		for err in errs {
+	// 			eprintln!("[mesa] {}", err);
+	// 		}
+	// 		process::exit(1);
+	// 	}
+	// };
 
 	let current_dir = env::current_dir().unwrap();
 	let (root_dir, manifest) = match load::find(&current_dir) {
@@ -87,7 +87,9 @@ fn main() {
 		}
 	};
 
-	let (modules, types) = match sem::check(&mut syms, &sources, &chunks) {
+	let pkg_id = pkgs.reserve();
+
+	let (modules, types) = match sem::check(&mut syms, pkg_id, &sources, &chunks) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
@@ -97,9 +99,19 @@ fn main() {
 		}
 	};
 
-	let pkg = Package::new(manifest, sources, chunks);
+	pkgs.insert(
+		pkg_id,
+		Package {
+			manifest,
+			sources,
+			chunks,
+			modules,
+			types,
+		},
+	);
+	let pkg = pkgs.get(pkg_id);
 
-	match Interpreter::new(&mut syms, &pkg, &types, &modules).eval() {
+	match Interpreter::new(&mut syms, pkg).eval() {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{

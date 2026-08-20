@@ -16,18 +16,17 @@ use crate::rt::val::{
 };
 use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, TypeError};
 use crate::sem::modules;
-use crate::sem::types;
 use crate::src::{Location, Span};
 use crate::syn::nodes::{
 	BinaryOp, BlockId, Builtin, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, UnaryOp,
 };
 use crate::syn::{self, Chunk, ChunkId};
 
-pub struct Interpreter<'syms, 'pkg, 'descs, 'mods> {
+pub struct Interpreter<'syms, 'pkg> {
 	syms: &'syms Interner,
 	pkg: &'pkg Package,
-	types: Types<'descs>,
-	mods: Modules<'mods>,
+	types: Types<'pkg>,
+	mods: Modules<'pkg>,
 	// The scope the walk is currently in.
 	scope: Rc<RefCell<Scope>>,
 	receiver: Option<Val>,
@@ -39,13 +38,8 @@ enum Signal {
 	Error(Error, Vec<(String, Location)>),
 }
 
-impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
-	pub fn new(
-		syms: &'syms mut Interner,
-		pkg: &'pkg Package,
-		descs: &'descs types::Types,
-		mods: &'mods modules::Modules,
-	) -> Self {
+impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
+	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
 		let native = build_core_types(syms);
 
 		let prelude = {
@@ -62,10 +56,10 @@ impl<'syms, 'pkg, 'descs, 'mods> Interpreter<'syms, 'pkg, 'descs, 'mods> {
 			}))
 		};
 
-		let first_chunk = mods.chunk(mods.ids().next().unwrap());
-		let scopes = Scopes::new(prelude, mods);
-		let types = Types::new(native, pkg, descs, &scopes);
-		let mods = Modules::new(mods, scopes);
+		let first_chunk = pkg.modules.chunk(pkg.modules.ids().next().unwrap());
+		let scopes = Scopes::new(prelude, &pkg.modules);
+		let types = Types::new(native, pkg, &scopes);
+		let mods = Modules::new(&pkg.modules, scopes);
 		let scope = mods.scope(first_chunk);
 
 		Self {

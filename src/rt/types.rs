@@ -167,12 +167,8 @@ pub struct Types<'descs> {
 impl<'descs> Types<'descs> {
 	// Create a runtime representation of every type, storing a canonical Val
 	// for every type and creating an unbound proc for every method.
-	pub fn new(
-		native: Vec<NativeType>,
-		pkg: &Package,
-		descs: &'descs types::Types,
-		scopes: &Scopes,
-	) -> Self {
+	pub fn new(native: Vec<NativeType>, pkg: &'descs Package, scopes: &Scopes) -> Self {
+		let descs = &pkg.types;
 		let mut user = Vec::with_capacity(descs.ids().len());
 		for id in descs.ids() {
 			let desc = descs.get_type(id);

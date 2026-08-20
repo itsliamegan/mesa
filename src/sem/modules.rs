@@ -5,6 +5,7 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::load::{RESERVED_DIR, ROOT_FILE};
+use crate::pkg::PackageId;
 use crate::sem::Error;
 use crate::src::{Location, Sources, Span};
 use crate::syn::nodes::{Expr, ExprId, ModuleItem, ModuleItemId, Place};
@@ -21,6 +22,7 @@ impl ModuleId {
 
 #[derive(Debug)]
 pub struct Modules {
+	pkg: PackageId,
 	mods: Vec<Module>,
 	by_file: HashMap<PathBuf, ModuleId>,
 	by_name: HashMap<Vec<Sym>, ModuleId>,
@@ -58,7 +60,9 @@ pub enum Member {
 // What a name means in the file declaring a module.
 #[derive(Debug, Clone)]
 pub struct Binding {
-	// Module which owns the data.
+	// Package the owning module belongs to.
+	pub pkg: PackageId,
+	// Module that owns the data.
 	pub owner: ModuleId,
 	// Member of the owning module.
 	pub member: Member,
@@ -68,6 +72,7 @@ pub struct Binding {
 
 #[derive(Debug)]
 struct Import {
+	pkg: PackageId,
 	target: Target,
 	span: Span,
 }
@@ -140,6 +145,7 @@ impl Modules {
 			match member {
 				Member::Type(_) | Member::Proto(_) | Member::Proc(_) | Member::Var(_) => {
 					return Some(Binding {
+						pkg: self.pkg,
 						owner: id,
 						member,
 						imported: false,
@@ -162,6 +168,7 @@ impl Modules {
 							None => id,
 						};
 						return Some(Binding {
+							pkg: self.pkg,
 							owner: parent,
 							member: Member::Child(owner),
 							imported: true,
@@ -173,6 +180,7 @@ impl Modules {
 				Target::Member(owner, bound) => {
 					if bound == name {
 						return Some(Binding {
+							pkg: self.pkg,
 							owner,
 							member: self.member(owner, name)?,
 							imported: true,
@@ -235,10 +243,15 @@ impl Modules {
 
 // Check all invariants about the module graph, returning as many errors as
 // possible.
-pub fn check(syms: &Interner, sources: &Sources, chunks: &Chunks) -> Result<Modules, Vec<Error>> {
+pub fn check(
+	syms: &Interner,
+	pkg_id: PackageId,
+	sources: &Sources,
+	chunks: &Chunks,
+) -> Result<Modules, Vec<Error>> {
 	let mut errs = check_sibling_files_exist(sources);
 
-	let mut mods = match build(syms, sources, chunks) {
+	let mut mods = match build(syms, pkg_id, sources, chunks) {
 		Ok(mods) => mods,
 		Err(mut header_errs) => {
 			// If there are errors in the module headers, checking them won't
@@ -254,7 +267,9 @@ pub fn check(syms: &Interner, sources: &Sources, chunks: &Chunks) -> Result<Modu
 	// Resolution reads every module's members, so it runs after they are
 	// filled. Cycles are a property of the resolved edges, so they run after
 	// that.
-	errs.append(&mut resolve_imports(syms, sources, chunks, &mut mods));
+	errs.append(&mut resolve_imports(
+		syms, pkg_id, sources, chunks, &mut mods,
+	));
 	errs.append(&mut check_import_cycles(syms, sources, chunks, &mods));
 
 	if !errs.is_empty() {
@@ -269,7 +284,12 @@ pub fn check(syms: &Interner, sources: &Sources, chunks: &Chunks) -> Result<Modu
 }
 
 // Build the *incomplete* module graph. Later passes will flesh out its data.
-fn build(syms: &Interner, sources: &Sources, chunks: &Chunks) -> Result<Modules, Vec<Error>> {
+fn build(
+	syms: &Interner,
+	pkg_id: PackageId,
+	sources: &Sources,
+	chunks: &Chunks,
+) -> Result<Modules, Vec<Error>> {
 	let mut mods = Vec::new();
 	let mut by_file = HashMap::new();
 	let mut by_name = HashMap::new();
@@ -314,6 +334,7 @@ fn build(syms: &Interner, sources: &Sources, chunks: &Chunks) -> Result<Modules,
 	}
 
 	Ok(Modules {
+		pkg: pkg_id,
 		mods,
 		by_file,
 		by_name,
@@ -494,6 +515,7 @@ fn check_members_unique(
 // modules.
 fn resolve_imports(
 	syms: &Interner,
+	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
 	mods: &mut Modules,
@@ -509,7 +531,11 @@ fn resolve_imports(
 			};
 			let span = chunk.get_module_item_span(*item_id);
 			match resolve_import_path(mods, &import.path) {
-				Some(target) => imports.push(Import { target, span }),
+				Some(target) => imports.push(Import {
+					pkg: pkg_id,
+					target,
+					span,
+				}),
 				None => errs.push(Error::UnknownImport(
 					sources.loc(span),
 					syms.resolve_path(&import.path),
