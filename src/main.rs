@@ -32,8 +32,9 @@ fn main() {
 	load_package(&mut syms, &mut pkgs, &current_dir);
 
 	let prelude = build_prelude(&mut syms);
+	let mut rt_pkgs = rt::Packages::new(&pkgs);
 
-	match rt::eval(&mut syms, &pkgs, &prelude) {
+	match rt::eval(&mut syms, &mut rt_pkgs, &prelude) {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{

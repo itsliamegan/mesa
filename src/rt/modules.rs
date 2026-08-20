@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::intern::Interner;
+use crate::pkg::PackageId;
 use crate::rt::scope::{Scope, Scopes};
 use crate::rt::val::Obj;
 use crate::sem::modules::{self, ModuleId};
@@ -17,10 +18,10 @@ pub struct Modules<'descs> {
 }
 
 impl<'descs> Modules<'descs> {
-	pub fn new(descs: &'descs modules::Modules, scopes: Scopes) -> Self {
+	pub fn new(pkg_id: PackageId, descs: &'descs modules::Modules, scopes: Scopes) -> Self {
 		let objs = descs
 			.ids()
-			.map(|id| Rc::new(RefCell::new(Obj::Module(id))))
+			.map(|id| Rc::new(RefCell::new(Obj::Module(pkg_id, id))))
 			.collect();
 		Self {
 			descs,

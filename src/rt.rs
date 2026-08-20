@@ -1,5 +1,6 @@
 mod eval;
 mod modules;
+pub mod pkg;
 mod scope;
 mod types;
 mod val;
@@ -7,19 +8,21 @@ mod val;
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::Interner;
-use crate::pkg::Packages;
 use crate::src::Location;
 
 pub use eval::{Prelude, build_prelude};
+pub use pkg::Packages;
 
+// Packages must be in dependency order.
 pub fn eval(
 	syms: &mut Interner,
-	pkgs: &Packages,
+	pkgs: &mut Packages,
 	prelude: &Prelude,
 ) -> Result<(), (Error, Vec<(String, Location)>)> {
-	// Packages must be in dependency order.
-	for (_, pkg) in pkgs.iter() {
-		eval::Interpreter::new(syms, pkgs, pkg, prelude).eval()?;
+	let ids: Vec<_> = pkgs.ids().collect();
+	for pkg_id in ids {
+		let rt_pkg = eval::Interpreter::new(syms, pkgs, pkg_id, prelude).eval()?;
+		pkgs.insert(pkg_id, rt_pkg);
 	}
 	Ok(())
 }

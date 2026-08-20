@@ -48,6 +48,10 @@ impl Packages {
 		&self.pkgs[id.index()]
 	}
 
+	pub fn len(&self) -> usize {
+		self.pkgs.len()
+	}
+
 	pub fn iter(&self) -> impl Iterator<Item = (PackageId, &Package)> {
 		self.pkgs
 			.iter()
@@ -57,11 +61,11 @@ impl Packages {
 }
 
 impl PackageId {
-	fn from_index(index: usize) -> Self {
+	pub fn from_index(index: usize) -> Self {
 		Self(index as u32)
 	}
 
-	fn index(&self) -> usize {
+	pub fn index(&self) -> usize {
 		self.0 as usize
 	}
 }

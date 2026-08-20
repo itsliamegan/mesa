@@ -6,6 +6,7 @@ use rustc_hash::FxHashMap;
 use crate::intern::Sym;
 use crate::rt::Error;
 use crate::rt::modules::Modules;
+use crate::rt::pkg::Packages;
 use crate::rt::types::{Static, TypeId, Types};
 use crate::rt::val::{Member, Method, Obj, Val};
 use crate::sem;
@@ -64,17 +65,22 @@ impl Place {
 		}
 	}
 
-	pub fn get(&self, types: &Types, mods: &Modules) -> Result<Val, Error> {
+	pub fn get(&self, types: &Types, mods: &Modules, pkgs: &Packages) -> Result<Val, Error> {
 		match self {
 			Place::Local(local) => Ok(local.get()),
-			Place::Member(Member::Module(id, name)) => {
-				match mods.descs.member(*id, *name).unwrap() {
-					sem::modules::Member::Child(child) => Ok(Val::Obj(mods.obj(child))),
+			Place::Member(Member::Module(pkg, id, name)) => {
+				let pkg_mods = if *pkg == mods.descs.pkg() {
+					mods
+				} else {
+					&pkgs.get(*pkg).mods
+				};
+				match pkg_mods.descs.member(*id, *name).unwrap() {
+					sem::modules::Member::Child(child) => Ok(Val::Obj(pkg_mods.obj(child))),
 					sem::modules::Member::Type(_)
 					| sem::modules::Member::Proto(_)
 					| sem::modules::Member::Proc(_)
 					| sem::modules::Member::Var(_) => {
-						let scope = mods.scope(mods.descs.chunk(*id));
+						let scope = pkg_mods.scope(pkg_mods.descs.chunk(*id));
 						Ok(scope.borrow().locals.get(name).cloned().unwrap())
 					}
 				}
@@ -127,7 +133,7 @@ impl Place {
 				local.set(val);
 				Ok(())
 			}
-			Place::Member(Member::Module(_, _)) => Err(()),
+			Place::Member(Member::Module(_, _, _)) => Err(()),
 			// Statics cannot be reassigned.
 			Place::Member(Member::Static(_, _)) => Err(()),
 			// Setting a member consults the member's type.

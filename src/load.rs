@@ -7,12 +7,8 @@ use std::path::{Path, PathBuf};
 
 use toml;
 
-use crate::intern::Interner;
-use crate::pkg::{Manifest, Package};
+use crate::pkg::Manifest;
 use crate::src::Sources;
-use crate::syn::lex::Lexer;
-use crate::syn::parse::Parser;
-use crate::syn::{self, Chunks};
 
 pub const ROOT_FILE: &str = "src/package.ms";
 pub const RESERVED_DIR: &str = "src/package";
