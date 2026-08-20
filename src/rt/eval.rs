@@ -6,7 +6,7 @@ use ordermap::OrderMap;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
-use crate::pkg::Package;
+use crate::pkg::{Package, Packages};
 use crate::rt::modules::Modules;
 use crate::rt::scope::{Place, Scope, Scopes, Tier};
 use crate::rt::types::{CORE_TYPES, NativeParam, TypeId, Types, build_core_types};
@@ -24,6 +24,7 @@ use crate::syn::{self, Chunk, ChunkId};
 
 pub struct Interpreter<'syms, 'pkg> {
 	syms: &'syms Interner,
+	pkgs: &'pkg Packages,
 	pkg: &'pkg Package,
 	types: Types<'pkg>,
 	mods: Modules<'pkg>,
@@ -39,7 +40,7 @@ enum Signal {
 }
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
-	pub fn new(syms: &'syms mut Interner, pkg: &'pkg Package) -> Self {
+	pub fn new(syms: &'syms mut Interner, pkgs: &'pkg Packages, pkg: &'pkg Package) -> Self {
 		let native = build_core_types(syms);
 
 		let prelude = {
@@ -64,6 +65,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 		Self {
 			syms,
+			pkgs,
 			pkg,
 			types,
 			mods,
@@ -884,7 +886,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 			// the current scope's module and ask it whether the name is bound
 			// to something imported from another module.
 			let module_id = Scope::module(&self.scope);
-			match self.mods.descs.binding(module_id, name) {
+			match self.mods.descs.binding(self.pkgs, module_id, name) {
 				Some(binding) if binding.imported => {
 					Place::Member(Member::Module(binding.owner, name))
 				}

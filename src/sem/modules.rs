@@ -5,7 +5,7 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::load::{RESERVED_DIR, ROOT_FILE};
-use crate::pkg::PackageId;
+use crate::pkg::{PackageId, Packages};
 use crate::sem::Error;
 use crate::src::{Location, Sources, Span};
 use crate::syn::nodes::{Expr, ExprId, ModuleItem, ModuleItemId, Place};
@@ -99,6 +99,10 @@ impl Modules {
 		&self.mods[id.index()]
 	}
 
+	pub fn pkg(&self) -> PackageId {
+		self.pkg
+	}
+
 	pub fn ids(&self) -> impl Iterator<Item = ModuleId> + use<> {
 		(0..self.mods.len() as u32).map(ModuleId)
 	}
@@ -140,7 +144,7 @@ impl Modules {
 	//
 	// This binds one name. A dotted path binds its first segment here and walks
 	// members from module to module for the rest.
-	pub fn binding(&self, id: ModuleId, name: Sym) -> Option<Binding> {
+	pub fn binding(&self, pkgs: &Packages, id: ModuleId, name: Sym) -> Option<Binding> {
 		if let Some(member) = self.member(id, name) {
 			match member {
 				Member::Type(_) | Member::Proto(_) | Member::Proc(_) | Member::Var(_) => {
@@ -162,13 +166,18 @@ impl Modules {
 				// A module-form import binds the module itself, under the leaf
 				// of its declared name.
 				Target::Module(owner) => {
-					if *self.get(owner).name.last().unwrap() == name {
-						let parent = match self.parent(owner) {
+					let owner_mods = if import.pkg == self.pkg {
+						self
+					} else {
+						&pkgs.get(import.pkg).modules
+					};
+					if *owner_mods.get(owner).name.last().unwrap() == name {
+						let parent = match owner_mods.parent(owner) {
 							Some(parent) => parent,
 							None => id,
 						};
 						return Some(Binding {
-							pkg: self.pkg,
+							pkg: import.pkg,
 							owner: parent,
 							member: Member::Child(owner),
 							imported: true,
@@ -179,10 +188,15 @@ impl Modules {
 				// of the module holding it.
 				Target::Member(owner, bound) => {
 					if bound == name {
+						let owner_mods = if import.pkg == self.pkg {
+							self
+						} else {
+							&pkgs.get(import.pkg).modules
+						};
 						return Some(Binding {
-							pkg: self.pkg,
+							pkg: import.pkg,
 							owner,
-							member: self.member(owner, name)?,
+							member: owner_mods.member(owner, name)?,
 							imported: true,
 						});
 					}
@@ -201,26 +215,32 @@ impl Modules {
 	// *binding* of that module in addition to a member of it.
 	pub fn resolve_path_from<'path>(
 		&self,
+		pkgs: &Packages,
 		start: ModuleId,
 		path: &'path [Sym],
-	) -> Option<(ModuleId, Member, &'path [Sym])> {
+	) -> Option<(PackageId, ModuleId, Member, &'path [Sym])> {
 		// The first part must be resolved relative to the current module's
 		// *bindings*, but subsequent parts must be resolved relative to each
 		// child module's *members*. Check the first part here, and the
 		// subsequent parts separately.
-		let binding = self.binding(start, path[0])?;
+		let binding = self.binding(pkgs, start, path[0])?;
+		let mods = if binding.pkg == self.pkg {
+			self
+		} else {
+			&pkgs.get(binding.pkg).modules
+		};
 		let mut owner = binding.owner;
 		let mut member = binding.member;
 		// For the remaining parts, look them up relative to each resolved part
 		// in turn.
 		for (i, part) in path[1..].iter().enumerate() {
 			let Member::Child(id) = member else {
-				return Some((owner, member, &path[i + 1..]));
+				return Some((binding.pkg, owner, member, &path[i + 1..]));
 			};
 			owner = id;
-			member = self.member(owner, *part)?;
+			member = mods.member(owner, *part)?;
 		}
-		Some((owner, member, &[]))
+		Some((binding.pkg, owner, member, &[]))
 	}
 
 	fn parent(&self, id: ModuleId) -> Option<ModuleId> {
@@ -245,13 +265,14 @@ impl Modules {
 // possible.
 pub fn check(
 	syms: &Interner,
+	pkgs: &Packages,
 	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
 ) -> Result<Modules, Vec<Error>> {
 	let mut errs = check_sibling_files_exist(sources);
 
-	let mut mods = match build(syms, pkg_id, sources, chunks) {
+	let mut mods = match build(syms, pkgs, pkg_id, sources, chunks) {
 		Ok(mods) => mods,
 		Err(mut header_errs) => {
 			// If there are errors in the module headers, checking them won't
@@ -268,7 +289,7 @@ pub fn check(
 	// filled. Cycles are a property of the resolved edges, so they run after
 	// that.
 	errs.append(&mut resolve_imports(
-		syms, pkg_id, sources, chunks, &mut mods,
+		syms, pkgs, pkg_id, sources, chunks, &mut mods,
 	));
 	errs.append(&mut check_import_cycles(syms, sources, chunks, &mods));
 
@@ -286,6 +307,7 @@ pub fn check(
 // Build the *incomplete* module graph. Later passes will flesh out its data.
 fn build(
 	syms: &Interner,
+	pkgs: &Packages,
 	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
@@ -317,6 +339,18 @@ fn build(
 				sources.loc(name_span),
 				syms.resolve_path(&name),
 			));
+		}
+		for (other_id, other_pkg) in pkgs.iter() {
+			if other_id == pkg_id {
+				continue;
+			}
+			if other_pkg.modules.by_name.contains_key(&name) {
+				errs.push(Error::ConflictingModuleName(
+					sources.loc(name_span),
+					syms.resolve_path(&name),
+					other_pkg.manifest.name.clone(),
+				));
+			}
 		}
 		mods.push(Module {
 			chunk: chunk_id,
@@ -515,6 +549,7 @@ fn check_members_unique(
 // modules.
 fn resolve_imports(
 	syms: &Interner,
+	pkgs: &Packages,
 	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
@@ -530,12 +565,8 @@ fn resolve_imports(
 				continue;
 			};
 			let span = chunk.get_module_item_span(*item_id);
-			match resolve_import_path(mods, &import.path) {
-				Some(target) => imports.push(Import {
-					pkg: pkg_id,
-					target,
-					span,
-				}),
+			match resolve_import_path(mods, pkgs, pkg_id, &import.path) {
+				Some((pkg, target)) => imports.push(Import { pkg, target, span }),
 				None => errs.push(Error::UnknownImport(
 					sources.loc(span),
 					syms.resolve_path(&import.path),
@@ -549,8 +580,29 @@ fn resolve_imports(
 }
 
 // Resolve a dotted path to an import target. An import target can either be a
-// module itself or a member of a module.
-fn resolve_import_path(mods: &Modules, path: &[Sym]) -> Option<Target> {
+// module itself or a member of a module. Tries the local package first, then
+// falls through to other packages in the arena.
+fn resolve_import_path(
+	mods: &Modules,
+	pkgs: &Packages,
+	pkg_id: PackageId,
+	path: &[Sym],
+) -> Option<(PackageId, Target)> {
+	if let Some(found) = resolve_import_path_in(mods, path) {
+		return Some((pkg_id, found));
+	}
+	for (other_id, other_pkg) in pkgs.iter() {
+		if other_id == pkg_id {
+			continue;
+		}
+		if let Some(found) = resolve_import_path_in(&other_pkg.modules, path) {
+			return Some((other_id, found));
+		}
+	}
+	None
+}
+
+fn resolve_import_path_in(mods: &Modules, path: &[Sym]) -> Option<Target> {
 	if let Some(id) = mods.by_name.get(path) {
 		return Some(Target::Module(*id));
 	}
@@ -623,6 +675,9 @@ fn walk_imports(
 	path.push(id);
 
 	for import in &mods.get(id).imports {
+		if import.pkg != mods.pkg {
+			continue;
+		}
 		let next = import.target.module();
 		// If this module imports one still being walked, it's a cycle.
 		if visits[next.index()] == Visit::OnPath {
@@ -679,6 +734,9 @@ fn walk_order(mods: &Modules, id: ModuleId, visited: &mut [bool], order: &mut Ve
 	}
 	visited[id.index()] = true;
 	for import in &mods.get(id).imports {
+		if import.pkg != mods.pkg {
+			continue;
+		}
 		walk_order(mods, import.target.module(), visited, order);
 	}
 	order.push(id);

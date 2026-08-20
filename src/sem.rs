@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
-use crate::pkg::PackageId;
+use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Sources, Span};
@@ -36,6 +36,7 @@ pub enum Error {
 	ReservedDirectory(Location),
 	PrefixMismatch(Location, String, String),
 	DuplicateModuleName(Location, String),
+	ConflictingModuleName(Location, String, String),
 	DuplicateMember(Location, String),
 	UnknownImport(Location, String),
 	ImportCycle(Location, String),
@@ -64,6 +65,7 @@ impl Error {
 			Self::ReservedDirectory(loc) => loc,
 			Self::PrefixMismatch(loc, ..) => loc,
 			Self::DuplicateModuleName(loc, _) => loc,
+			Self::ConflictingModuleName(loc, ..) => loc,
 			Self::DuplicateMember(loc, _) => loc,
 			Self::UnknownImport(loc, _) => loc,
 			Self::ImportCycle(loc, _) => loc,
@@ -154,6 +156,9 @@ impl Display for Error {
 				)
 			}
 			Self::DuplicateModuleName(_, name) => write!(f, "duplicate module '{}'", name),
+			Self::ConflictingModuleName(_, name, pkg) => {
+				write!(f, "module '{}' conflicts with package '{}'", name, pkg)
+			}
 			Self::DuplicateMember(_, name) => write!(f, "duplicate member '{}'", name),
 			Self::UnknownImport(_, path) => write!(f, "unknown import '{}'", path),
 			Self::ImportCycle(_, cycle) => write!(f, "import cycle: {}", cycle),
@@ -163,17 +168,18 @@ impl Display for Error {
 
 pub fn check(
 	syms: &mut Interner,
+	pkgs: &Packages,
 	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
 ) -> Result<(Modules, Types), Vec<Error>> {
-	let mods = modules::check(syms, pkg_id, sources, chunks)?;
+	let mods = modules::check(syms, pkgs, pkg_id, sources, chunks)?;
 
 	// Describing resolves 'impl' names and decides conformance itself, so it
 	// tolerates the package not yet being known valid; it runs before the
 	// chunk walk rather than after, and its errors precede that walk's in the
 	// bundle, mirroring how module errors already precede every chunk error.
-	let (types, mut errs) = types::check(syms, sources, chunks, &mods);
+	let (types, mut errs) = types::check(syms, sources, chunks, pkgs, &mods);
 
 	// Every chunk is a module by now, module checking having failed otherwise,
 	// and the modules are held in chunk order, so this reports in file order.

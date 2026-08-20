@@ -89,7 +89,7 @@ fn main() {
 
 	let pkg_id = pkgs.reserve();
 
-	let (modules, types) = match sem::check(&mut syms, pkg_id, &sources, &chunks) {
+	let (modules, types) = match sem::check(&mut syms, &pkgs, pkg_id, &sources, &chunks) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {
@@ -111,7 +111,7 @@ fn main() {
 	);
 	let pkg = pkgs.get(pkg_id);
 
-	match Interpreter::new(&mut syms, pkg).eval() {
+	match Interpreter::new(&mut syms, &pkgs, pkg).eval() {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{

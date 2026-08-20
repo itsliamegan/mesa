@@ -12,7 +12,7 @@ pub struct Packages {
 	pkgs: Vec<Package>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct PackageId(u32);
 
 #[derive(Debug)]
@@ -46,6 +46,13 @@ impl Packages {
 
 	pub fn get(&self, id: PackageId) -> &Package {
 		&self.pkgs[id.index()]
+	}
+
+	pub fn iter(&self) -> impl Iterator<Item = (PackageId, &Package)> {
+		self.pkgs
+			.iter()
+			.enumerate()
+			.map(|(i, pkg)| (PackageId::from_index(i), pkg))
 	}
 }
 

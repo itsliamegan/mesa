@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
+use crate::pkg::Packages;
 use crate::sem::modules::{Member, ModuleId, Modules};
 use crate::sem::{Error, check_required_precede_optional};
 use crate::src::{Sources, Span};
@@ -164,6 +165,7 @@ pub fn check(
 	syms: &Interner,
 	sources: &Sources,
 	chunks: &Chunks,
+	pkgs: &Packages,
 	mods: &Modules,
 ) -> (Types, Vec<Error>) {
 	let mut types = Types {
@@ -197,8 +199,8 @@ pub fn check(
 			if let ModuleItem::Type(type_) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
 				let id = describe_type(
-					syms, sources, chunks, mods, &mut types, module, chunk_id, span, type_, None,
-					None, false, &mut errs,
+					syms, sources, chunks, pkgs, mods, &mut types, module, chunk_id, span, type_,
+					None, None, false, &mut errs,
 				);
 				types.type_by_item.insert((chunk_id, *item_id), id);
 			}
@@ -263,6 +265,7 @@ fn describe_type(
 	syms: &Interner,
 	sources: &Sources,
 	chunks: &Chunks,
+	pkgs: &Packages,
 	mods: &Modules,
 	types: &mut Types,
 	module: ModuleId,
@@ -334,7 +337,7 @@ fn describe_type(
 		}
 	}
 
-	let impls = resolve_impls(syms, sources, mods, types, module, span, type_, errs);
+	let impls = resolve_impls(syms, sources, pkgs, mods, types, module, span, type_, errs);
 	let acquired = acquire_members(
 		syms,
 		sources,
@@ -384,6 +387,7 @@ fn describe_type(
 					syms,
 					sources,
 					chunks,
+					pkgs,
 					mods,
 					types,
 					module,
@@ -406,6 +410,7 @@ fn describe_type(
 					syms,
 					sources,
 					chunks,
+					pkgs,
 					mods,
 					types,
 					module,
@@ -481,6 +486,7 @@ fn check_structure(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Err
 fn resolve_impls(
 	syms: &Interner,
 	sources: &Sources,
+	pkgs: &Packages,
 	mods: &Modules,
 	types: &Types,
 	module: ModuleId,
@@ -490,8 +496,8 @@ fn resolve_impls(
 ) -> Vec<ProtoId> {
 	let mut impls = Vec::with_capacity(type_.impls.len());
 	for path in &type_.impls {
-		match mods.resolve_path_from(module, path) {
-			Some((owner, member, rest)) => {
+		match mods.resolve_path_from(pkgs, module, path) {
+			Some((pkg, owner, member, rest)) => {
 				if !rest.is_empty() {
 					errs.push(Error::NotAProtocol(
 						sources.loc(span),
@@ -505,7 +511,17 @@ fn resolve_impls(
 					));
 					continue;
 				};
-				impls.push(types.get_proto_by_item(mods.chunk(owner), item_id));
+				let owner_mods = if pkg == mods.pkg() {
+					mods
+				} else {
+					&pkgs.get(pkg).modules
+				};
+				let owner_types = if pkg == mods.pkg() {
+					types
+				} else {
+					&pkgs.get(pkg).types
+				};
+				impls.push(owner_types.get_proto_by_item(owner_mods.chunk(owner), item_id));
 			}
 			None => {
 				errs.push(Error::UnknownProtocol(
