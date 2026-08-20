@@ -67,7 +67,7 @@ impl NativeMember {
 	}
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NativeType {
 	pub name: Sym,
 	pub new: Option<fn() -> Val>,

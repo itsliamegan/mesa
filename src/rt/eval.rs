@@ -9,7 +9,7 @@ use crate::intern::{Interner, Sym};
 use crate::pkg::{Package, Packages};
 use crate::rt::modules::Modules;
 use crate::rt::scope::{Place, Scope, Scopes, Tier};
-use crate::rt::types::{CORE_TYPES, NativeParam, TypeId, Types, build_core_types};
+use crate::rt::types::{CORE_TYPES, NativeParam, NativeType, TypeId, Types, build_core_types};
 use crate::rt::val::{
 	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_debug_val,
 	rt_print_val,
@@ -21,6 +21,37 @@ use crate::syn::nodes::{
 	BinaryOp, BlockId, Builtin, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, UnaryOp,
 };
 use crate::syn::{self, Chunk, ChunkId};
+
+pub struct Prelude {
+	scope: Rc<RefCell<Scope>>,
+	native: Vec<NativeType>,
+	native_vals: Vec<Rc<RefCell<Obj>>>,
+}
+
+pub fn build_prelude(syms: &mut Interner) -> Prelude {
+	let native = build_core_types(syms);
+	let mut native_vals = Vec::with_capacity(native.len());
+	for (id, _, _) in CORE_TYPES {
+		native_vals.push(Rc::new(RefCell::new(Obj::Type(TypeId::Native(*id)))));
+	}
+
+	let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
+	for (id, _, _) in CORE_TYPES {
+		let typ = &native[id.index()];
+		locals.insert(typ.name, Val::Obj(native_vals[id.index()].clone()));
+	}
+	let scope = Rc::new(RefCell::new(Scope {
+		locals,
+		outer: None,
+		tier: Tier::Prelude,
+	}));
+
+	Prelude {
+		scope,
+		native,
+		native_vals,
+	}
+}
 
 pub struct Interpreter<'syms, 'pkg> {
 	syms: &'syms Interner,
@@ -40,29 +71,20 @@ enum Signal {
 }
 
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
-	pub fn new(syms: &'syms mut Interner, pkgs: &'pkg Packages, pkg: &'pkg Package) -> Self {
-		let native = build_core_types(syms);
-		let mut native_vals = Vec::with_capacity(native.len());
-		for (id, _, _) in CORE_TYPES {
-			native_vals.push(Rc::new(RefCell::new(Obj::Type(TypeId::Native(*id)))));
-		}
-
-		let prelude = {
-			let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
-			for (id, _, _) in CORE_TYPES {
-				let typ = &native[id.index()];
-				locals.insert(typ.name, Val::Obj(native_vals[id.index()].clone()));
-			}
-			Rc::new(RefCell::new(Scope {
-				locals,
-				outer: None,
-				tier: Tier::Prelude,
-			}))
-		};
-
+	pub fn new(
+		syms: &'syms mut Interner,
+		pkgs: &'pkg Packages,
+		pkg: &'pkg Package,
+		prelude: &Prelude,
+	) -> Self {
 		let first_chunk = pkg.modules.chunk(pkg.modules.ids().next().unwrap());
-		let scopes = Scopes::new(prelude, &pkg.modules);
-		let types = Types::new(native, native_vals, pkg, &scopes);
+		let scopes = Scopes::new(prelude.scope.clone(), &pkg.modules);
+		let types = Types::new(
+			prelude.native.clone(),
+			prelude.native_vals.clone(),
+			pkg,
+			&scopes,
+		);
 		let mods = Modules::new(&pkg.modules, scopes);
 		let scope = mods.scope(first_chunk);
 

@@ -6,7 +6,23 @@ mod val;
 
 use std::fmt::{self, Display, Formatter};
 
-pub use eval::Interpreter;
+use crate::intern::Interner;
+use crate::pkg::Packages;
+use crate::src::Location;
+
+pub use eval::{Prelude, build_prelude};
+
+pub fn eval(
+	syms: &mut Interner,
+	pkgs: &Packages,
+	prelude: &Prelude,
+) -> Result<(), (Error, Vec<(String, Location)>)> {
+	// Packages must be in dependency order.
+	for (_, pkg) in pkgs.iter() {
+		eval::Interpreter::new(syms, pkgs, pkg, prelude).eval()?;
+	}
+	Ok(())
+}
 
 #[derive(Debug)]
 pub enum Error {
