@@ -4,6 +4,7 @@ use std::rc::Rc;
 use rustc_hash::FxHashMap;
 
 use crate::intern::Sym;
+use crate::pkg::PackageId;
 use crate::rt::Error;
 use crate::rt::modules::Modules;
 use crate::rt::pkg::Packages;
@@ -52,6 +53,7 @@ impl Local {
 pub enum Place {
 	Local(Local),
 	Member(Member),
+	Module(PackageId, ModuleId),
 }
 
 impl Place {
@@ -62,12 +64,21 @@ impl Place {
 		match self {
 			Place::Local(local) => local.is_bound(),
 			Place::Member(_) => true,
+			Place::Module(_, _) => true,
 		}
 	}
 
 	pub fn get(&self, types: &Types, mods: &Modules, pkgs: &Packages) -> Result<Val, Error> {
 		match self {
 			Place::Local(local) => Ok(local.get()),
+			Place::Module(pkg, id) => {
+				let pkg_mods = if *pkg == mods.descs.pkg() {
+					mods
+				} else {
+					&pkgs.get(*pkg).mods
+				};
+				Ok(Val::Obj(pkg_mods.obj(*id)))
+			}
 			Place::Member(Member::Module(pkg, id, name)) => {
 				let pkg_mods = if *pkg == mods.descs.pkg() {
 					mods
@@ -133,6 +144,7 @@ impl Place {
 				local.set(val);
 				Ok(())
 			}
+			Place::Module(_, _) => Err(()),
 			Place::Member(Member::Module(_, _, _)) => Err(()),
 			// Statics cannot be reassigned.
 			Place::Member(Member::Static(_, _)) => Err(()),

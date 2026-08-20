@@ -443,3 +443,54 @@ module Test.Protos
 
 proto Order
 end
+
+#---
+
+#> 5
+#> 9
+
+count := 5
+def helper()
+	return 9
+end
+
+#:child.ms
+module Test.Child
+
+import Test
+
+$print(Test.count)
+$print(Test.helper())
+
+#---
+
+#> 5
+
+#:child.ms
+module Test.Child
+
+import Test
+
+$print(Test.Codec.Json.decode(4))
+
+#:codec.ms
+module Test.Codec
+
+#:codec/json.ms
+module Test.Codec.Json
+
+def decode(x)
+	return x + 1
+end
+
+#---
+
+#> 5
+
+#:child.ms
+module Test.Child
+
+import Test
+
+Test := 5
+$print(Test)

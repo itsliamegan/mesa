@@ -57,17 +57,26 @@ pub enum Member {
 	Child(ModuleId),
 }
 
+// What a dotted path names, as far as module structure can carry it. Only
+// module member lookups are resolved, not type member lookups: a path that
+// leaves module structure before it ends stops at 'Partial', and whatever its
+// member names must resolve the segments that remain.
+pub enum Resolved<'path> {
+	Member(PackageId, ModuleId, Member),
+	Module(PackageId, ModuleId),
+	Partial(PackageId, ModuleId, Member, &'path [Sym]),
+}
+
 // What a name means in the file declaring a module.
 #[derive(Debug, Clone)]
-pub struct Binding {
-	// Package the owning module belongs to.
-	pub pkg: PackageId,
-	// Module that owns the data.
-	pub owner: ModuleId,
-	// Member of the owning module.
-	pub member: Member,
-	// Whether the binding refers to an imported name.
-	pub imported: bool,
+pub enum Binding {
+	// A name the module declares itself. It lives in the module's own scope,
+	// and a module always declares into its own package.
+	Own(ModuleId, Member),
+	// A member of another module, bound by a member-form import.
+	Imported(PackageId, ModuleId, Member),
+	// A module, bound by a module-form import.
+	Module(PackageId, ModuleId),
 }
 
 #[derive(Debug)]
@@ -148,12 +157,7 @@ impl Modules {
 		if let Some(member) = self.member(id, name) {
 			match member {
 				Member::Type(_) | Member::Proto(_) | Member::Proc(_) | Member::Var(_) => {
-					return Some(Binding {
-						pkg: self.pkg,
-						owner: id,
-						member,
-						imported: false,
-					});
+					return Some(Binding::Own(id, member));
 				}
 				// A child module is a member of this one but is declared by
 				// another file, which this one no more sees into than any
@@ -172,16 +176,7 @@ impl Modules {
 						&pkgs.get(import.pkg).modules
 					};
 					if *owner_mods.get(owner).name.last().unwrap() == name {
-						let parent = match owner_mods.parent(owner) {
-							Some(parent) => parent,
-							None => id,
-						};
-						return Some(Binding {
-							pkg: import.pkg,
-							owner: parent,
-							member: Member::Child(owner),
-							imported: true,
-						});
+						return Some(Binding::Module(import.pkg, owner));
 					}
 				}
 				// A member-form import binds that one member and nothing else
@@ -193,12 +188,11 @@ impl Modules {
 						} else {
 							&pkgs.get(import.pkg).modules
 						};
-						return Some(Binding {
-							pkg: import.pkg,
+						return Some(Binding::Imported(
+							import.pkg,
 							owner,
-							member: owner_mods.member(owner, name)?,
-							imported: true,
-						});
+							owner_mods.member(owner, name)?,
+						));
 					}
 				}
 			}
@@ -218,29 +212,41 @@ impl Modules {
 		pkgs: &Packages,
 		start: ModuleId,
 		path: &'path [Sym],
-	) -> Option<(PackageId, ModuleId, Member, &'path [Sym])> {
+	) -> Option<Resolved<'path>> {
 		// The first part must be resolved relative to the current module's
 		// *bindings*, but subsequent parts must be resolved relative to each
 		// child module's *members*. Check the first part here, and the
 		// subsequent parts separately.
-		let binding = self.binding(pkgs, start, path[0])?;
-		let mods = if binding.pkg == self.pkg {
+		let (pkg, mut owner, mut member) = match self.binding(pkgs, start, path[0])? {
+			Binding::Own(owner, member) => (self.pkg, owner, member),
+			Binding::Imported(pkg, owner, member) => (pkg, owner, member),
+			// A root module has no parent to be a member of, so seed the walk
+			// with a self-reference instead. It never escapes this function:
+			// the loop below only ever reads it to re-derive 'owner', and a
+			// trailing 'Child' normalises back to 'Resolved::Module' rather
+			// than being handed to a caller.
+			Binding::Module(pkg, id) => (pkg, id, Member::Child(id)),
+		};
+		let mods = if pkg == self.pkg {
 			self
 		} else {
-			&pkgs.get(binding.pkg).modules
+			&pkgs.get(pkg).modules
 		};
-		let mut owner = binding.owner;
-		let mut member = binding.member;
 		// For the remaining parts, look them up relative to each resolved part
 		// in turn.
 		for (i, part) in path[1..].iter().enumerate() {
 			let Member::Child(id) = member else {
-				return Some((binding.pkg, owner, member, &path[i + 1..]));
+				return Some(Resolved::Partial(pkg, owner, member, &path[i + 1..]));
 			};
 			owner = id;
 			member = mods.member(owner, *part)?;
 		}
-		Some((binding.pkg, owner, member, &[]))
+		match member {
+			Member::Type(_) | Member::Proto(_) | Member::Proc(_) | Member::Var(_) => {
+				Some(Resolved::Member(pkg, owner, member))
+			}
+			Member::Child(id) => Some(Resolved::Module(pkg, id)),
+		}
 	}
 
 	fn parent(&self, id: ModuleId) -> Option<ModuleId> {

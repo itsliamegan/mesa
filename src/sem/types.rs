@@ -4,7 +4,7 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::Packages;
-use crate::sem::modules::{Member, ModuleId, Modules};
+use crate::sem::modules::{Member, ModuleId, Modules, Resolved};
 use crate::sem::{Error, check_required_precede_optional};
 use crate::src::{Sources, Span};
 use crate::syn::Chunks;
@@ -497,20 +497,7 @@ fn resolve_impls(
 	let mut impls = Vec::with_capacity(type_.impls.len());
 	for path in &type_.impls {
 		match mods.resolve_path_from(pkgs, module, path) {
-			Some((pkg, owner, member, rest)) => {
-				if !rest.is_empty() {
-					errs.push(Error::NotAProtocol(
-						sources.loc(span),
-						syms.resolve_path(path),
-					));
-				}
-				let Member::Proto(item_id) = member else {
-					errs.push(Error::NotAProtocol(
-						sources.loc(span),
-						syms.resolve_path(path),
-					));
-					continue;
-				};
+			Some(Resolved::Member(pkg, owner, Member::Proto(item_id))) => {
 				let owner_mods = if pkg == mods.pkg() {
 					mods
 				} else {
@@ -522,6 +509,12 @@ fn resolve_impls(
 					&pkgs.get(pkg).types
 				};
 				impls.push(owner_types.get_proto_by_item(owner_mods.chunk(owner), item_id));
+			}
+			Some(Resolved::Member(..) | Resolved::Module(..) | Resolved::Partial(..)) => {
+				errs.push(Error::NotAProtocol(
+					sources.loc(span),
+					syms.resolve_path(path),
+				));
 			}
 			None => {
 				errs.push(Error::UnknownProtocol(

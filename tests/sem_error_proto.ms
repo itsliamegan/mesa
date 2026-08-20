@@ -124,3 +124,32 @@ proto Order
 		return self.priority
 	end
 end
+
+#---
+
+#! semantic error: 'Sub' is not a protocol
+
+import Test.Sub
+
+type Task(priority)
+	impl Sub
+end
+
+#:sub.ms
+module Test.Sub
+
+#---
+
+#! semantic error: 'Sub.Thing.Extra' is not a protocol
+
+import Test.Sub
+
+type Task(priority)
+	impl Sub.Thing.Extra
+end
+
+#:sub.ms
+module Test.Sub
+
+type Thing(x)
+end

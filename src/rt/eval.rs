@@ -961,10 +961,12 @@ impl<'syms, 'pkg, 'rt> Interpreter<'syms, 'pkg, 'rt> {
 				.descs
 				.binding(self.pkgs.descs(), module_id, name)
 			{
-				Some(binding) if binding.imported => {
-					Place::Member(Member::Module(binding.pkg, binding.owner, name))
+				Some(modules::Binding::Own(_, _)) => Place::Local(local),
+				Some(modules::Binding::Imported(pkg, owner, _)) => {
+					Place::Member(Member::Module(pkg, owner, name))
 				}
-				_ => Place::Local(local),
+				Some(modules::Binding::Module(pkg, id)) => Place::Module(pkg, id),
+				None => Place::Local(local),
 			}
 		}
 	}
