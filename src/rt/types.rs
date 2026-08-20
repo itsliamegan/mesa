@@ -69,7 +69,6 @@ impl NativeMember {
 
 #[derive(Debug)]
 pub struct NativeType {
-	pub val: Rc<RefCell<Obj>>,
 	pub name: Sym,
 	pub new: Option<fn() -> Val>,
 	pub members: FxHashMap<Sym, NativeMember>,
@@ -144,7 +143,6 @@ pub fn build_core_types(syms: &mut Interner) -> Vec<NativeType> {
 			);
 		}
 		core.push(NativeType {
-			val: Rc::new(RefCell::new(Obj::Type(TypeId::Native(*id)))),
 			name: syms.intern(CORE_TYPE_NAMES[id.0 as usize]),
 			new: *new,
 			members,
@@ -162,12 +160,18 @@ pub struct Types<'descs> {
 	// its index here.
 	user: Vec<UserType>,
 	native: Vec<NativeType>,
+	native_vals: Vec<Rc<RefCell<Obj>>>,
 }
 
 impl<'descs> Types<'descs> {
 	// Create a runtime representation of every type, storing a canonical Val
 	// for every type and creating an unbound proc for every method.
-	pub fn new(native: Vec<NativeType>, pkg: &'descs Package, scopes: &Scopes) -> Self {
+	pub fn new(
+		native: Vec<NativeType>,
+		native_vals: Vec<Rc<RefCell<Obj>>>,
+		pkg: &'descs Package,
+		scopes: &Scopes,
+	) -> Self {
 		let descs = &pkg.types;
 		let mut user = Vec::with_capacity(descs.ids().len());
 		for id in descs.ids() {
@@ -197,6 +201,7 @@ impl<'descs> Types<'descs> {
 			descs,
 			user,
 			native,
+			native_vals,
 		}
 	}
 
@@ -237,6 +242,10 @@ impl<'descs> Types<'descs> {
 
 	pub fn native(&self, id: NativeTypeId) -> &NativeType {
 		&self.native[id.0 as usize]
+	}
+
+	pub fn native_val(&self, id: NativeTypeId) -> Rc<RefCell<Obj>> {
+		self.native_vals[id.0 as usize].clone()
 	}
 
 	pub fn member(&self, val: &Val, name: Sym) -> Option<Member> {

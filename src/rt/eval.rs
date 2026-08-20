@@ -42,13 +42,16 @@ enum Signal {
 impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 	pub fn new(syms: &'syms mut Interner, pkgs: &'pkg Packages, pkg: &'pkg Package) -> Self {
 		let native = build_core_types(syms);
+		let mut native_vals = Vec::with_capacity(native.len());
+		for (id, _, _) in CORE_TYPES {
+			native_vals.push(Rc::new(RefCell::new(Obj::Type(TypeId::Native(*id)))));
+		}
 
 		let prelude = {
 			let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
 			for (id, _, _) in CORE_TYPES {
 				let typ = &native[id.index()];
-				let obj = Obj::Type(TypeId::Native(*id));
-				locals.insert(typ.name, Val::Obj(Rc::new(RefCell::new(obj))));
+				locals.insert(typ.name, Val::Obj(native_vals[id.index()].clone()));
 			}
 			Rc::new(RefCell::new(Scope {
 				locals,
@@ -59,7 +62,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 
 		let first_chunk = pkg.modules.chunk(pkg.modules.ids().next().unwrap());
 		let scopes = Scopes::new(prelude, &pkg.modules);
-		let types = Types::new(native, pkg, &scopes);
+		let types = Types::new(native, native_vals, pkg, &scopes);
 		let mods = Modules::new(&pkg.modules, scopes);
 		let scope = mods.scope(first_chunk);
 
@@ -789,7 +792,7 @@ impl<'syms, 'pkg> Interpreter<'syms, 'pkg> {
 					let type_id = val.type_id();
 					match type_id {
 						TypeId::User(id) => Ok(Val::Obj(self.types.user(id).val.clone())),
-						TypeId::Native(id) => Ok(Val::Obj(self.types.native(id).val.clone())),
+						TypeId::Native(id) => Ok(Val::Obj(self.types.native_val(id))),
 					}
 				}
 			},
