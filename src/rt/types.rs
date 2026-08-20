@@ -5,8 +5,9 @@ use std::rc::Rc;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
-use crate::pkg::Package;
+use crate::pkg::{Package, PackageId};
 use crate::rt::Error;
+use crate::rt::pkg::Packages;
 use crate::rt::scope::Scopes;
 use crate::rt::val::{Bool, Dict, List, Member, Nil, Num, Obj, Proc, Str, Val};
 use crate::sem::types::{self, MemberSite};
@@ -15,7 +16,9 @@ use crate::syn::{self, ChunkId};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum TypeId {
-	User(types::TypeId),
+	// A user type is an index into one package's arena, so it carries the
+	// package. Native type identity is global, so a native one does not.
+	User(PackageId, types::TypeId),
 	Native(NativeTypeId),
 }
 
@@ -169,6 +172,8 @@ impl<'descs> Types<'descs> {
 	pub fn new(
 		native: Vec<NativeType>,
 		native_vals: Vec<Rc<RefCell<Obj>>>,
+		pkgs: &Packages<'descs>,
+		pkg_id: PackageId,
 		pkg: &'descs Package,
 		scopes: &Scopes,
 	) -> Self {
@@ -178,20 +183,20 @@ impl<'descs> Types<'descs> {
 			let desc = descs.get_type(id);
 			let mut methods = FxHashMap::default();
 			for (name, site) in &desc.members {
-				methods.insert(*name, build_member_proc(pkg, scopes, *site));
+				methods.insert(*name, build_member_proc(pkgs, pkg_id, pkg, scopes, *site));
 			}
 			let mut statics = FxHashMap::default();
 			for (name, static_) in &desc.statics {
 				let static_ = match static_ {
 					types::Static::Type(id) => Static::Type(*id),
 					types::Static::Proc(chunk_id, item_id) => {
-						Static::Proc(build_static_proc(pkg, scopes, *chunk_id, *item_id))
+						Static::Proc(build_static_proc(pkg_id, pkg, scopes, *chunk_id, *item_id))
 					}
 				};
 				statics.insert(*name, static_);
 			}
 			user.push(UserType {
-				val: Rc::new(RefCell::new(Obj::Type(TypeId::User(id)))),
+				val: Rc::new(RefCell::new(Obj::Type(TypeId::User(pkg_id, id)))),
 				methods,
 				statics,
 			});
@@ -206,13 +211,13 @@ impl<'descs> Types<'descs> {
 	}
 
 	// Get a type's *qualified* name (including all lexical nesting).
-	pub fn name(&self, syms: &Interner, id: TypeId) -> String {
+	pub fn name(&self, syms: &Interner, pkgs: &Packages, id: TypeId) -> String {
 		match id {
-			TypeId::User(id) => {
-				let desc = self.descs.get_type(id);
+			TypeId::User(pkg, id) => {
+				let desc = pkgs.get(pkg).types.descs.get_type(id);
 				match desc.enclosing {
 					Some(outer) => {
-						let outer = self.name(syms, TypeId::User(outer));
+						let outer = self.name(syms, pkgs, TypeId::User(pkg, outer));
 						format!("{}.{}", outer, syms.resolve(desc.name))
 					}
 					None => syms.resolve(desc.name).to_string(),
@@ -248,7 +253,7 @@ impl<'descs> Types<'descs> {
 		self.native_vals[id.0 as usize].clone()
 	}
 
-	pub fn member(&self, val: &Val, name: Sym) -> Option<Member> {
+	pub fn member(&self, pkgs: &Packages, val: &Val, name: Sym) -> Option<Member> {
 		let type_id = val.type_id();
 		let namespace_type_id = val.namespace_type_id();
 		if type_id != namespace_type_id {
@@ -260,7 +265,7 @@ impl<'descs> Types<'descs> {
 			// Only a user type has statics; a native one reaches its members
 			// through the seam instead.
 			let has_static = match namespace_type_id {
-				TypeId::User(id) => self.static_(id, name).is_some(),
+				TypeId::User(pkg, id) => pkgs.get(pkg).types.static_(id, name).is_some(),
 				TypeId::Native(_) => false,
 			};
 			if has_static {
@@ -277,11 +282,12 @@ impl<'descs> Types<'descs> {
 			}
 		} else {
 			match namespace_type_id {
-				TypeId::User(id) => {
+				TypeId::User(pkg, id) => {
 					let Val::Obj(rf) = val else {
 						panic!();
 					};
-					if self.field(id, name) || self.method(id, name).is_some() {
+					let types = &pkgs.get(pkg).types;
+					if types.field(id, name) || types.method(id, name).is_some() {
 						Some(Member::User(rf.clone(), name))
 					} else {
 						None
@@ -302,7 +308,13 @@ impl<'descs> Types<'descs> {
 // Build the proc a member resolves to. A member declared by the type reads
 // off its own item; one acquired from a protocol reads off the protocol's,
 // in whichever chunk that protocol was written.
-fn build_member_proc(pkg: &Package, scopes: &Scopes, site: MemberSite) -> Rc<RefCell<Proc>> {
+fn build_member_proc<'descs>(
+	pkgs: &Packages<'descs>,
+	pkg_id: PackageId,
+	pkg: &'descs Package,
+	scopes: &Scopes,
+	site: MemberSite,
+) -> Rc<RefCell<Proc>> {
 	match site {
 		MemberSite::Declared(chunk_id, item_id) => {
 			// Protocols don't involve static methods; assert that this is an
@@ -316,24 +328,39 @@ fn build_member_proc(pkg: &Package, scopes: &Scopes, site: MemberSite) -> Rc<Ref
 				name: def.name,
 				params: def.params.to_vec(),
 				body: def.body,
+				pkg: pkg_id,
 				chunk: chunk_id,
 				scope: scopes.module(chunk_id),
 			}))
 		}
-		MemberSite::Provided(chunk_id, item_id) => {
-			let item = pkg.chunks.get(chunk_id).get_proto_item(item_id);
+		MemberSite::Provided(site_pkg, chunk_id, item_id) => {
+			// The protocol may belong to another package, whose arenas are the
+			// only place its body can be read from; the package being built is
+			// not in 'pkgs' yet, so it supplies its own. The body is written in
+			// the protocol's file and may reference names bound there, so it
+			// closes over that module's scope, not the implementing type's.
+			let (chunks, scope) = match site_pkg == pkg_id {
+				true => (&pkg.chunks, scopes.module(chunk_id)),
+				false => (
+					&pkgs.desc(site_pkg).chunks,
+					pkgs.get(site_pkg).mods.scope(chunk_id),
+				),
+			};
+			let item = chunks.get(chunk_id).get_proto_item(item_id);
 			Rc::new(RefCell::new(Proc {
 				name: item.def.name,
 				params: item.def.params.to_vec(),
 				body: item.def.body,
+				pkg: site_pkg,
 				chunk: chunk_id,
-				scope: scopes.module(chunk_id),
+				scope,
 			}))
 		}
 	}
 }
 
 fn build_static_proc(
+	pkg_id: PackageId,
 	pkg: &Package,
 	scopes: &Scopes,
 	chunk_id: ChunkId,
@@ -348,6 +375,7 @@ fn build_static_proc(
 		name: def.name,
 		params: def.params.to_vec(),
 		body: def.body,
+		pkg: pkg_id,
 		chunk: chunk_id,
 		scope: scopes.module(chunk_id),
 	}))

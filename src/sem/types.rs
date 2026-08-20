@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
-use crate::pkg::Packages;
+use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::{Member, ModuleId, Modules, Resolved};
 use crate::sem::{Error, check_required_precede_optional};
 use crate::src::{Sources, Span};
@@ -62,7 +62,7 @@ pub struct Type {
 	// the protocols it implements.
 	pub members: HashMap<Sym, MemberSite>,
 	pub statics: HashMap<Sym, Static>,
-	pub impls: Vec<ProtoId>,
+	pub impls: Vec<(PackageId, ProtoId)>,
 	// Type this type was declared in; None at the module level.
 	pub enclosing: Option<TypeId>,
 	// Variants of this type; None if this type is itself a variant.
@@ -93,13 +93,17 @@ pub struct Field {
 // provided method lives in a different arena.
 #[derive(Debug, Clone, Copy)]
 pub enum MemberSite {
+	// A type only ever declares a member in its own file, so a declared site
+	// needs no package; a provided one is read from the protocol's.
 	Declared(ChunkId, TypeItemId),
-	Provided(ChunkId, ProtoItemId),
+	Provided(PackageId, ChunkId, ProtoItemId),
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Static {
 	Type(TypeId),
+	// Like a declared member, a static is always written in the type's own
+	// file; protocols have no static methods to provide.
 	Proc(ChunkId, TypeItemId),
 }
 
@@ -341,6 +345,8 @@ fn describe_type(
 	let acquired = acquire_members(
 		syms,
 		sources,
+		pkgs,
+		mods.pkg(),
 		chunks,
 		types,
 		type_.name,
@@ -493,7 +499,7 @@ fn resolve_impls(
 	span: Span,
 	type_: &syn::nodes::Type,
 	errs: &mut Vec<Error>,
-) -> Vec<ProtoId> {
+) -> Vec<(PackageId, ProtoId)> {
 	let mut impls = Vec::with_capacity(type_.impls.len());
 	for path in &type_.impls {
 		match mods.resolve_path_from(pkgs, module, path) {
@@ -508,7 +514,10 @@ fn resolve_impls(
 				} else {
 					&pkgs.get(pkg).types
 				};
-				impls.push(owner_types.get_proto_by_item(owner_mods.chunk(owner), item_id));
+				impls.push((
+					pkg,
+					owner_types.get_proto_by_item(owner_mods.chunk(owner), item_id),
+				));
 			}
 			Some(Resolved::Member(..) | Resolved::Module(..) | Resolved::Partial(..)) => {
 				errs.push(Error::NotAProtocol(
@@ -534,6 +543,8 @@ fn resolve_impls(
 fn acquire_members(
 	syms: &Interner,
 	sources: &Sources,
+	pkgs: &Packages,
+	pkg_id: PackageId,
 	chunks: &Chunks,
 	types: &Types,
 	type_name: Sym,
@@ -541,16 +552,22 @@ fn acquire_members(
 	declared: &HashMap<Sym, MemberSite>,
 	inherited: Option<&Inherited>,
 	static_spans: &HashMap<Sym, Span>,
-	impls: &[ProtoId],
+	impls: &[(PackageId, ProtoId)],
 	errs: &mut Vec<Error>,
 ) -> HashMap<Sym, MemberSite> {
 	let mut acquired: HashMap<Sym, MemberSite> = HashMap::new();
 	// The protocol each acquired member came from, kept only to name both
 	// sides of a 'ProtocolConflict'.
 	let mut from: HashMap<Sym, Sym> = HashMap::new();
-	for proto_id in impls {
-		let proto = types.get_proto(*proto_id);
-		let proto_chunk = chunks.get(proto.chunk);
+	for (proto_pkg, proto_id) in impls {
+		// The protocol may belong to another package, whose arenas are the only
+		// place its declaration and body can be read from.
+		let (proto_types, proto_chunks) = match *proto_pkg == pkg_id {
+			true => (types, chunks),
+			false => (&pkgs.get(*proto_pkg).types, &pkgs.get(*proto_pkg).chunks),
+		};
+		let proto = proto_types.get_proto(*proto_id);
+		let proto_chunk = proto_chunks.get(proto.chunk);
 		// Which map a member came from already answers whether it is provided,
 		// so nothing here re-asks the body the way a lookup against
 		// 'Proto.members' used to.
@@ -627,7 +644,10 @@ fn acquire_members(
 				continue;
 			}
 
-			acquired.insert(*member, MemberSite::Provided(proto.chunk, *item_id));
+			acquired.insert(
+				*member,
+				MemberSite::Provided(*proto_pkg, proto.chunk, *item_id),
+			);
 		}
 	}
 	acquired

@@ -8,7 +8,6 @@ use rustc_hash::FxHashMap;
 use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
 use crate::rt::Error;
-use crate::rt::modules::Modules;
 use crate::rt::pkg::Packages;
 use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMember, NativeTypeId, TypeId, Types};
@@ -158,7 +157,7 @@ pub enum Obj {
 	Dict(Dict),
 	Proc(Proc),
 	Type(TypeId),
-	Proto(types::ProtoId),
+	Proto(PackageId, types::ProtoId),
 	Instance(Instance),
 	Method(Method),
 }
@@ -171,8 +170,8 @@ impl Obj {
 			Self::Dict(_) => TypeId::Native(NativeTypeId::DICT),
 			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
 			Self::Type(_) => TypeId::Native(NativeTypeId::TYPE),
-			Self::Proto(_) => TypeId::Native(NativeTypeId::PROTO),
-			Self::Instance(inst) => TypeId::User(inst.typ),
+			Self::Proto(_, _) => TypeId::Native(NativeTypeId::PROTO),
+			Self::Instance(inst) => TypeId::User(inst.pkg, inst.typ),
 			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
 		}
 	}
@@ -223,12 +222,14 @@ pub struct Proc {
 	pub name: Sym,
 	pub params: Vec<Param>,
 	pub body: BlockId,
+	pub pkg: PackageId,
 	pub chunk: ChunkId,
 	pub scope: Rc<RefCell<Scope>>,
 }
 
 #[derive(Debug)]
 pub struct Instance {
+	pub pkg: PackageId,
 	pub typ: types::TypeId,
 	pub fields: FxHashMap<Sym, Val>,
 }
@@ -267,44 +268,25 @@ pub fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	res
 }
 
-pub fn rt_print_val(
-	syms: &Interner,
-	types: &Types,
-	mods: &Modules,
-	pkgs: &Packages,
-	val: &Val,
-) -> String {
+pub fn rt_print_val(syms: &Interner, types: &Types, pkgs: &Packages, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num.0),
 		Val::Bool(bool) => format!("{}", bool.0),
 		Val::Char(char) => format!("{}", char.0),
 		Val::Str(str) => format!("{}", str.text),
-		Val::Obj(rf) => rt_print_obj(syms, types, mods, pkgs, &rf.borrow()),
+		Val::Obj(rf) => rt_print_obj(syms, types, pkgs, &rf.borrow()),
 		Val::Nil(_) => String::from("nil"),
 	}
 }
 
-pub fn rt_print_obj(
-	syms: &Interner,
-	types: &Types,
-	mods: &Modules,
-	pkgs: &Packages,
-	obj: &Obj,
-) -> String {
+pub fn rt_print_obj(syms: &Interner, types: &Types, pkgs: &Packages, obj: &Obj) -> String {
 	match obj {
-		Obj::Module(pkg, id) => {
-			let m = if *pkg == mods.descs.pkg() {
-				mods
-			} else {
-				&pkgs.get(*pkg).mods
-			};
-			format!("module {}", m.name(syms, *id))
-		}
+		Obj::Module(pkg, id) => format!("module {}", pkgs.get(*pkg).mods.name(syms, *id)),
 		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
 			for (i, item) in list.items.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, mods, pkgs, item));
+				res.push_str(&rt_debug_val(syms, types, pkgs, item));
 				if i + 1 != list.items.len() {
 					res.push_str(", ");
 				}
@@ -316,9 +298,9 @@ pub fn rt_print_obj(
 			let mut res = String::new();
 			res.push('{');
 			for (i, (key, val)) in dict.pairs.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, types, mods, pkgs, key));
+				res.push_str(&rt_debug_val(syms, types, pkgs, key));
 				res.push_str(": ");
-				res.push_str(&rt_debug_val(syms, types, mods, pkgs, val));
+				res.push_str(&rt_debug_val(syms, types, pkgs, val));
 				if i + 1 != dict.pairs.len() {
 					res.push_str(", ");
 				}
@@ -328,9 +310,9 @@ pub fn rt_print_obj(
 		}
 		Obj::Proc(proc) => rt_print_proc(syms, proc),
 		Obj::Type(type_id) => match type_id {
-			TypeId::User(type_id) => {
-				let desc = types.descs.get_type(*type_id);
-				let name = types.name(syms, TypeId::User(*type_id));
+			TypeId::User(type_pkg, type_id) => {
+				let desc = pkgs.get(*type_pkg).types.descs.get_type(*type_id);
+				let name = types.name(syms, pkgs, TypeId::User(*type_pkg, *type_id));
 				let mut res = String::new();
 				res.push_str(&format!("type {}(", name));
 				for (i, field) in desc.ctor_fields.iter().enumerate() {
@@ -349,18 +331,18 @@ pub fn rt_print_obj(
 				format!("type {}", name)
 			}
 		},
-		Obj::Proto(proto_id) => {
-			let proto = types.descs.get_proto(*proto_id);
+		Obj::Proto(pkg, proto_id) => {
+			let proto = pkgs.get(*pkg).types.descs.get_proto(*proto_id);
 			format!("proto {}", syms.resolve(proto.name))
 		}
 		Obj::Instance(inst) => {
-			let desc = types.descs.get_type(inst.typ);
-			let name = types.name(syms, TypeId::User(inst.typ));
+			let desc = pkgs.get(inst.pkg).types.descs.get_type(inst.typ);
+			let name = types.name(syms, pkgs, TypeId::User(inst.pkg, inst.typ));
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
 			for (i, field) in desc.ctor_fields.iter().enumerate() {
 				let val = inst.fields.get(&field.name).unwrap();
-				res.push_str(&rt_print_val(syms, types, mods, pkgs, val));
+				res.push_str(&rt_print_val(syms, types, pkgs, val));
 				if i + 1 != desc.ctor_fields.len() {
 					res.push_str(", ");
 				}
@@ -377,17 +359,11 @@ pub fn rt_print_obj(
 	}
 }
 
-pub fn rt_debug_val(
-	syms: &Interner,
-	types: &Types,
-	mods: &Modules,
-	pkgs: &Packages,
-	val: &Val,
-) -> String {
+pub fn rt_debug_val(syms: &Interner, types: &Types, pkgs: &Packages, val: &Val) -> String {
 	match val {
 		Val::Char(char) => format!("'{}'", char.0),
 		Val::Str(str) => format!("\"{}\"", str.text),
-		Val::Obj(rf) => rt_print_obj(syms, types, mods, pkgs, &rf.borrow()),
-		val => rt_print_val(syms, types, mods, pkgs, val),
+		Val::Obj(rf) => rt_print_obj(syms, types, pkgs, &rf.borrow()),
+		val => rt_print_val(syms, types, pkgs, val),
 	}
 }

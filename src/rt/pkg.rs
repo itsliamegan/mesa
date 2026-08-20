@@ -1,44 +1,71 @@
 use crate::pkg::{self, PackageId};
 
+use super::eval::Prelude;
 use super::modules::Modules;
+use super::scope::Scopes;
 use super::types::Types;
 
-pub struct Package<'pkg> {
-	pub types: Types<'pkg>,
-	pub mods: Modules<'pkg>,
+pub struct Package<'descs> {
+	pub types: Types<'descs>,
+	pub mods: Modules<'descs>,
 }
 
-pub struct Packages<'pkg> {
-	descs: &'pkg pkg::Packages,
-	pkgs: Vec<Option<Package<'pkg>>>,
+impl<'descs> Package<'descs> {
+	pub fn new(
+		prelude: &Prelude,
+		pkgs: &Packages<'descs>,
+		desc: &'descs pkg::Package,
+		id: PackageId,
+	) -> Self {
+		let scopes = Scopes::new(prelude.scope.clone(), &desc.modules);
+		let types = Types::new(
+			prelude.native.clone(),
+			prelude.native_vals.clone(),
+			pkgs,
+			id,
+			desc,
+			&scopes,
+		);
+		let mods = Modules::new(id, &desc.modules, scopes);
+
+		Self { types, mods }
+	}
 }
 
-impl<'pkg> Packages<'pkg> {
-	pub fn new(descs: &'pkg pkg::Packages) -> Self {
-		let mut pkgs = Vec::with_capacity(descs.len());
-		for _ in 0..descs.len() {
-			pkgs.push(None);
+pub struct Packages<'descs> {
+	descs: &'descs pkg::Packages,
+	// Holds only the packages built so far. A package is built after every
+	// package it can import from, so an id is resolvable exactly when the
+	// package it names is already here.
+	pkgs: Vec<Package<'descs>>,
+}
+
+impl<'descs> Packages<'descs> {
+	pub fn new(descs: &'descs pkg::Packages) -> Self {
+		Self {
+			descs,
+			pkgs: Vec::with_capacity(descs.len()),
 		}
-		Self { descs, pkgs }
 	}
 
-	pub fn descs(&self) -> &'pkg pkg::Packages {
+	pub fn descs(&self) -> &'descs pkg::Packages {
 		self.descs
 	}
 
-	pub fn desc(&self, id: PackageId) -> &'pkg pkg::Package {
+	pub fn desc(&self, id: PackageId) -> &'descs pkg::Package {
 		self.descs.get(id)
 	}
 
-	pub fn get(&self, id: PackageId) -> &Package<'pkg> {
-		self.pkgs[id.index()].as_ref().unwrap()
+	pub fn get(&self, id: PackageId) -> &Package<'descs> {
+		&self.pkgs[id.index()]
 	}
 
-	pub fn insert(&mut self, id: PackageId, pkg: Package<'pkg>) {
-		self.pkgs[id.index()] = Some(pkg);
+	pub fn insert(&mut self, id: PackageId, pkg: Package<'descs>) {
+		debug_assert_eq!(id.index(), self.pkgs.len());
+		self.pkgs.push(pkg);
 	}
 
 	pub fn ids(&self) -> impl Iterator<Item = PackageId> {
-		(0..self.pkgs.len()).map(PackageId::from_index)
+		(0..self.descs.len()).map(PackageId::from_index)
 	}
 }

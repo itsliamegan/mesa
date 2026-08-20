@@ -13,7 +13,9 @@ use crate::src::Location;
 pub use eval::{Prelude, build_prelude};
 pub use pkg::Packages;
 
-// Packages must be in dependency order.
+// Packages must be in dependency order. Building one reads the arenas of every
+// package it imports from — a protocol's chunk and module scope among them — so
+// those packages have to be built first.
 pub fn eval(
 	syms: &mut Interner,
 	pkgs: &mut Packages,
@@ -21,8 +23,9 @@ pub fn eval(
 ) -> Result<(), (Error, Vec<(String, Location)>)> {
 	let ids: Vec<_> = pkgs.ids().collect();
 	for pkg_id in ids {
-		let rt_pkg = eval::Interpreter::new(syms, pkgs, pkg_id, prelude).eval()?;
-		pkgs.insert(pkg_id, rt_pkg);
+		let pkg = pkg::Package::new(prelude, pkgs, pkgs.desc(pkg_id), pkg_id);
+		pkgs.insert(pkg_id, pkg);
+		eval::Interpreter::new(syms, pkgs, pkg_id).eval()?;
 	}
 	Ok(())
 }
