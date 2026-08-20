@@ -62,6 +62,7 @@ test_files! {
 	test_reports_multiple_sem_errors => "sem_error_multi.ms",
 	test_reports_duplicate_members => "sem_error_member.ms",
 	test_modules => "modules.ms",
+	test_packages => "packages.ms",
 }
 
 #[test]
@@ -113,7 +114,11 @@ fn write_package(dir: &Path, files: &[(impl AsRef<Path>, impl AsRef<[u8]>)]) {
 
 fn run(dir: &Path) -> (String, String) {
 	let bin = env!("CARGO_BIN_EXE_mesa");
-	let output = Command::new(bin).current_dir(dir).output().unwrap();
+	let output = Command::new(bin)
+		.current_dir(dir)
+		.env("MESA_HOME", env!("CARGO_MANIFEST_DIR"))
+		.output()
+		.unwrap();
 	(
 		String::from_utf8(output.stdout).unwrap(),
 		String::from_utf8(output.stderr).unwrap(),
