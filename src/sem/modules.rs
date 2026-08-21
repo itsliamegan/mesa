@@ -124,6 +124,11 @@ impl Modules {
 		self.by_chunk[&chunk]
 	}
 
+	// A module by its declared dotted path.
+	pub fn by_path(&self, path: &[Sym]) -> Option<ModuleId> {
+		self.by_name.get(path).copied()
+	}
+
 	// The module's declared dotted path, e.g. for a qualified name or the
 	// module's printed form.
 	pub fn path(&self, id: ModuleId) -> &[Sym] {

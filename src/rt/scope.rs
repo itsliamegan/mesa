@@ -95,7 +95,7 @@ impl Place {
 						let types = &pkgs.get(type_pkg).types;
 						match types.static_(type_id, *name).unwrap() {
 							Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(
-								Obj::Method(Method::User(type_rf.clone(), proc_rf)),
+								Obj::Method(Method::User(Val::Obj(type_rf.clone()), proc_rf)),
 							)))),
 							Static::Type(id) => Ok(Val::Obj(types.user(id).val.clone())),
 						}
@@ -106,7 +106,7 @@ impl Place {
 								Method::Native(Val::Obj(type_rf.clone()), *name, *meth)
 							}
 							NativeMember::User(proc_rf) => {
-								Method::User(type_rf.clone(), proc_rf.clone())
+								Method::User(Val::Obj(type_rf.clone()), proc_rf.clone())
 							}
 						};
 						Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
@@ -121,7 +121,7 @@ impl Place {
 					Ok(val.clone())
 				} else if let Some(proc_rf) = pkgs.get(inst.pkg).types.method(inst.typ, *name) {
 					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
-						inst_rf.clone(),
+						Val::Obj(inst_rf.clone()),
 						proc_rf,
 					))))))
 				} else {
@@ -134,12 +134,7 @@ impl Place {
 				};
 				let method = match pkgs.native(type_id).members.get(name).unwrap() {
 					NativeMember::Native(meth) => Method::Native(recv.clone(), *name, *meth),
-					NativeMember::User(proc_rf) => {
-						let Val::Obj(recv_rf) = recv else {
-							panic!();
-						};
-						Method::User(recv_rf.clone(), proc_rf.clone())
-					}
+					NativeMember::User(proc_rf) => Method::User(recv.clone(), proc_rf.clone()),
 				};
 				Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 			}

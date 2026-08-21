@@ -6,11 +6,11 @@ use ordermap::OrderMap;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
-use crate::pkg::PackageId;
+use crate::pkg::{self, PackageId};
 use crate::rt::modules::Modules;
 use crate::rt::pkg::Packages;
 use crate::rt::scope::{Place, Scope, Tier};
-use crate::rt::types::{CORE_TYPES, NativeParam, Natives, TypeId, Types};
+use crate::rt::types::{NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
 	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_debug_val,
 	rt_print_val,
@@ -27,13 +27,30 @@ pub struct Prelude {
 	pub(super) scope: Rc<RefCell<Scope>>,
 }
 
-// Bind every core type's name to its canonical value. Only the core types are
-// in the prelude; an extended native type is reached through the module that
-// declares it.
-pub fn build_prelude(natives: &Natives) -> Prelude {
-	let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
-	for (id, _, _, _) in CORE_TYPES {
-		locals.insert(natives.get(*id).desc.name, Val::Obj(natives.val(*id)));
+// Bind every name 'Core.Prelude' declares to its canonical value. Only what
+// that module declares is in the prelude.
+pub fn build_prelude(
+	descs: &pkg::Packages,
+	syms: &mut Interner,
+	stdlib: PackageId,
+	natives: &Natives,
+) -> Result<Prelude, String> {
+	let stdlib_pkg = descs.get(stdlib);
+	let path = [syms.intern("Core"), syms.intern("Prelude")];
+	let Some(prelude_mod) = stdlib_pkg.modules.by_path(&path) else {
+		return Err("stdlib does not declare a 'Core.Prelude' module".to_string());
+	};
+	let chunk_id = stdlib_pkg.modules.chunk(prelude_mod);
+	let chunk = stdlib_pkg.chunks.get(chunk_id);
+
+	let mut locals = HashMap::with_capacity_and_hasher(chunk.top.len(), FxBuildHasher);
+	for item_id in &chunk.top {
+		// 'Core.Prelude' declares nothing but extern types, so this is the
+		// only module item that matters here.
+		if let ModuleItem::Extern(extern_) = chunk.get_module_item(*item_id) {
+			let id = natives.id(stdlib, extern_.name).unwrap();
+			locals.insert(extern_.name, Val::Obj(natives.val(id)));
+		}
 	}
 	let scope = Rc::new(RefCell::new(Scope {
 		locals,
@@ -41,7 +58,7 @@ pub fn build_prelude(natives: &Natives) -> Prelude {
 		tier: Tier::Prelude,
 	}));
 
-	Prelude { scope }
+	Ok(Prelude { scope })
 }
 
 pub struct Interpreter<'syms, 'descs, 'pkgs> {
@@ -456,12 +473,9 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 							}
 						},
 						Obj::Method(meth) => match meth {
-							Method::User(inst, proc) => self.eval_proc_call(
-								span,
-								&proc.borrow(),
-								Some(Val::Obj(inst.clone())),
-								args,
-							),
+							Method::User(recv, proc) => {
+								self.eval_proc_call(span, &proc.borrow(), Some(recv.clone()), args)
+							}
 							Method::Native(recv, _name, meth) => {
 								// Native params carry &'static str names and
 								// fn() -> Val defaults, so they are matched and
@@ -1168,12 +1182,9 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 
 		match &*rf.borrow() {
 			Obj::Proc(proc) => self.eval_proc_call(span, proc, None, Vec::new()),
-			Obj::Method(Method::User(inst, proc)) => self.eval_proc_call(
-				span,
-				&proc.borrow(),
-				Some(Val::Obj(inst.clone())),
-				Vec::new(),
-			),
+			Obj::Method(Method::User(recv, proc)) => {
+				self.eval_proc_call(span, &proc.borrow(), Some(recv.clone()), Vec::new())
+			}
 			Obj::Method(Method::Native(recv, _name, meth)) => {
 				match (meth.call)(recv, meth.defaults().unwrap()) {
 					Ok(val) => Ok(val),

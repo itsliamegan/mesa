@@ -14,7 +14,7 @@ use crate::src::Location;
 pub use eval::{Prelude, build_prelude};
 pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
-pub use types::{NativeTypeSpec, Natives};
+pub use types::{CORE_TYPES, NativeTypeSpec, Natives};
 
 // Packages must be in dependency order. Building one reads the arenas of every
 // package it imports from — a protocol's chunk and module scope among them — so

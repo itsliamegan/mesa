@@ -1,10 +1,10 @@
 pub mod modules;
 pub mod types;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 
-use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
+use crate::intern::{Interner, Sym};
 use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
@@ -16,7 +16,6 @@ use crate::syn::{Chunk, Chunks};
 
 #[derive(Debug)]
 pub enum Error {
-	PreludeShadowed(Location, String),
 	RequiredAfterDefault(Location, String, String),
 	BreakOutsideLoop(Location),
 	ParamsOnCaseParent(Location, String),
@@ -47,7 +46,6 @@ pub enum Error {
 impl Error {
 	pub fn loc(&self) -> &Location {
 		match self {
-			Self::PreludeShadowed(loc, _) => loc,
 			Self::RequiredAfterDefault(loc, ..) => loc,
 			Self::BreakOutsideLoop(loc) => loc,
 			Self::ParamsOnCaseParent(loc, _) => loc,
@@ -81,9 +79,6 @@ impl Display for Error {
 	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
 		write!(f, "{}: semantic error: ", self.loc())?;
 		match self {
-			Self::PreludeShadowed(_, name) => {
-				write!(f, "name '{}' shadows a name in the prelude", name)
-			}
 			Self::RequiredAfterDefault(_, name, defaulted) => {
 				write!(
 					f,
@@ -181,7 +176,7 @@ impl Display for Error {
 }
 
 pub fn check(
-	syms: &mut Interner,
+	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	sources: &Sources,
@@ -212,7 +207,7 @@ pub fn check(
 }
 
 fn check_chunk(
-	syms: &mut Interner,
+	syms: &Interner,
 	sources: &Sources,
 	chunks: &Chunks,
 	mods: &Modules,
@@ -222,33 +217,6 @@ fn check_chunk(
 	let chunk_id = mods.chunk(module);
 	let chunk = chunks.get(chunk_id);
 	let mut errs = Vec::new();
-
-	let mut prelude = HashSet::new();
-	for name in CORE_TYPE_NAMES {
-		prelude.insert(syms.intern(name));
-	}
-
-	for item_id in &chunk.top {
-		let span = chunk.get_module_item_span(*item_id);
-		let name = match chunk.get_module_item(*item_id) {
-			ModuleItem::Module(_) => continue,
-			ModuleItem::Import(_) => continue,
-			ModuleItem::Export(_) => continue,
-			ModuleItem::Type(type_) => type_.name,
-			ModuleItem::Extern(extern_) => extern_.name,
-			ModuleItem::Proto(proto) => proto.name,
-			ModuleItem::Def(def) => def.name,
-			ModuleItem::Expr(_) => continue,
-		};
-		if prelude.contains(&name) {
-			let loc = sources.loc(span);
-			errs.push(Error::PreludeShadowed(loc, syms.resolve(name).to_string()));
-		}
-	}
-
-	if !errs.is_empty() {
-		return Err(errs);
-	}
 
 	// 'Def' has no expression-level variant so every def in the chunk is
 	// reachable as a 'ModuleItem', a 'TypeItem::Method' or a 'ProtoItem'. A

@@ -6,8 +6,8 @@ use std::process;
 
 use mesa::intern::Interner;
 use mesa::load;
-use mesa::pkg::{Package, Packages};
-use mesa::rt::{self, NativeTypeSpec, Natives, build_prelude};
+use mesa::pkg::{Package, PackageId, Packages};
+use mesa::rt::{self, CORE_TYPES, NativeTypeSpec, Natives, build_prelude};
 use mesa::sem;
 use mesa::syn;
 
@@ -18,9 +18,7 @@ const STDLIB_NATIVE_TYPES: &[NativeTypeSpec] = rt::STDLIB_NATIVE_TYPES;
 fn main() {
 	let mut syms = Interner::new();
 	let mut pkgs = Packages::new();
-	// Built before any package loads, because loading one registers the native
-	// types it declares into this table and checking it has to see them.
-	let mut natives = Natives::core(&mut syms);
+	let mut natives = Natives::new();
 
 	let stdlib_dir = match env::var("MESA_HOME") {
 		Ok(path) => PathBuf::from(path).join("lib"),
@@ -33,18 +31,37 @@ fn main() {
 			}
 		}
 	};
+	let stdlib_pkg_id = pkgs.reserve();
+	// Registered directly against the stdlib's id, ahead of the stdlib's own
+	// native types. These are independent lists that come from the same package.
+	natives.register(&mut syms, stdlib_pkg_id, CORE_TYPES);
 	load_package(
 		&mut syms,
 		&mut pkgs,
 		&mut natives,
+		stdlib_pkg_id,
 		&stdlib_dir,
 		STDLIB_NATIVE_TYPES,
 	);
 
 	let current_dir = env::current_dir().unwrap();
-	load_package(&mut syms, &mut pkgs, &mut natives, &current_dir, &[]);
+	let current_pkg_id = pkgs.reserve();
+	load_package(
+		&mut syms,
+		&mut pkgs,
+		&mut natives,
+		current_pkg_id,
+		&current_dir,
+		&[],
+	);
 
-	let prelude = build_prelude(&natives);
+	let prelude = match build_prelude(&pkgs, &mut syms, stdlib_pkg_id, &natives) {
+		Ok(prelude) => prelude,
+		Err(err) => {
+			eprintln!("error: {}", err);
+			process::exit(1);
+		}
+	};
 	let mut rt_pkgs = rt::Packages::new(&pkgs, natives);
 
 	match rt::eval(&mut syms, &mut rt_pkgs, &prelude) {
@@ -70,6 +87,7 @@ fn load_package(
 	syms: &mut Interner,
 	pkgs: &mut Packages,
 	natives: &mut Natives,
+	pkg_id: PackageId,
 	start_dir: &Path,
 	native_types: &[NativeTypeSpec],
 ) {
@@ -99,7 +117,6 @@ fn load_package(
 		}
 	};
 
-	let pkg_id = pkgs.reserve();
 	// Before the package is checked: an 'extern type' is checked against the
 	// implementation registered for it.
 	natives.register(syms, pkg_id, native_types);

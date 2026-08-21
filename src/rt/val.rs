@@ -24,6 +24,14 @@ impl Num {
 	pub fn new() -> Val {
 		Val::Num(Num(0.0))
 	}
+
+	pub fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
+		let Val::Num(Num(this)) = val else { panic!() };
+		let Val::Num(Num(other)) = &args[0] else {
+			panic!()
+		};
+		Ok(Val::Num(Num(this - other)))
+	}
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -37,6 +45,16 @@ impl Bool {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Char(pub char);
+
+impl Char {
+	pub fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
+		let Val::Char(Char(this)) = val else { panic!() };
+		let Val::Char(Char(other)) = &args[0] else {
+			panic!()
+		};
+		Ok(Val::Num(Num(*this as u32 as f64 - *other as u32 as f64)))
+	}
+}
 
 #[derive(Debug)]
 pub struct Str {
@@ -73,6 +91,17 @@ impl Str {
 		let Val::Str(str) = val else { panic!() };
 		let items = str.text.chars().map(|c| Val::Char(Char(c))).collect();
 		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
+	}
+
+	pub fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
+		let Val::Str(this) = val else { panic!() };
+		let Val::Str(other) = &args[0] else { panic!() };
+		let order = match this.text.cmp(&other.text) {
+			std::cmp::Ordering::Less => -1.0,
+			std::cmp::Ordering::Equal => 0.0,
+			std::cmp::Ordering::Greater => 1.0,
+		};
+		Ok(Val::Num(Num(order)))
 	}
 }
 
@@ -259,7 +288,7 @@ pub enum Member {
 
 #[derive(Debug)]
 pub enum Method {
-	User(Rc<RefCell<Obj>>, Rc<RefCell<Proc>>),
+	User(Val, Rc<RefCell<Proc>>),
 	Native(Val, Sym, NativeMethod),
 }
 

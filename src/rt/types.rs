@@ -4,12 +4,12 @@ use std::rc::Rc;
 
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
-use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
+use crate::intern::{Interner, Sym};
 use crate::pkg::{Package, PackageId};
 use crate::rt::Error;
 use crate::rt::pkg::Packages;
 use crate::rt::scope::Scopes;
-use crate::rt::val::{Bool, Dict, List, Member, Nil, Num, Obj, Proc, Str, Val};
+use crate::rt::val::{Bool, Char, Dict, List, Member, Nil, Num, Obj, Proc, Str, Val};
 use crate::sem::types::{self, MemberSite};
 use crate::syn::nodes::{TypeItem, TypeItemId};
 use crate::syn::{self, ChunkId};
@@ -114,39 +114,110 @@ type NativeMemberSpec = (
 	fn(&Val, Vec<Val>) -> Result<Val, Error>,
 );
 
-// Every core type, in id order: its members, then its statics.
-pub const CORE_TYPES: &[(
-	NativeTypeId,
-	Option<fn() -> Val>,
-	&[NativeMemberSpec],
-	&[NativeMemberSpec],
-)] = &[
-	(NativeTypeId::NIL, Some(Nil::new), &[], &[]),
-	(NativeTypeId::NUM, Some(Num::new), &[], &[]),
-	(NativeTypeId::BOOL, Some(Bool::new), &[], &[]),
-	(NativeTypeId::CHAR, None, &[], &[]),
-	(
-		NativeTypeId::STR,
-		Some(Str::new),
-		&[("size", &[], Str::size), ("chars", &[], Str::chars)],
-		&[("empty", &[], Str::empty)],
-	),
-	(
-		NativeTypeId::LIST,
-		Some(List::new),
-		&[("size", &[], List::size)],
-		&[],
-	),
-	(
-		NativeTypeId::DICT,
-		Some(Dict::new),
-		&[("size", &[], Dict::size)],
-		&[],
-	),
-	(NativeTypeId::PROC, None, &[], &[]),
-	(NativeTypeId::TYPE, None, &[], &[]),
-	(NativeTypeId::PROTO, None, &[], &[]),
-	(NativeTypeId::MODULE, None, &[], &[]),
+// Every core type, in id order. Each claims its reserved id.
+pub const CORE_TYPES: &[NativeTypeSpec] = &[
+	NativeTypeSpec {
+		name: "Nil",
+		id: Some(NativeTypeId::NIL),
+		new: Some(Nil::new),
+		members: &[],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Num",
+		id: Some(NativeTypeId::NUM),
+		new: Some(Num::new),
+		members: &[(
+			"order",
+			&[NativeParam {
+				name: "other",
+				default: None,
+			}],
+			Num::order,
+		)],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Bool",
+		id: Some(NativeTypeId::BOOL),
+		new: Some(Bool::new),
+		members: &[],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Char",
+		id: Some(NativeTypeId::CHAR),
+		new: None,
+		members: &[(
+			"order",
+			&[NativeParam {
+				name: "other",
+				default: None,
+			}],
+			Char::order,
+		)],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Str",
+		id: Some(NativeTypeId::STR),
+		new: Some(Str::new),
+		members: &[
+			("size", &[], Str::size),
+			("chars", &[], Str::chars),
+			(
+				"order",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Str::order,
+			),
+		],
+		statics: &[("empty", &[], Str::empty)],
+	},
+	NativeTypeSpec {
+		name: "List",
+		id: Some(NativeTypeId::LIST),
+		new: Some(List::new),
+		members: &[("size", &[], List::size)],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Dict",
+		id: Some(NativeTypeId::DICT),
+		new: Some(Dict::new),
+		members: &[("size", &[], Dict::size)],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Proc",
+		id: Some(NativeTypeId::PROC),
+		new: None,
+		members: &[],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Type",
+		id: Some(NativeTypeId::TYPE),
+		new: None,
+		members: &[],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Proto",
+		id: Some(NativeTypeId::PROTO),
+		new: None,
+		members: &[],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Module",
+		id: Some(NativeTypeId::MODULE),
+		new: None,
+		members: &[],
+		statics: &[],
+	},
 ];
 
 impl NativeTypeId {
@@ -177,30 +248,10 @@ pub struct Natives {
 }
 
 impl Natives {
-	// Build a table holding just the core native types.
-	pub fn core(syms: &mut Interner) -> Self {
-		let mut types = Vec::with_capacity(CORE_TYPES.len());
-		for (id, new, member_specs, static_specs) in CORE_TYPES {
-			let name = syms.intern(CORE_TYPE_NAMES[id.0 as usize]);
-			types.push(NativeType {
-				desc: build_native_desc(syms, name, member_specs, static_specs),
-				new: *new,
-				members: build_native_members(syms, member_specs),
-				statics: build_native_members(syms, static_specs),
-			});
-		}
-
-		let vals = (0..types.len())
-			.map(|id| {
-				Rc::new(RefCell::new(Obj::Type(TypeId::Native(NativeTypeId(
-					id as u32,
-				)))))
-			})
-			.collect();
-
+	pub fn new() -> Self {
 		Self {
-			types,
-			vals,
+			types: Vec::new(),
+			vals: Vec::new(),
 			names: FxHashMap::default(),
 		}
 	}

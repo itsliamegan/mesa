@@ -63,10 +63,6 @@ const KEYWORDS: &[(&str, Sym)] = &[
 	("nil", Sym::NIL),
 ];
 
-pub const CORE_TYPE_NAMES: &[&str] = &[
-	"Nil", "Num", "Bool", "Char", "Str", "List", "Dict", "Proc", "Type", "Proto", "Module",
-];
-
 pub struct Interner {
 	syms: FxHashMap<&'static str, Sym>,
 	names: Vec<&'static str>,
