@@ -7,13 +7,20 @@ use std::process;
 use mesa::intern::Interner;
 use mesa::load;
 use mesa::pkg::{Package, Packages};
-use mesa::rt::{self, build_prelude};
+use mesa::rt::{self, NativeTypeSpec, Natives, build_prelude};
 use mesa::sem;
 use mesa::syn;
+
+// The native types the stdlib provides: Rust code linked into this binary, and
+// the implementations that the stdlib's 'extern type' declarations name.
+const STDLIB_NATIVE_TYPES: &[NativeTypeSpec] = rt::STDLIB_NATIVE_TYPES;
 
 fn main() {
 	let mut syms = Interner::new();
 	let mut pkgs = Packages::new();
+	// Built before any package loads, because loading one registers the native
+	// types it declares into this table and checking it has to see them.
+	let mut natives = Natives::core(&mut syms);
 
 	let stdlib_dir = match env::var("MESA_HOME") {
 		Ok(path) => PathBuf::from(path).join("lib"),
@@ -26,13 +33,19 @@ fn main() {
 			}
 		}
 	};
-	load_package(&mut syms, &mut pkgs, &stdlib_dir);
+	load_package(
+		&mut syms,
+		&mut pkgs,
+		&mut natives,
+		&stdlib_dir,
+		STDLIB_NATIVE_TYPES,
+	);
 
 	let current_dir = env::current_dir().unwrap();
-	load_package(&mut syms, &mut pkgs, &current_dir);
+	load_package(&mut syms, &mut pkgs, &mut natives, &current_dir, &[]);
 
-	let prelude = build_prelude(&mut syms);
-	let mut rt_pkgs = rt::Packages::new(&pkgs);
+	let prelude = build_prelude(&natives);
+	let mut rt_pkgs = rt::Packages::new(&pkgs, natives);
 
 	match rt::eval(&mut syms, &mut rt_pkgs, &prelude) {
 		Ok(()) => {}
@@ -53,7 +66,13 @@ fn main() {
 	}
 }
 
-fn load_package(syms: &mut Interner, pkgs: &mut Packages, start_dir: &Path) {
+fn load_package(
+	syms: &mut Interner,
+	pkgs: &mut Packages,
+	natives: &mut Natives,
+	start_dir: &Path,
+	native_types: &[NativeTypeSpec],
+) {
 	let (root_dir, manifest) = match load::find(start_dir) {
 		Ok(found) => found,
 		Err(err) => {
@@ -81,8 +100,18 @@ fn load_package(syms: &mut Interner, pkgs: &mut Packages, start_dir: &Path) {
 	};
 
 	let pkg_id = pkgs.reserve();
+	// Before the package is checked: an 'extern type' is checked against the
+	// implementation registered for it.
+	natives.register(syms, pkg_id, native_types);
 
-	let (modules, types) = match sem::check(syms, pkgs, pkg_id, &sources, &chunks) {
+	let (modules, types) = match sem::check(
+		syms,
+		pkgs,
+		pkg_id,
+		&sources,
+		&chunks,
+		&mut natives.descs_mut(pkg_id),
+	) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {

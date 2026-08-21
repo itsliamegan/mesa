@@ -1,7 +1,7 @@
 pub mod modules;
 pub mod types;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{CORE_TYPE_NAMES, Interner, Sym};
@@ -28,6 +28,8 @@ pub enum Error {
 	SignatureMismatch(Location, String, String, String),
 	ProtocolConflict(Location, String, String, String),
 	MemberCollision(Location, String, String, String),
+	NativeMemberCollision(Location, String, String),
+	UnimplementedExtern(Location, String),
 	ProtocolReach(Location, String, String),
 	MissingModuleHeader(Location),
 	DuplicateModuleHeader(Location),
@@ -57,6 +59,8 @@ impl Error {
 			Self::SignatureMismatch(loc, ..) => loc,
 			Self::ProtocolConflict(loc, ..) => loc,
 			Self::MemberCollision(loc, ..) => loc,
+			Self::NativeMemberCollision(loc, ..) => loc,
+			Self::UnimplementedExtern(loc, _) => loc,
 			Self::ProtocolReach(loc, ..) => loc,
 			Self::MissingModuleHeader(loc) => loc,
 			Self::DuplicateModuleHeader(loc) => loc,
@@ -127,6 +131,16 @@ impl Display for Error {
 					member, proto, name
 				)
 			}
+			Self::NativeMemberCollision(_, name, member) => {
+				write!(
+					f,
+					"member '{}' of extern type '{}' is already implemented natively",
+					member, name
+				)
+			}
+			Self::UnimplementedExtern(_, name) => {
+				write!(f, "extern type '{}' has no native implementation", name)
+			}
 			Self::ProtocolReach(_, proto, member) => {
 				write!(
 					f,
@@ -172,6 +186,7 @@ pub fn check(
 	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
+	natives: &mut HashMap<Sym, &mut types::NativeType>,
 ) -> Result<(Modules, Types), Vec<Error>> {
 	let mods = modules::check(syms, pkgs, pkg_id, sources, chunks)?;
 
@@ -179,7 +194,7 @@ pub fn check(
 	// tolerates the package not yet being known valid; it runs before the
 	// chunk walk rather than after, and its errors precede that walk's in the
 	// bundle, mirroring how module errors already precede every chunk error.
-	let (types, mut errs) = types::check(syms, sources, chunks, pkgs, &mods);
+	let (types, mut errs) = types::check(syms, sources, chunks, pkgs, &mods, natives);
 
 	// Every chunk is a module by now, module checking having failed otherwise,
 	// and the modules are held in chunk order, so this reports in file order.
@@ -220,6 +235,7 @@ fn check_chunk(
 			ModuleItem::Import(_) => continue,
 			ModuleItem::Export(_) => continue,
 			ModuleItem::Type(type_) => type_.name,
+			ModuleItem::Extern(extern_) => extern_.name,
 			ModuleItem::Proto(proto) => proto.name,
 			ModuleItem::Def(def) => def.name,
 			ModuleItem::Expr(_) => continue,
@@ -245,6 +261,7 @@ fn check_chunk(
 			ModuleItem::Import(_) => Ok(()),
 			ModuleItem::Export(_) => Ok(()),
 			ModuleItem::Type(_) => Ok(()),
+			ModuleItem::Extern(_) => Ok(()),
 			ModuleItem::Proto(_) => Ok(()),
 			ModuleItem::Def(def) => check_def(syms, sources, chunk, span, def),
 			ModuleItem::Expr(expr_id) => check_expr(sources, chunk, *expr_id, 0),

@@ -10,27 +10,28 @@ impl Sym {
 	pub const IMPORT: Sym = Sym(1);
 	pub const EXPORT: Sym = Sym(2);
 	pub const TYPE: Sym = Sym(3);
-	pub const CASE: Sym = Sym(4);
-	pub const PROTO: Sym = Sym(5);
-	pub const IMPL: Sym = Sym(6);
-	pub const DEF: Sym = Sym(7);
-	pub const EACH: Sym = Sym(8);
-	pub const LOOP: Sym = Sym(9);
-	pub const DO: Sym = Sym(10);
-	pub const IN: Sym = Sym(11);
-	pub const WHEN: Sym = Sym(12);
-	pub const THEN: Sym = Sym(13);
-	pub const ELSE: Sym = Sym(14);
-	pub const END: Sym = Sym(15);
-	pub const RETURN: Sym = Sym(16);
-	pub const BREAK: Sym = Sym(17);
-	pub const AND: Sym = Sym(18);
-	pub const OR: Sym = Sym(19);
-	pub const NOT: Sym = Sym(20);
-	pub const SELF: Sym = Sym(21);
-	pub const TRUE: Sym = Sym(22);
-	pub const FALSE: Sym = Sym(23);
-	pub const NIL: Sym = Sym(24);
+	pub const EXTERN: Sym = Sym(4);
+	pub const CASE: Sym = Sym(5);
+	pub const PROTO: Sym = Sym(6);
+	pub const IMPL: Sym = Sym(7);
+	pub const DEF: Sym = Sym(8);
+	pub const EACH: Sym = Sym(9);
+	pub const LOOP: Sym = Sym(10);
+	pub const DO: Sym = Sym(11);
+	pub const IN: Sym = Sym(12);
+	pub const WHEN: Sym = Sym(13);
+	pub const THEN: Sym = Sym(14);
+	pub const ELSE: Sym = Sym(15);
+	pub const END: Sym = Sym(16);
+	pub const RETURN: Sym = Sym(17);
+	pub const BREAK: Sym = Sym(18);
+	pub const AND: Sym = Sym(19);
+	pub const OR: Sym = Sym(20);
+	pub const NOT: Sym = Sym(21);
+	pub const SELF: Sym = Sym(22);
+	pub const TRUE: Sym = Sym(23);
+	pub const FALSE: Sym = Sym(24);
+	pub const NIL: Sym = Sym(25);
 }
 
 const KEYWORDS: &[(&str, Sym)] = &[
@@ -38,6 +39,7 @@ const KEYWORDS: &[(&str, Sym)] = &[
 	("import", Sym::IMPORT),
 	("export", Sym::EXPORT),
 	("type", Sym::TYPE),
+	("extern", Sym::EXTERN),
 	("case", Sym::CASE),
 	("proto", Sym::PROTO),
 	("impl", Sym::IMPL),

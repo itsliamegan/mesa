@@ -1,4 +1,5 @@
 use std::cell::{Cell, RefCell};
+use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
@@ -10,7 +11,7 @@ use crate::pkg::PackageId;
 use crate::rt::Error;
 use crate::rt::pkg::Packages;
 use crate::rt::scope::Scope;
-use crate::rt::types::{NativeMember, NativeTypeId, TypeId, Types};
+use crate::rt::types::{NativeMethod, NativeTypeId, TypeId, Types};
 use crate::sem::modules::ModuleId;
 use crate::sem::types;
 use crate::syn::ChunkId;
@@ -62,6 +63,10 @@ impl Str {
 			}
 		};
 		Ok(Val::Num(Num(size)))
+	}
+
+	pub fn empty(_val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+		Ok(Str::new())
 	}
 
 	pub fn chars(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
@@ -160,6 +165,15 @@ pub enum Obj {
 	Proto(PackageId, types::ProtoId),
 	Instance(Instance),
 	Method(Method),
+	Native(NativeTypeId, NativeData),
+}
+
+pub struct NativeData(pub Box<dyn std::any::Any>);
+
+impl Debug for NativeData {
+	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+		f.write_str("<native>")
+	}
 }
 
 impl Obj {
@@ -173,6 +187,7 @@ impl Obj {
 			Self::Proto(_, _) => TypeId::Native(NativeTypeId::PROTO),
 			Self::Instance(inst) => TypeId::User(inst.pkg, inst.typ),
 			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
+			Self::Native(id, _) => TypeId::Native(*id),
 		}
 	}
 }
@@ -245,7 +260,7 @@ pub enum Member {
 #[derive(Debug)]
 pub enum Method {
 	User(Rc<RefCell<Obj>>, Rc<RefCell<Proc>>),
-	Native(Val, Sym, NativeMember),
+	Native(Val, Sym, NativeMethod),
 }
 
 pub fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
@@ -326,8 +341,8 @@ pub fn rt_print_obj(syms: &Interner, types: &Types, pkgs: &Packages, obj: &Obj) 
 				res
 			}
 			TypeId::Native(type_id) => {
-				let typ = types.native(*type_id);
-				let name = syms.resolve(typ.name);
+				let typ = pkgs.native(*type_id);
+				let name = syms.resolve(typ.desc.name);
 				format!("type {}", name)
 			}
 		},
@@ -356,6 +371,7 @@ pub fn rt_print_obj(syms: &Interner, types: &Types, pkgs: &Packages, obj: &Obj) 
 				format!("def {}", syms.resolve(*name))
 			}
 		},
+		Obj::Native(id, _) => format!("<native {}>", syms.resolve(pkgs.native(*id).desc.name)),
 	}
 }
 

@@ -12,7 +12,7 @@ pub struct Packages {
 	pkgs: Vec<Package>,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct PackageId(u32);
 
 #[derive(Debug)]

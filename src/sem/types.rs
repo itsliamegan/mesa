@@ -69,6 +69,36 @@ pub struct Type {
 	pub variants: Option<Vec<TypeId>>,
 }
 
+// A type whose data and (some of) whose members are implemented in Rust. The
+// implementations themselves are elided, to be specified by the runtime; this
+// is the shape a native member presents to a caller.
+//
+// Seeded when the implementation is registered, and completed when the package
+// whose 'extern' declaration names it is checked.
+#[derive(Debug)]
+pub struct NativeType {
+	pub name: Sym,
+	// What Rust provides. Kept apart from the merged sets below because
+	// conformance is decided by comparing against it.
+	pub native_members: HashMap<Sym, Vec<NativeParam>>,
+	pub native_statics: HashMap<Sym, Vec<NativeParam>>,
+	// Every member reachable on a value of this type, flattened: Rust's, the
+	// declaration's, and what it acquires from the protocols it implements.
+	// Empty until the declaration is described.
+	pub members: HashMap<Sym, MemberSite>,
+	pub statics: HashMap<Sym, Static>,
+	pub impls: Vec<(PackageId, ProtoId)>,
+}
+
+// A native member's parameter. Unlike a declared 'Param' there is no default
+// expression to point at, only whether one exists: a native default is a Rust
+// function producing a value, with nothing in any chunk to compare against.
+#[derive(Debug)]
+pub struct NativeParam {
+	pub name: Sym,
+	pub has_default: bool,
+}
+
 // A declared protocol, its members split by whether they are required to be
 // implemented by or provided directly to the implementing type.
 #[derive(Debug)]
@@ -97,11 +127,18 @@ pub enum MemberSite {
 	// needs no package; a provided one is read from the protocol's.
 	Declared(ChunkId, TypeItemId),
 	Provided(PackageId, ChunkId, ProtoItemId),
+	// An 'extern type' member implemented in Rust. It has no chunk or item to
+	// point at: the implementation is in the native type's member map, and the
+	// declaration only names it.
+	Native,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Static {
 	Type(TypeId),
+	// An 'extern type' static implemented in Rust. Does not have any source
+	// code, and so belongs to no chunk.
+	Native,
 	// Like a declared member, a static is always written in the type's own
 	// file; protocols have no static methods to provide.
 	Proc(ChunkId, TypeItemId),
@@ -171,6 +208,7 @@ pub fn check(
 	chunks: &Chunks,
 	pkgs: &Packages,
 	mods: &Modules,
+	natives: &mut HashMap<Sym, &mut NativeType>,
 ) -> (Types, Vec<Error>) {
 	let mut types = Types {
 		types: Vec::new(),
@@ -200,13 +238,22 @@ pub fn check(
 		let chunk_id = mods.chunk(module);
 		let chunk = chunks.get(chunk_id);
 		for item_id in &chunk.top {
-			if let ModuleItem::Type(type_) = chunk.get_module_item(*item_id) {
-				let span = chunk.get_module_item_span(*item_id);
-				let id = describe_type(
-					syms, sources, chunks, pkgs, mods, &mut types, module, chunk_id, span, type_,
-					None, None, false, &mut errs,
-				);
-				types.type_by_item.insert((chunk_id, *item_id), id);
+			let span = chunk.get_module_item_span(*item_id);
+			match chunk.get_module_item(*item_id) {
+				ModuleItem::Type(type_) => {
+					let id = describe_type(
+						syms, sources, chunks, pkgs, mods, &mut types, module, chunk_id, span,
+						type_, None, None, false, &mut errs,
+					);
+					types.type_by_item.insert((chunk_id, *item_id), id);
+				}
+				// An extern type is described into the native type it names, so
+				// it claims no id here and nothing maps its declaration to one.
+				ModuleItem::Extern(extern_) => describe_extern(
+					syms, sources, chunks, pkgs, mods, &types, natives, module, chunk_id, span,
+					extern_, &mut errs,
+				),
+				_ => continue,
 			}
 		}
 	}
@@ -341,7 +388,17 @@ fn describe_type(
 		}
 	}
 
-	let impls = resolve_impls(syms, sources, pkgs, mods, types, module, span, type_, errs);
+	let impls = resolve_impls(
+		syms,
+		sources,
+		pkgs,
+		mods,
+		types,
+		module,
+		span,
+		&type_.impls,
+		errs,
+	);
 	let acquired = acquire_members(
 		syms,
 		sources,
@@ -352,6 +409,7 @@ fn describe_type(
 		type_.name,
 		span,
 		&declared,
+		None,
 		inherited,
 		&static_spans,
 		&impls,
@@ -446,6 +504,112 @@ fn describe_type(
 	id
 }
 
+// Describe an 'extern type', a type whose data and some of whose members come
+// from Rust, and whose declaration names the rest.
+fn describe_extern(
+	syms: &Interner,
+	sources: &Sources,
+	chunks: &Chunks,
+	pkgs: &Packages,
+	mods: &Modules,
+	types: &Types,
+	natives: &mut HashMap<Sym, &mut NativeType>,
+	module: ModuleId,
+	chunk_id: ChunkId,
+	span: Span,
+	extern_: &syn::nodes::Extern,
+	errs: &mut Vec<Error>,
+) {
+	let chunk = chunks.get(chunk_id);
+	// Resolved before the implementation is looked up: an unresolvable protocol
+	// is a mistake in the declaration either way, and reporting it does not
+	// depend on there being anything to describe.
+	let impls = resolve_impls(
+		syms,
+		sources,
+		pkgs,
+		mods,
+		types,
+		module,
+		span,
+		&extern_.impls,
+		errs,
+	);
+
+	// A declaration with no backing implementation is an implementation error,
+	// and leaves nothing to describe it into.
+	let Some(native) = natives.get_mut(&extern_.name) else {
+		errs.push(Error::UnimplementedExtern(
+			sources.loc(span),
+			syms.resolve(extern_.name).to_string(),
+		));
+		return;
+	};
+
+	let mut declared = HashMap::new();
+	let mut statics = HashMap::new();
+	let mut static_spans: HashMap<Sym, Span> = HashMap::new();
+	for name in native.native_members.keys() {
+		declared.insert(*name, MemberSite::Native);
+	}
+	for name in native.native_statics.keys() {
+		statics.insert(*name, Static::Native);
+		static_spans.insert(*name, span);
+	}
+
+	// A user method and a native method cannot share names; only one can win.
+	for item_id in &extern_.items {
+		let item_span = chunk.get_type_item_span(*item_id);
+		let (name, claimed) = match chunk.get_type_item(*item_id) {
+			syn::nodes::TypeItem::Method(syn::nodes::Method::Instance(def)) => {
+				let claimed = declared
+					.insert(def.name, MemberSite::Declared(chunk_id, *item_id))
+					.is_some();
+				(def.name, claimed)
+			}
+			syn::nodes::TypeItem::Method(syn::nodes::Method::Static(def)) => {
+				let claimed = statics
+					.insert(def.name, Static::Proc(chunk_id, *item_id))
+					.is_some();
+				static_spans.insert(def.name, item_span);
+				(def.name, claimed)
+			}
+			_ => panic!(),
+		};
+		if claimed {
+			errs.push(Error::NativeMemberCollision(
+				sources.loc(item_span),
+				syms.resolve(extern_.name).to_string(),
+				syms.resolve(name).to_string(),
+			));
+		}
+	}
+
+	let acquired = acquire_members(
+		syms,
+		sources,
+		pkgs,
+		mods.pkg(),
+		chunks,
+		types,
+		extern_.name,
+		span,
+		&declared,
+		Some(native),
+		None,
+		&static_spans,
+		&impls,
+		errs,
+	);
+
+	let mut members = acquired;
+	members.extend(&declared);
+
+	native.members = members;
+	native.statics = statics;
+	native.impls = impls;
+}
+
 // Check that the structure of a type is valid. It must not have fields if it is
 // a case parent, and it must declare params in the standard
 // required-before-optional order.
@@ -497,11 +661,11 @@ fn resolve_impls(
 	types: &Types,
 	module: ModuleId,
 	span: Span,
-	type_: &syn::nodes::Type,
+	paths: &[Vec<Sym>],
 	errs: &mut Vec<Error>,
 ) -> Vec<(PackageId, ProtoId)> {
-	let mut impls = Vec::with_capacity(type_.impls.len());
-	for path in &type_.impls {
+	let mut impls = Vec::with_capacity(paths.len());
+	for path in paths {
 		match mods.resolve_path_from(pkgs, module, path) {
 			Some(Resolved::Member(pkg, owner, Member::Proto(item_id))) => {
 				let owner_mods = if pkg == mods.pkg() {
@@ -550,6 +714,7 @@ fn acquire_members(
 	type_name: Sym,
 	type_span: Span,
 	declared: &HashMap<Sym, MemberSite>,
+	native: Option<&NativeType>,
 	inherited: Option<&Inherited>,
 	static_spans: &HashMap<Sym, Span>,
 	impls: &[(PackageId, ProtoId)],
@@ -596,22 +761,38 @@ fn acquire_members(
 			} else {
 				None
 			};
-			if let Some(MemberSite::Declared(site_chunk, site_item)) = own {
-				let site_chunk = chunks.get(*site_chunk);
-				let TypeItem::Method(syn::nodes::Method::Instance(method_def)) =
-					site_chunk.get_type_item(*site_item)
-				else {
-					panic!()
-				};
-				if !signatures_agree(proto_chunk, site_chunk, &def.params, &method_def.params) {
-					errs.push(Error::SignatureMismatch(
-						sources.loc(site_chunk.get_type_item_span(*site_item)),
-						syms.resolve(type_name).to_string(),
-						syms.resolve(proto.name).to_string(),
-						syms.resolve(*member).to_string(),
-					));
+			match own {
+				Some(MemberSite::Declared(site_chunk, site_item)) => {
+					let site_chunk = chunks.get(*site_chunk);
+					let TypeItem::Method(syn::nodes::Method::Instance(method_def)) =
+						site_chunk.get_type_item(*site_item)
+					else {
+						panic!()
+					};
+					if !signatures_agree(proto_chunk, site_chunk, &def.params, &method_def.params) {
+						errs.push(Error::SignatureMismatch(
+							sources.loc(site_chunk.get_type_item_span(*site_item)),
+							syms.resolve(type_name).to_string(),
+							syms.resolve(proto.name).to_string(),
+							syms.resolve(*member).to_string(),
+						));
+					}
+					continue;
 				}
-				continue;
+				Some(MemberSite::Provided(..)) => panic!(),
+				Some(MemberSite::Native) => {
+					let params = &native.unwrap().native_members[member];
+					if !native_signature_agrees(&def.params, params) {
+						errs.push(Error::SignatureMismatch(
+							sources.loc(type_span),
+							syms.resolve(type_name).to_string(),
+							syms.resolve(proto.name).to_string(),
+							syms.resolve(*member).to_string(),
+						));
+					}
+					continue;
+				}
+				None => {}
 			}
 
 			if !provided {
@@ -667,6 +848,25 @@ fn signatures_agree(
 			return false;
 		}
 		if !defaults_agree(proto_chunk, type_chunk, proto_param.default, param.default) {
+			return false;
+		}
+	}
+	true
+}
+
+// Check whether a native member satisfies the requirements of a protocol
+// signature. Arity, param names, and the existence of defaults must match.
+// Default *values* are not compared, because they can be backed by an arbitrary
+// Rust function.
+fn native_signature_agrees(proto: &[Param], native: &[NativeParam]) -> bool {
+	if proto.len() != native.len() {
+		return false;
+	}
+	for (proto_param, param) in proto.iter().zip(native) {
+		if proto_param.name != param.name {
+			return false;
+		}
+		if proto_param.default.is_some() != param.has_default {
 			return false;
 		}
 	}

@@ -56,12 +56,18 @@ pub struct NativeParam {
 }
 
 #[derive(Debug, Clone)]
-pub struct NativeMember {
+pub enum NativeMember {
+	Native(NativeMethod),
+	User(Rc<RefCell<Proc>>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NativeMethod {
 	pub params: &'static [NativeParam],
 	pub call: fn(&Val, Vec<Val>) -> Result<Val, Error>,
 }
 
-impl NativeMember {
+impl NativeMethod {
 	pub fn defaults(&self) -> Option<Vec<Val>> {
 		self.params
 			.iter()
@@ -70,51 +76,77 @@ impl NativeMember {
 	}
 }
 
-#[derive(Debug, Clone)]
+// A native type as its Rust implementation declares it, before registration
+// interns the names and assigns identity.
+pub struct NativeTypeSpec {
+	pub name: &'static str,
+	// The slot this type must land in. A core type's ID is a fixed constant
+	// that 'Val::type_id' returns directly, so its registration pins the slot
+	// rather than trusting insertion order; an extended type leaves it None.
+	pub id: Option<NativeTypeId>,
+	pub new: Option<fn() -> Val>,
+	pub members: &'static [NativeMemberSpec],
+	pub statics: &'static [NativeMemberSpec],
+}
+
+#[derive(Debug)]
 pub struct NativeType {
-	pub name: Sym,
+	pub desc: types::NativeType,
 	pub new: Option<fn() -> Val>,
 	pub members: FxHashMap<Sym, NativeMember>,
+	pub statics: FxHashMap<Sym, NativeMember>,
 }
 
 impl NativeType {
 	fn has_member(&self, name: Sym) -> bool {
 		self.members.contains_key(&name)
 	}
+
+	fn has_static(&self, name: Sym) -> bool {
+		self.statics.contains_key(&name)
+	}
 }
 
+// An entry of a native type's member or static table, as written in Rust.
+type NativeMemberSpec = (
+	&'static str,
+	&'static [NativeParam],
+	fn(&Val, Vec<Val>) -> Result<Val, Error>,
+);
+
+// Every core type, in id order: its members, then its statics.
 pub const CORE_TYPES: &[(
 	NativeTypeId,
 	Option<fn() -> Val>,
-	&[(
-		&str,
-		&[NativeParam],
-		fn(&Val, Vec<Val>) -> Result<Val, Error>,
-	)],
+	&[NativeMemberSpec],
+	&[NativeMemberSpec],
 )] = &[
-	(NativeTypeId::NIL, Some(Nil::new), &[]),
-	(NativeTypeId::NUM, Some(Num::new), &[]),
-	(NativeTypeId::BOOL, Some(Bool::new), &[]),
-	(NativeTypeId::CHAR, None, &[]),
+	(NativeTypeId::NIL, Some(Nil::new), &[], &[]),
+	(NativeTypeId::NUM, Some(Num::new), &[], &[]),
+	(NativeTypeId::BOOL, Some(Bool::new), &[], &[]),
+	(NativeTypeId::CHAR, None, &[], &[]),
 	(
 		NativeTypeId::STR,
 		Some(Str::new),
 		&[("size", &[], Str::size), ("chars", &[], Str::chars)],
+		&[("empty", &[], Str::empty)],
 	),
 	(
 		NativeTypeId::LIST,
 		Some(List::new),
 		&[("size", &[], List::size)],
+		&[],
 	),
 	(
 		NativeTypeId::DICT,
 		Some(Dict::new),
 		&[("size", &[], Dict::size)],
+		&[],
 	),
-	(NativeTypeId::PROC, None, &[]),
-	(NativeTypeId::TYPE, None, &[]),
-	(NativeTypeId::PROTO, None, &[]),
-	(NativeTypeId::MODULE, None, &[]),
+	(NativeTypeId::PROC, None, &[], &[]),
+	(NativeTypeId::TYPE, None, &[], &[]),
+	(NativeTypeId::PROTO, None, &[], &[]),
+	(NativeTypeId::MODULE, None, &[], &[]),
 ];
 
 impl NativeTypeId {
@@ -131,47 +163,177 @@ impl NativeTypeId {
 	pub const MODULE: NativeTypeId = NativeTypeId(10);
 }
 
-// Build a table of the core native types.
-pub fn build_core_types(syms: &mut Interner) -> Vec<NativeType> {
-	let mut core = Vec::with_capacity(CORE_TYPES.len());
-	for (id, new, member_pairs) in CORE_TYPES {
-		let mut members = HashMap::with_capacity_and_hasher(member_pairs.len(), FxBuildHasher);
-		for (name, params, call) in *member_pairs {
-			members.insert(
-				syms.intern(name),
-				NativeMember {
-					params,
-					call: *call,
-				},
-			);
-		}
-		core.push(NativeType {
-			name: syms.intern(CORE_TYPE_NAMES[id.0 as usize]),
-			new: *new,
-			members,
-		});
-	}
-	core
+// Every native type in the program and the canonical value for each. There is
+// exactly one per runtime; native type identity is global, so every package
+// reads the same table and the same values.
+pub struct Natives {
+	types: Vec<NativeType>,
+	// Indexed in step with 'types', so a native type's id indexes both.
+	vals: Vec<Rc<RefCell<Obj>>>,
+	// Which native type a name means inside a given package. The id is global,
+	// but the declaration site is not: 'extern type File' in the stdlib and in
+	// a user package name different types.
+	names: FxHashMap<(PackageId, Sym), NativeTypeId>,
 }
 
-// The runtime image of every type that the program has. Includes runtime
-// information about both the static type descriptions and the
-// dynamically-loaded native types.
+impl Natives {
+	// Build a table holding just the core native types.
+	pub fn core(syms: &mut Interner) -> Self {
+		let mut types = Vec::with_capacity(CORE_TYPES.len());
+		for (id, new, member_specs, static_specs) in CORE_TYPES {
+			let name = syms.intern(CORE_TYPE_NAMES[id.0 as usize]);
+			types.push(NativeType {
+				desc: build_native_desc(syms, name, member_specs, static_specs),
+				new: *new,
+				members: build_native_members(syms, member_specs),
+				statics: build_native_members(syms, static_specs),
+			});
+		}
+
+		let vals = (0..types.len())
+			.map(|id| {
+				Rc::new(RefCell::new(Obj::Type(TypeId::Native(NativeTypeId(
+					id as u32,
+				)))))
+			})
+			.collect();
+
+		Self {
+			types,
+			vals,
+			names: FxHashMap::default(),
+		}
+	}
+
+	// Register a package's native types, in the order the package provides
+	// them.
+	pub fn register(&mut self, syms: &mut Interner, pkg: PackageId, specs: &[NativeTypeSpec]) {
+		for spec in specs {
+			let id = NativeTypeId(self.types.len() as u32);
+			if let Some(claimed) = spec.id {
+				assert_eq!(claimed, id);
+			}
+			let name = syms.intern(spec.name);
+			self.types.push(NativeType {
+				desc: build_native_desc(syms, name, spec.members, spec.statics),
+				new: spec.new,
+				members: build_native_members(syms, spec.members),
+				statics: build_native_members(syms, spec.statics),
+			});
+			self.vals
+				.push(Rc::new(RefCell::new(Obj::Type(TypeId::Native(id)))));
+			self.names.insert((pkg, name), id);
+		}
+	}
+
+	pub fn descs_mut(&mut self, pkg: PackageId) -> HashMap<Sym, &mut types::NativeType> {
+		let names: FxHashMap<usize, Sym> = self
+			.names
+			.iter()
+			.filter(|((name_pkg, _), _)| *name_pkg == pkg)
+			.map(|((_, name), id)| (id.index(), *name))
+			.collect();
+		self.types
+			.iter_mut()
+			.enumerate()
+			.filter_map(|(index, typ)| names.get(&index).map(|name| (*name, &mut typ.desc)))
+			.collect()
+	}
+
+	// Which native type 'name' declares in 'pkg', if any.
+	pub fn id(&self, pkg: PackageId, name: Sym) -> Option<NativeTypeId> {
+		self.names.get(&(pkg, name)).copied()
+	}
+
+	// Every native type registered to 'pkg', in registration order.
+	pub fn ids(&self, pkg: PackageId) -> Vec<NativeTypeId> {
+		let mut ids: Vec<_> = self
+			.names
+			.iter()
+			.filter(|((name_pkg, _), _)| *name_pkg == pkg)
+			.map(|(_, id)| *id)
+			.collect();
+		ids.sort_by_key(|id| id.index());
+		ids
+	}
+
+	pub fn get(&self, id: NativeTypeId) -> &NativeType {
+		&self.types[id.index()]
+	}
+
+	pub fn get_mut(&mut self, id: NativeTypeId) -> &mut NativeType {
+		&mut self.types[id.index()]
+	}
+
+	pub fn val(&self, id: NativeTypeId) -> Rc<RefCell<Obj>> {
+		self.vals[id.index()].clone()
+	}
+}
+
+fn build_native_desc(
+	syms: &mut Interner,
+	name: Sym,
+	members: &[NativeMemberSpec],
+	statics: &[NativeMemberSpec],
+) -> types::NativeType {
+	types::NativeType {
+		name,
+		native_members: build_native_params(syms, members),
+		native_statics: build_native_params(syms, statics),
+		members: HashMap::new(),
+		statics: HashMap::new(),
+		impls: Vec::new(),
+	}
+}
+
+fn build_native_params(
+	syms: &mut Interner,
+	specs: &[NativeMemberSpec],
+) -> HashMap<Sym, Vec<types::NativeParam>> {
+	let mut members = HashMap::with_capacity(specs.len());
+	for (name, params, _) in specs {
+		let params = params
+			.iter()
+			.map(|param| types::NativeParam {
+				name: syms.intern(param.name),
+				has_default: param.default.is_some(),
+			})
+			.collect();
+		members.insert(syms.intern(name), params);
+	}
+	members
+}
+
+fn build_native_members(
+	syms: &mut Interner,
+	specs: &[NativeMemberSpec],
+) -> FxHashMap<Sym, NativeMember> {
+	let mut members = HashMap::with_capacity_and_hasher(specs.len(), FxBuildHasher);
+	for (name, params, call) in specs {
+		members.insert(
+			syms.intern(name),
+			NativeMember::Native(NativeMethod {
+				params,
+				call: *call,
+			}),
+		);
+	}
+	members
+}
+
+// The runtime image of one package's user types. Native types are not here:
+// their identity is global, so they live on 'Packages' instead.
 pub struct Types<'descs> {
 	pub descs: &'descs types::Types,
 	// Indexed in step with the description arena, so a type's index there is
 	// its index here.
 	user: Vec<UserType>,
-	native: Vec<NativeType>,
-	native_vals: Vec<Rc<RefCell<Obj>>>,
 }
 
 impl<'descs> Types<'descs> {
 	// Create a runtime representation of every type, storing a canonical Val
 	// for every type and creating an unbound proc for every method.
 	pub fn new(
-		native: Vec<NativeType>,
-		native_vals: Vec<Rc<RefCell<Obj>>>,
 		pkgs: &Packages<'descs>,
 		pkg_id: PackageId,
 		pkg: &'descs Package,
@@ -189,6 +351,7 @@ impl<'descs> Types<'descs> {
 			for (name, static_) in &desc.statics {
 				let static_ = match static_ {
 					types::Static::Type(id) => Static::Type(*id),
+					types::Static::Native => panic!(),
 					types::Static::Proc(chunk_id, item_id) => {
 						Static::Proc(build_static_proc(pkg_id, pkg, scopes, *chunk_id, *item_id))
 					}
@@ -202,12 +365,7 @@ impl<'descs> Types<'descs> {
 			});
 		}
 
-		Self {
-			descs,
-			user,
-			native,
-			native_vals,
-		}
+		Self { descs, user }
 	}
 
 	// Get a type's *qualified* name (including all lexical nesting).
@@ -223,7 +381,7 @@ impl<'descs> Types<'descs> {
 					None => syms.resolve(desc.name).to_string(),
 				}
 			}
-			TypeId::Native(id) => syms.resolve(self.native(id).name).to_string(),
+			TypeId::Native(id) => syms.resolve(pkgs.native(id).desc.name).to_string(),
 		}
 	}
 
@@ -245,14 +403,6 @@ impl<'descs> Types<'descs> {
 			|| desc.body_fields.contains_key(&name)
 	}
 
-	pub fn native(&self, id: NativeTypeId) -> &NativeType {
-		&self.native[id.0 as usize]
-	}
-
-	pub fn native_val(&self, id: NativeTypeId) -> Rc<RefCell<Obj>> {
-		self.native_vals[id.0 as usize].clone()
-	}
-
 	pub fn member(&self, pkgs: &Packages, val: &Val, name: Sym) -> Option<Member> {
 		let type_id = val.type_id();
 		let namespace_type_id = val.namespace_type_id();
@@ -262,11 +412,9 @@ impl<'descs> Types<'descs> {
 			let Val::Obj(rf) = val else {
 				panic!();
 			};
-			// Only a user type has statics; a native one reaches its members
-			// through the seam instead.
 			let has_static = match namespace_type_id {
 				TypeId::User(pkg, id) => pkgs.get(pkg).types.static_(id, name).is_some(),
-				TypeId::Native(_) => false,
+				TypeId::Native(id) => pkgs.native(id).has_static(name),
 			};
 			if has_static {
 				Some(Member::Static(rf.clone(), name))
@@ -274,7 +422,7 @@ impl<'descs> Types<'descs> {
 				let TypeId::Native(id) = type_id else {
 					panic!();
 				};
-				if self.native(id).has_member(name) {
+				if pkgs.native(id).has_member(name) {
 					Some(Member::Native(val.clone(), name))
 				} else {
 					None
@@ -294,7 +442,7 @@ impl<'descs> Types<'descs> {
 					}
 				}
 				TypeId::Native(id) => {
-					if self.native(id).has_member(name) {
+					if pkgs.native(id).has_member(name) {
 						Some(Member::Native(val.clone(), name))
 					} else {
 						None
@@ -303,6 +451,55 @@ impl<'descs> Types<'descs> {
 			}
 		}
 	}
+}
+
+// The methods an 'extern' declaration adds to the native type it names.
+pub struct ExternMembers {
+	pub members: FxHashMap<Sym, NativeMember>,
+	pub statics: FxHashMap<Sym, NativeMember>,
+}
+
+// Build the runtime half of every 'extern type' in a package. The native half
+// is already in each native type's maps, put there by registration; this
+// produces only what the declaration adds, for the caller to merge in.
+pub fn build_extern_members<'descs>(
+	pkgs: &Packages<'descs>,
+	pkg_id: PackageId,
+	pkg: &'descs Package,
+	scopes: &Scopes,
+) -> Vec<(NativeTypeId, ExternMembers)> {
+	let mut externs = Vec::new();
+	for native_id in pkgs.native_ids(pkg_id) {
+		let desc = &pkgs.native(native_id).desc;
+
+		let mut members = FxHashMap::default();
+		for (name, site) in &desc.members {
+			let proc_rf = match site {
+				types::MemberSite::Declared(..) | types::MemberSite::Provided(..) => {
+					build_member_proc(pkgs, pkg_id, pkg, scopes, *site)
+				}
+				// Already in the native type's map.
+				types::MemberSite::Native => continue,
+			};
+			members.insert(*name, NativeMember::User(proc_rf));
+		}
+
+		let mut statics = FxHashMap::default();
+		for (name, static_) in &desc.statics {
+			let proc_rf = match static_ {
+				// An extern body admits no case or inner type declarations.
+				types::Static::Type(_) => panic!(),
+				types::Static::Native => continue,
+				types::Static::Proc(chunk_id, item_id) => {
+					build_static_proc(pkg_id, pkg, scopes, *chunk_id, *item_id)
+				}
+			};
+			statics.insert(*name, NativeMember::User(proc_rf));
+		}
+
+		externs.push((native_id, ExternMembers { members, statics }));
+	}
+	externs
 }
 
 // Build the proc a member resolves to. A member declared by the type reads
@@ -356,6 +553,7 @@ fn build_member_proc<'descs>(
 				scope,
 			}))
 		}
+		MemberSite::Native => panic!(),
 	}
 }
 

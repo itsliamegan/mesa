@@ -58,6 +58,8 @@ test_files! {
 	test_reports_case_errors => "case_errors.ms",
 	test_reports_case_parent_shape => "sem_error_case.ms",
 	test_protos => "protos.ms",
+	test_externs => "extern.ms",
+	test_extern_counter => "extern_counter.ms",
 	test_reports_proto_errors => "sem_error_proto.ms",
 	test_reports_multiple_sem_errors => "sem_error_multi.ms",
 	test_reports_duplicate_members => "sem_error_member.ms",

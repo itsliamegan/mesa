@@ -1,5 +1,6 @@
 mod eval;
 mod modules;
+mod native;
 pub mod pkg;
 mod scope;
 mod types;
@@ -11,7 +12,9 @@ use crate::intern::Interner;
 use crate::src::Location;
 
 pub use eval::{Prelude, build_prelude};
+pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
+pub use types::{NativeTypeSpec, Natives};
 
 // Packages must be in dependency order. Building one reads the arenas of every
 // package it imports from — a protocol's chunk and module scope among them — so
@@ -23,8 +26,9 @@ pub fn eval(
 ) -> Result<(), (Error, Vec<(String, Location)>)> {
 	let ids: Vec<_> = pkgs.ids().collect();
 	for pkg_id in ids {
-		let pkg = pkg::Package::new(prelude, pkgs, pkgs.desc(pkg_id), pkg_id);
+		let (pkg, externs) = pkg::Package::new(prelude, pkgs, pkgs.desc(pkg_id), pkg_id);
 		pkgs.insert(pkg_id, pkg);
+		pkgs.merge_externs(externs);
 		eval::Interpreter::new(syms, pkgs, pkg_id).eval()?;
 	}
 	Ok(())

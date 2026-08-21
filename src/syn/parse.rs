@@ -161,6 +161,7 @@ impl<'src> Parser<'src> {
 			TokenTag::Import => self.parse_import_decl(),
 			TokenTag::Export => self.parse_export_decl(),
 			TokenTag::Type => self.parse_type_in_module(),
+			TokenTag::Extern => self.parse_extern_decl(),
 			TokenTag::Proto => self.parse_proto_decl(),
 			TokenTag::Def => self.parse_def_decl(),
 			_ => {
@@ -216,6 +217,21 @@ impl<'src> Parser<'src> {
 		let (type_, span) = self.parse_type(TokenTag::Type, true)?;
 		let item = ModuleItem::Type(type_);
 		let item_id = self.chunk.add_module_item(span, item);
+		Ok(item_id)
+	}
+
+	fn parse_extern_decl(&mut self) -> Result<ModuleItemId, Error> {
+		let tok = self.take(TokenTag::Extern)?;
+		self.take(TokenTag::Type)?;
+		let name = self.take_type_name()?;
+		let impls = self.parse_impl_line()?;
+		let mut items = Vec::new();
+		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
+			items.push(self.parse_method_decl()?);
+		}
+		self.take(TokenTag::End)?;
+		let item = ModuleItem::Extern(Extern { name, impls, items });
+		let item_id = self.chunk.add_module_item(tok.into(), item);
 		Ok(item_id)
 	}
 

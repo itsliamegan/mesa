@@ -56,3 +56,15 @@ $print("Hello".chars.size)
 
 $print("héllo".size)
 $print("héllo".chars.size)
+
+#---
+
+#> 0
+#> 0
+#> true
+#> Hello
+
+$print(Str.empty.size)
+$print(Str.empty().size)
+$print(Str.empty == "")
+$print(Str.empty + "Hello")

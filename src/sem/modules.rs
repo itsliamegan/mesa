@@ -505,6 +505,7 @@ fn check_members_unique(
 				ModuleItem::Import(_) => continue,
 				ModuleItem::Export(_) => continue,
 				ModuleItem::Type(type_) => (type_.name, Member::Type(*item_id)),
+				ModuleItem::Extern(extern_) => (extern_.name, Member::Type(*item_id)),
 				ModuleItem::Proto(proto) => (proto.name, Member::Proto(*item_id)),
 				ModuleItem::Def(def) => (def.name, Member::Proc(*item_id)),
 				// A second 'x := ...' is reassignment, not redeclaration; a

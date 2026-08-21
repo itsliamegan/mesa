@@ -7,7 +7,7 @@ use crate::intern::Sym;
 use crate::pkg::PackageId;
 use crate::rt::Error;
 use crate::rt::pkg::Packages;
-use crate::rt::types::{Static, TypeId};
+use crate::rt::types::{NativeMember, Static, TypeId};
 use crate::rt::val::{Member, Method, Obj, Val};
 use crate::sem;
 use crate::sem::modules::ModuleId;
@@ -67,8 +67,7 @@ impl Place {
 		}
 	}
 
-	pub fn get(&self, pkgs: &Packages, pkg_id: PackageId) -> Result<Val, Error> {
-		let types = &pkgs.get(pkg_id).types;
+	pub fn get(&self, pkgs: &Packages) -> Result<Val, Error> {
 		match self {
 			Place::Local(local) => Ok(local.get()),
 			Place::Module(pkg, id) => Ok(Val::Obj(pkgs.get(*pkg).mods.obj(*id))),
@@ -86,18 +85,32 @@ impl Place {
 				}
 			}
 			Place::Member(Member::Static(type_rf, name)) => {
-				// A static is only ever found on a user type.
-				let Obj::Type(TypeId::User(type_pkg, type_id)) = *type_rf.borrow() else {
+				let Obj::Type(type_id) = *type_rf.borrow() else {
 					panic!();
 				};
-				// A nested type is declared inside its enclosing one, so both
-				// live in the same package.
-				let types = &pkgs.get(type_pkg).types;
-				match types.static_(type_id, *name).unwrap() {
-					Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
-						Method::User(type_rf.clone(), proc_rf),
-					))))),
-					Static::Type(id) => Ok(Val::Obj(types.user(id).val.clone())),
+				match type_id {
+					TypeId::User(type_pkg, type_id) => {
+						// A nested type is declared inside its enclosing one, so
+						// both live in the same package.
+						let types = &pkgs.get(type_pkg).types;
+						match types.static_(type_id, *name).unwrap() {
+							Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(
+								Obj::Method(Method::User(type_rf.clone(), proc_rf)),
+							)))),
+							Static::Type(id) => Ok(Val::Obj(types.user(id).val.clone())),
+						}
+					}
+					TypeId::Native(type_id) => {
+						let method = match pkgs.native(type_id).statics.get(name).unwrap() {
+							NativeMember::Native(meth) => {
+								Method::Native(Val::Obj(type_rf.clone()), *name, *meth)
+							}
+							NativeMember::User(proc_rf) => {
+								Method::User(type_rf.clone(), proc_rf.clone())
+							}
+						};
+						Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
+					}
 				}
 			}
 			Place::Member(Member::User(inst_rf, name)) => {
@@ -119,12 +132,16 @@ impl Place {
 				let TypeId::Native(type_id) = recv.type_id() else {
 					panic!();
 				};
-				match types.native(type_id).members.get(name) {
-					Some(member) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
-						Method::Native(recv.clone(), *name, member.clone()),
-					))))),
-					None => panic!(),
-				}
+				let method = match pkgs.native(type_id).members.get(name).unwrap() {
+					NativeMember::Native(meth) => Method::Native(recv.clone(), *name, *meth),
+					NativeMember::User(proc_rf) => {
+						let Val::Obj(recv_rf) = recv else {
+							panic!();
+						};
+						Method::User(recv_rf.clone(), proc_rf.clone())
+					}
+				};
+				Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 			}
 		}
 	}

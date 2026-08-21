@@ -61,6 +61,7 @@ pub enum ModuleItem {
 	Import(Import),
 	Export(Export),
 	Type(Type),
+	Extern(Extern),
 	Proto(Proto),
 	Def(Def),
 	Expr(ExprId),
@@ -85,6 +86,13 @@ pub struct Export {
 pub struct Type {
 	pub name: Sym,
 	pub params: Vec<Param>,
+	pub impls: Vec<Vec<Sym>>,
+	pub items: Vec<TypeItemId>,
+}
+
+#[derive(Debug)]
+pub struct Extern {
+	pub name: Sym,
 	pub impls: Vec<Vec<Sym>>,
 	pub items: Vec<TypeItemId>,
 }

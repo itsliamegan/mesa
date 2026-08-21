@@ -10,7 +10,7 @@ use crate::pkg::PackageId;
 use crate::rt::modules::Modules;
 use crate::rt::pkg::Packages;
 use crate::rt::scope::{Place, Scope, Tier};
-use crate::rt::types::{CORE_TYPES, NativeParam, NativeType, TypeId, Types, build_core_types};
+use crate::rt::types::{CORE_TYPES, NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
 	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_debug_val,
 	rt_print_val,
@@ -25,21 +25,15 @@ use crate::syn::{self, Chunk, ChunkId};
 
 pub struct Prelude {
 	pub(super) scope: Rc<RefCell<Scope>>,
-	pub(super) native: Vec<NativeType>,
-	pub(super) native_vals: Vec<Rc<RefCell<Obj>>>,
 }
 
-pub fn build_prelude(syms: &mut Interner) -> Prelude {
-	let native = build_core_types(syms);
-	let mut native_vals = Vec::with_capacity(native.len());
-	for (id, _, _) in CORE_TYPES {
-		native_vals.push(Rc::new(RefCell::new(Obj::Type(TypeId::Native(*id)))));
-	}
-
+// Bind every core type's name to its canonical value. Only the core types are
+// in the prelude; an extended native type is reached through the module that
+// declares it.
+pub fn build_prelude(natives: &Natives) -> Prelude {
 	let mut locals = HashMap::with_capacity_and_hasher(CORE_TYPES.len(), FxBuildHasher);
-	for (id, _, _) in CORE_TYPES {
-		let typ = &native[id.index()];
-		locals.insert(typ.name, Val::Obj(native_vals[id.index()].clone()));
+	for (id, _, _, _) in CORE_TYPES {
+		locals.insert(natives.get(*id).desc.name, Val::Obj(natives.val(*id)));
 	}
 	let scope = Rc::new(RefCell::new(Scope {
 		locals,
@@ -47,11 +41,7 @@ pub fn build_prelude(syms: &mut Interner) -> Prelude {
 		tier: Tier::Prelude,
 	}));
 
-	Prelude {
-		scope,
-		native,
-		native_vals,
-	}
+	Prelude { scope }
 }
 
 pub struct Interpreter<'syms, 'descs, 'pkgs> {
@@ -136,6 +126,14 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 				let val = Val::Obj(self.types().user(id).val.clone());
 				self.scope.borrow_mut().locals.insert(typ.name, val);
 			}
+			// An extern type's canonical value is the native type's, and its
+			// members were merged into that type rather than described here, so
+			// the name is all there is to resolve it by.
+			ModuleItem::Extern(extern_) => {
+				let id = self.pkgs.native_id(self.pkg_id, extern_.name).unwrap();
+				let val = Val::Obj(self.pkgs.native_val(id));
+				self.scope.borrow_mut().locals.insert(extern_.name, val);
+			}
 			ModuleItem::Proto(proto) => {
 				let id = self.types().descs.get_proto_by_item(chunk_id, item_id);
 				let val = Val::Obj(Rc::new(RefCell::new(Obj::Proto(self.pkg_id, id))));
@@ -163,6 +161,7 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 			ModuleItem::Import(_) => Ok(()),
 			ModuleItem::Export(_) => Ok(()),
 			ModuleItem::Type(_) => Ok(()),
+			ModuleItem::Extern(_) => Ok(()),
 			ModuleItem::Proto(_) => Ok(()),
 			ModuleItem::Def(_) => Ok(()),
 			ModuleItem::Expr(expr_id) => {
@@ -434,7 +433,7 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 								Ok(Val::Obj(inst_rf))
 							}
 							TypeId::Native(type_id) => {
-								let typ = self.types().native(*type_id);
+								let typ = self.pkgs.native(*type_id);
 								match typ.new {
 									Some(new) => {
 										// A native constructor defines no
@@ -445,7 +444,7 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 									}
 									None => {
 										let loc = self.pkgs.desc(self.pkg_id).loc(span);
-										let type_name = self.syms.resolve(typ.name);
+										let type_name = self.syms.resolve(typ.desc.name);
 										Err(Signal::Error(
 											Error::TypeError(TypeError::NotConstructible(
 												type_name.to_string(),
@@ -890,7 +889,7 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 						TypeId::User(pkg, id) => {
 							Ok(Val::Obj(self.pkgs.get(pkg).types.user(id).val.clone()))
 						}
-						TypeId::Native(id) => Ok(Val::Obj(self.types().native_val(id))),
+						TypeId::Native(id) => Ok(Val::Obj(self.pkgs.native_val(id))),
 					}
 				}
 			},
@@ -1000,7 +999,7 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 				vec![(String::new(), loc)],
 			));
 		}
-		match place.get(self.pkgs, self.pkg_id) {
+		match place.get(self.pkgs) {
 			Ok(val) => Ok(val),
 			Err(err) => {
 				let loc = self
@@ -1022,7 +1021,7 @@ impl<'syms, 'descs, 'pkgs> Interpreter<'syms, 'descs, 'pkgs> {
 		let val = self.eval_expr(chunk, val_id)?;
 
 		if let Some(member) = self.member(&val, name) {
-			match Place::Member(member).get(self.pkgs, self.pkg_id) {
+			match Place::Member(member).get(self.pkgs) {
 				Ok(val) => Ok(val),
 				Err(err) => {
 					let loc = self
