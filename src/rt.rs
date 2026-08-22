@@ -6,8 +6,6 @@ mod scope;
 mod types;
 mod val;
 
-use std::fmt::{self, Display, Formatter};
-
 use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
 use crate::sem::types::{ProtoId, Type};
@@ -18,7 +16,7 @@ pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
 pub use types::{CORE_TYPES, NativeTypeSpec, Natives, TypeId};
 
-use val::{Member, Val};
+use val::{Member, Val, namespace_name, rt_debug_val};
 
 // The runtime's representation of the world. Contains every package built so
 // far and the native implementations any of them may bind an 'extern' to.
@@ -149,41 +147,41 @@ pub enum Error {
 	TypeError(TypeError),
 	MemberError(MemberError),
 	IndexError(IndexError),
-	NameError(String),
-	KeyError(String),
+	NameError(Sym),
+	KeyError(Val),
 }
 
 #[derive(Debug)]
 pub enum ProtocolError {
-	NotIterable(String),
-	NotAccessible(String),
-	NotAppendable(String),
-	NotOrderable(String),
+	NotIterable(TypeId),
+	NotAccessible(TypeId),
+	NotAppendable(TypeId),
+	NotOrderable(TypeId),
 }
 
 #[derive(Debug)]
 pub enum ArgumentError {
-	Missing(Vec<String>),
+	Missing(Vec<Sym>),
 	TooMany(usize, usize),
-	Unknown(String),
-	Duplicate(String),
+	Unknown(Sym),
+	Duplicate(Sym),
 }
 
 #[derive(Debug)]
 pub enum TypeError {
-	IndexNonNum(String),
-	ArithNonNum(String),
-	ConcatNonStr(String),
-	NotCallable(String),
-	NotConstructible(String),
-	NotInvokable(String),
-	CaseNonType(String),
+	IndexNonNum(Val),
+	ArithNonNum(TypeId),
+	ConcatNonStr(TypeId),
+	NotCallable(TypeId),
+	NotConstructible(TypeId),
+	NotInvokable(TypeId),
+	CaseNonType(TypeId),
 }
 
 #[derive(Debug)]
 pub enum MemberError {
-	Missing(String, String),
-	ReadOnly(String, String),
+	Missing(Val, Sym),
+	ReadOnly(Val, Sym),
 }
 
 #[derive(Debug)]
@@ -192,90 +190,103 @@ pub enum IndexError {
 	NonIntegral(f64),
 }
 
-impl Display for Error {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+impl Error {
+	pub fn message(&self, syms: &Interner, rt: &Runtime) -> String {
 		match self {
-			Self::ProtocolError(err) => Display::fmt(err, f),
-			Self::ArgumentError(err) => Display::fmt(err, f),
-			Self::TypeError(err) => Display::fmt(err, f),
-			Self::MemberError(err) => Display::fmt(err, f),
-			Self::IndexError(err) => Display::fmt(err, f),
-			Self::NameError(name) => write!(f, "name '{}' is not defined", name),
-			Self::KeyError(key) => write!(f, "key {} not found", key),
+			Self::ProtocolError(err) => err.message(syms, rt),
+			Self::ArgumentError(err) => err.message(syms),
+			Self::TypeError(err) => err.message(syms, rt),
+			Self::MemberError(err) => err.message(syms, rt),
+			Self::IndexError(err) => err.message(),
+			Self::NameError(name) => format!("name '{}' is not defined", syms.resolve(*name)),
+			Self::KeyError(key) => format!("key {} not found", rt_debug_val(syms, rt, key)),
 		}
 	}
 }
 
-impl Display for ProtocolError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+impl ProtocolError {
+	fn message(&self, syms: &Interner, rt: &Runtime) -> String {
 		match self {
-			Self::NotIterable(type_name) => write!(f, "type {} is not iterable", type_name),
-			Self::NotAccessible(type_name) => write!(f, "type {} is not accessible", type_name),
-			Self::NotAppendable(type_name) => write!(f, "type {} is not appendable", type_name),
-			Self::NotOrderable(type_name) => write!(f, "type {} is not orderable", type_name),
+			Self::NotIterable(id) => format!("type {} is not iterable", rt.type_name(syms, *id)),
+			Self::NotAccessible(id) => {
+				format!("type {} is not accessible", rt.type_name(syms, *id))
+			}
+			Self::NotAppendable(id) => {
+				format!("type {} is not appendable", rt.type_name(syms, *id))
+			}
+			Self::NotOrderable(id) => format!("type {} is not orderable", rt.type_name(syms, *id)),
 		}
 	}
 }
 
-impl Display for ArgumentError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+impl ArgumentError {
+	fn message(&self, syms: &Interner) -> String {
 		match self {
 			Self::Missing(names) => {
 				let noun = if names.len() == 1 { "arg" } else { "args" };
 				let names = names
 					.iter()
-					.map(|name| format!("'{}'", name))
+					.map(|name| format!("'{}'", syms.resolve(*name)))
 					.collect::<Vec<_>>()
 					.join(", ");
-				write!(f, "missing {} {}", noun, names)
+				format!("missing {} {}", noun, names)
 			}
 			Self::TooMany(have, want) => {
-				write!(f, "too many args; have {}, want at most {}", have, want)
+				format!("too many args; have {}, want at most {}", have, want)
 			}
-			Self::Unknown(name) => write!(f, "no param named '{}'", name),
-			Self::Duplicate(name) => write!(f, "arg '{}' given twice", name),
+			Self::Unknown(name) => format!("no param named '{}'", syms.resolve(*name)),
+			Self::Duplicate(name) => format!("arg '{}' given twice", syms.resolve(*name)),
 		}
 	}
 }
 
-impl Display for TypeError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+impl TypeError {
+	fn message(&self, syms: &Interner, rt: &Runtime) -> String {
 		match self {
-			Self::IndexNonNum(val) => write!(f, "index {} is not a number", val),
-			Self::ArithNonNum(type_name) => {
-				write!(f, "type {} cannot be used in arithmetic", type_name)
+			Self::IndexNonNum(val) => {
+				format!("index {} is not a number", rt_debug_val(syms, rt, val))
 			}
-			Self::ConcatNonStr(type_name) => write!(f, "type {} cannot be concatenated", type_name),
-			Self::NotCallable(type_name) => write!(f, "type {} is not callable", type_name),
-			Self::NotConstructible(type_name) => {
-				write!(f, "type {} cannot be constructed", type_name)
+			Self::ArithNonNum(id) => format!(
+				"type {} cannot be used in arithmetic",
+				rt.type_name(syms, *id)
+			),
+			Self::ConcatNonStr(id) => {
+				format!("type {} cannot be concatenated", rt.type_name(syms, *id))
 			}
-			Self::NotInvokable(type_name) => write!(f, "type {} is not invokable", type_name),
-			Self::CaseNonType(type_name) => {
-				write!(f, "type {} cannot be matched against", type_name)
+			Self::NotCallable(id) => format!("type {} is not callable", rt.type_name(syms, *id)),
+			Self::NotConstructible(id) => {
+				format!("type {} cannot be constructed", rt.type_name(syms, *id))
 			}
-		}
-	}
-}
-
-impl Display for MemberError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
-		match self {
-			Self::Missing(namespace, name) => {
-				write!(f, "{} has no such member '{}'", namespace, name)
-			}
-			Self::ReadOnly(namespace, name) => {
-				write!(f, "member '{}' on {} is read-only", name, namespace)
+			Self::NotInvokable(id) => format!("type {} is not invokable", rt.type_name(syms, *id)),
+			Self::CaseNonType(id) => {
+				format!("type {} cannot be matched against", rt.type_name(syms, *id))
 			}
 		}
 	}
 }
 
-impl Display for IndexError {
-	fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
+impl MemberError {
+	fn message(&self, syms: &Interner, rt: &Runtime) -> String {
 		match self {
-			Self::OutOfRange(idx) => write!(f, "index {} is out of bounds", idx),
-			Self::NonIntegral(idx) => write!(f, "index {} is not a whole number", idx),
+			Self::Missing(namespace, name) => format!(
+				"{} has no such member '{}'",
+				namespace_name(syms, rt, namespace),
+				syms.resolve(*name)
+			),
+			Self::ReadOnly(namespace, name) => format!(
+				"member '{}' on {} is read-only",
+				syms.resolve(*name),
+				namespace_name(syms, rt, namespace)
+			),
+		}
+	}
+}
+
+impl IndexError {
+	fn message(&self) -> String {
+		match self {
+			Self::OutOfRange(idx) => format!("index {} is out of bounds", idx),
+			Self::NonIntegral(idx) => format!("index {} is not a whole number", idx),
 		}
 	}
 }

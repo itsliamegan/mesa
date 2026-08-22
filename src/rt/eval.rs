@@ -11,8 +11,7 @@ use crate::rt::modules::Modules;
 use crate::rt::scope::{Place, Scope, Tier};
 use crate::rt::types::{NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
-	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_debug_val,
-	rt_print_val,
+	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_print_val,
 };
 use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError};
 use crate::sem::modules;
@@ -112,7 +111,7 @@ pub fn build_protos(
 }
 
 pub struct Interpreter<'syms, 'descs, 'rt> {
-	syms: &'syms Interner,
+	syms: &'syms mut Interner,
 	rt: &'rt Runtime<'descs>,
 	pkg_id: PackageId,
 	scope: Rc<RefCell<Scope>>,
@@ -298,9 +297,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(expr_id));
-						let type_name = self.rt.type_name(self.syms, obj.type_id());
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotIterable(type_name)),
+							Error::ProtocolError(ProtocolError::NotIterable(obj.type_id())),
 							vec![(String::new(), loc)],
 						))
 					}
@@ -311,9 +309,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						.pkgs
 						.desc(self.pkg_id)
 						.loc(chunk.get_expr_span(expr_id));
-					let type_name = self.rt.type_name(self.syms, val.type_id());
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotIterable(type_name)),
+						Error::ProtocolError(ProtocolError::NotIterable(val.type_id())),
 						vec![(String::new(), loc)],
 					))
 				}
@@ -362,9 +359,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(arm.path));
-						let type_name = self.rt.type_name(self.syms, path_val.type_id());
 						return Err(Signal::Error(
-							Error::TypeError(TypeError::CaseNonType(type_name)),
+							Error::TypeError(TypeError::CaseNonType(path_val.type_id())),
 							vec![(String::new(), loc)],
 						));
 					};
@@ -431,11 +427,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									&& !variants.is_empty()
 								{
 									let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-									let type_name = self
-										.rt
-										.type_name(self.syms, TypeId::User(type_pkg, type_id));
 									return Err(Signal::Error(
-										Error::TypeError(TypeError::NotConstructible(type_name)),
+										Error::TypeError(TypeError::NotConstructible(
+											TypeId::User(type_pkg, type_id),
+										)),
 										vec![(String::new(), loc)],
 									));
 								}
@@ -517,10 +512,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									}
 									None => {
 										let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-										let type_name = self.syms.resolve(typ.name);
 										Err(Signal::Error(
 											Error::TypeError(TypeError::NotConstructible(
-												type_name.to_string(),
+												TypeId::Native(*type_id),
 											)),
 											vec![(String::new(), loc)],
 										))
@@ -539,18 +533,16 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						},
 						obj => {
 							let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-							let type_name = self.rt.type_name(self.syms, obj.type_id());
 							Err(Signal::Error(
-								Error::TypeError(TypeError::NotCallable(type_name)),
+								Error::TypeError(TypeError::NotCallable(obj.type_id())),
 								vec![(String::new(), loc)],
 							))
 						}
 					},
 					val => {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						let type_name = self.rt.type_name(self.syms, val.type_id());
 						Err(Signal::Error(
-							Error::TypeError(TypeError::NotCallable(type_name)),
+							Error::TypeError(TypeError::NotCallable(val.type_id())),
 							vec![(String::new(), loc)],
 						))
 					}
@@ -577,7 +569,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
 								Err(Signal::Error(
-									Error::KeyError(rt_debug_val(self.syms, self.rt, &key)),
+									Error::KeyError(key),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -589,9 +581,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(expr_id));
-						let type_name = self.rt.type_name(self.syms, obj.type_id());
 						Err(Signal::Error(
-							Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
+							Error::ProtocolError(ProtocolError::NotAccessible(obj.type_id())),
 							vec![(String::new(), loc)],
 						))
 					}
@@ -602,9 +593,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						.pkgs
 						.desc(self.pkg_id)
 						.loc(chunk.get_expr_span(expr_id));
-					let type_name = self.rt.type_name(self.syms, val.type_id());
 					Err(Signal::Error(
-						Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
+						Error::ProtocolError(ProtocolError::NotAccessible(val.type_id())),
 						vec![(String::new(), loc)],
 					))
 				}
@@ -620,17 +610,16 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						let sym = name.sym;
 						let place = self.resolve_name(sym);
 						if let Err(()) = place.set(&self.rt.pkgs, val.clone()) {
-							let type_name = match &place {
+							let namespace = match &place {
 								Place::Member(Member::Module(pkg, id, name)) => {
 									let pkg_mods = &self.rt.pkgs.get(*pkg).mods;
-									match pkg_mods.descs.member(*id, *name) {
-										Some(modules::Member::Child(child)) => {
-											format!("module {}", pkg_mods.name(self.syms, child))
-										}
-										_ => format!("module {}", pkg_mods.name(self.syms, *id)),
-									}
+									let module = match pkg_mods.descs.member(*id, *name) {
+										Some(modules::Member::Child(child)) => child,
+										_ => *id,
+									};
+									Val::Obj(pkg_mods.obj(module))
 								}
-								_ => self.namespace_name(self.receiver.as_ref().unwrap()),
+								_ => self.receiver.as_ref().unwrap().clone(),
 							};
 							let loc = self
 								.rt
@@ -638,10 +627,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								.desc(self.pkg_id)
 								.loc(chunk.get_expr_span(expr_id));
 							return Err(Signal::Error(
-								Error::MemberError(MemberError::ReadOnly(
-									type_name,
-									self.syms.resolve(sym).to_string(),
-								)),
+								Error::MemberError(MemberError::ReadOnly(namespace, sym)),
 								vec![(String::new(), loc)],
 							));
 						}
@@ -651,7 +637,6 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						let receiver = self.eval_expr(chunk, member.receiver)?;
 						if let Some(m) = self.member(&receiver, member.name) {
 							if let Err(()) = Place::Member(m).set(&self.rt.pkgs, val.clone()) {
-								let type_name = self.namespace_name(&receiver);
 								let loc = self
 									.rt
 									.pkgs
@@ -659,15 +644,14 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.loc(chunk.get_expr_span(expr_id));
 								return Err(Signal::Error(
 									Error::MemberError(MemberError::ReadOnly(
-										type_name,
-										self.syms.resolve(member.name).to_string(),
+										receiver.clone(),
+										member.name,
 									)),
 									vec![(String::new(), loc)],
 								));
 							}
 							Ok(val)
 						} else {
-							let type_name = self.namespace_name(&receiver);
 							let loc = self
 								.rt
 								.pkgs
@@ -675,8 +659,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								.loc(chunk.get_expr_span(expr_id));
 							Err(Signal::Error(
 								Error::MemberError(MemberError::Missing(
-									type_name,
-									self.syms.resolve(member.name).to_string(),
+									receiver.clone(),
+									member.name,
 								)),
 								vec![(String::new(), loc)],
 							))
@@ -707,10 +691,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 										.pkgs
 										.desc(self.pkg_id)
 										.loc(chunk.get_expr_span(expr_id));
-									let type_name = self.rt.type_name(self.syms, obj.type_id());
 									Err(Signal::Error(
 										Error::ProtocolError(ProtocolError::NotAccessible(
-											type_name,
+											obj.type_id(),
 										)),
 										vec![(String::new(), loc)],
 									))
@@ -722,9 +705,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.rt.type_name(self.syms, val.type_id());
 								Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotAccessible(type_name)),
+									Error::ProtocolError(ProtocolError::NotAccessible(
+										val.type_id(),
+									)),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -810,11 +794,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 										// else is a in that type's implementation of 'Order'.
 										let Val::Num(Num(sign)) = sign else {
 											let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-											let type_name =
-												self.rt.type_name(self.syms, lhs.type_id());
 											return Err(Signal::Error(
 												Error::ProtocolError(ProtocolError::NotOrderable(
-													type_name,
+													lhs.type_id(),
 												)),
 												vec![(String::new(), loc)],
 											));
@@ -833,10 +815,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 											(_, Val::Num(_)) => lhs,
 											_ => lhs,
 										};
-										let type_name = self.rt.type_name(self.syms, val.type_id());
 										Err(Signal::Error(
 											Error::ProtocolError(ProtocolError::NotOrderable(
-												type_name,
+												val.type_id(),
 											)),
 											vec![(String::new(), loc)],
 										))
@@ -851,9 +832,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.rt.type_name(self.syms, lhs.type_id());
 								return Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotAppendable(type_name)),
+									Error::ProtocolError(ProtocolError::NotAppendable(
+										lhs.type_id(),
+									)),
 									vec![(String::new(), loc)],
 								));
 							};
@@ -863,9 +845,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.rt.type_name(self.syms, rf.borrow().type_id());
 								return Err(Signal::Error(
-									Error::ProtocolError(ProtocolError::NotAppendable(type_name)),
+									Error::ProtocolError(ProtocolError::NotAppendable(
+										rf.borrow().type_id(),
+									)),
 									vec![(String::new(), loc)],
 								));
 							};
@@ -890,9 +873,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.rt.type_name(self.syms, rhs.type_id());
 								Err(Signal::Error(
-									Error::TypeError(TypeError::ConcatNonStr(type_name)),
+									Error::TypeError(TypeError::ConcatNonStr(rhs.type_id())),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -902,9 +884,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								let type_name = self.rt.type_name(self.syms, rhs.type_id());
 								Err(Signal::Error(
-									Error::TypeError(TypeError::ArithNonNum(type_name)),
+									Error::TypeError(TypeError::ArithNonNum(rhs.type_id())),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -927,9 +908,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									(_, Val::Num(_)) => lhs,
 									_ => lhs,
 								};
-								let type_name = self.rt.type_name(self.syms, val.type_id());
 								Err(Signal::Error(
-									Error::TypeError(TypeError::ArithNonNum(type_name)),
+									Error::TypeError(TypeError::ArithNonNum(val.type_id())),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -951,9 +931,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(expr_id));
-						let type_name = self.rt.type_name(self.syms, val.type_id());
 						Err(Signal::Error(
-							Error::TypeError(TypeError::ArithNonNum(type_name)),
+							Error::TypeError(TypeError::ArithNonNum(val.type_id())),
 							vec![(String::new(), loc)],
 						))
 					}
@@ -1072,19 +1051,6 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		}
 	}
 
-	fn namespace_name(&self, val: &Val) -> String {
-		if let Val::Obj(rf) = val
-			&& let Obj::Module(pkg, id) = &*rf.borrow()
-		{
-			let pkg_mods = &self.rt.pkgs.get(*pkg).mods;
-			return format!("module {}", pkg_mods.name(self.syms, *id));
-		}
-		format!(
-			"type {}",
-			self.rt.type_name(self.syms, val.namespace_type_id())
-		)
-	}
-
 	fn resolve_name(&self, name: Sym) -> Place {
 		let local = Scope::local(&self.scope, name);
 		if local.is_bound() && local.tier == Tier::Local {
@@ -1120,9 +1086,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
-			let name = self.syms.resolve(name);
 			return Err(Signal::Error(
-				Error::NameError(name.to_string()),
+				Error::NameError(name),
 				vec![(String::new(), loc)],
 			));
 		}
@@ -1161,17 +1126,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				}
 			}
 		} else {
-			let type_name = self.namespace_name(&val);
 			let loc = self
 				.rt
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
 			Err(Signal::Error(
-				Error::MemberError(MemberError::Missing(
-					type_name,
-					self.syms.resolve(name).to_string(),
-				)),
+				Error::MemberError(MemberError::Missing(val.clone(), name)),
 				vec![(String::new(), loc)],
 			))
 		}
@@ -1193,9 +1154,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					.desc(self.pkg_id)
 					.loc(chunk.get_expr_span(expr_id));
 				return Err(Signal::Error(
-					Error::TypeError(TypeError::IndexNonNum(rt_print_val(
-						self.syms, self.rt, &val,
-					))),
+					Error::TypeError(TypeError::IndexNonNum(val)),
 					vec![(String::new(), loc)],
 				));
 			}
@@ -1246,9 +1205,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.pkgs
 			.desc(self.pkg_id)
 			.loc(chunk.get_expr_span(expr_id));
-		let type_name = self.rt.type_name(self.syms, val.type_id());
 		Err(Signal::Error(
-			Error::TypeError(TypeError::NotInvokable(type_name)),
+			Error::TypeError(TypeError::NotInvokable(val.type_id())),
 			vec![(String::new(), loc)],
 		))
 	}
@@ -1270,13 +1228,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.params
 				.first()
 				.filter(|param| param.default.is_none())
-				.map(|param| self.syms.resolve(param.name).to_string()),
+				.map(|param| param.name),
 			Obj::Method(Method::User(_, proc)) => proc
 				.borrow()
 				.params
 				.first()
 				.filter(|param| param.default.is_none())
-				.map(|param| self.syms.resolve(param.name).to_string()),
+				.map(|param| param.name),
 			// Native types are defined in Rust, skipping the
 			// required-before-default ordering check. Use find instead of
 			// filter to ensure we find any required params.
@@ -1284,7 +1242,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.params
 				.iter()
 				.find(|param| param.default.is_none())
-				.map(|param| param.name.to_string()),
+				.map(|param| self.syms.intern(param.name)),
 			_ => return Ok(val),
 		};
 
@@ -1316,7 +1274,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 	}
 
 	fn bind_native_args(
-		&self,
+		&mut self,
 		span: Span,
 		params: &'static [NativeParam],
 		args: Vec<(Option<Sym>, Val)>,
@@ -1327,13 +1285,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		for (name, val) in args {
 			let index = match name {
 				Some(name) => {
-					let name = self.syms.resolve(name);
-					match params.iter().position(|param| param.name == name) {
+					let text = self.syms.resolve(name);
+					match params.iter().position(|param| param.name == text) {
 						Some(index) => index,
 						None => {
 							let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
 							return Err(Signal::Error(
-								Error::ArgumentError(ArgumentError::Unknown(name.to_string())),
+								Error::ArgumentError(ArgumentError::Unknown(name)),
 								vec![(String::new(), loc)],
 							));
 						}
@@ -1354,7 +1312,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			};
 			if slots[index].is_some() {
 				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-				let name = params[index].name.to_string();
+				let name = self.syms.intern(params[index].name);
 				return Err(Signal::Error(
 					Error::ArgumentError(ArgumentError::Duplicate(name)),
 					vec![(String::new(), loc)],
@@ -1367,7 +1325,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.iter()
 			.zip(&slots)
 			.filter(|(param, slot)| slot.is_none() && param.default.is_none())
-			.map(|(param, _)| param.name.to_string())
+			.map(|(param, _)| self.syms.intern(param.name))
 			.collect::<Vec<_>>();
 		if !missing.is_empty() {
 			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
@@ -1404,7 +1362,6 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					Some(index) => index,
 					None => {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						let name = self.syms.resolve(name).to_string();
 						return Err(Signal::Error(
 							Error::ArgumentError(ArgumentError::Unknown(name)),
 							vec![(String::new(), loc)],
@@ -1426,9 +1383,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			};
 			if slots[index].is_some() {
 				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-				let name = self.syms.resolve(params[index].name).to_string();
 				return Err(Signal::Error(
-					Error::ArgumentError(ArgumentError::Duplicate(name)),
+					Error::ArgumentError(ArgumentError::Duplicate(params[index].name)),
 					vec![(String::new(), loc)],
 				));
 			}
@@ -1441,7 +1397,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.iter()
 			.zip(&slots)
 			.filter(|(param, slot)| slot.is_none() && param.default.is_none())
-			.map(|(param, _)| self.syms.resolve(param.name).to_string())
+			.map(|(param, _)| param.name)
 			.collect::<Vec<_>>();
 		if !missing.is_empty() {
 			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);

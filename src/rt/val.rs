@@ -311,6 +311,18 @@ pub fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 	res
 }
 
+// Name the namespace a member lookup was made in. For a module, the name of the
+// module; otherwise, the name of the type.
+pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
+	if let Val::Obj(rf) = val
+		&& let Obj::Module(pkg, id) = &*rf.borrow()
+	{
+		let pkg_mods = &rt.pkgs.get(*pkg).mods;
+		return format!("module {}", pkg_mods.name(syms, *id));
+	}
+	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
+}
+
 pub fn rt_print_val(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 	match val {
 		Val::Num(num) => format!("{}", num.0),

@@ -184,7 +184,7 @@ xs[-1] := 0
 
 #---
 
-#! runtime error: index a is not a number
+#! runtime error: index "a" is not a number
 
 $print([1, 2, 3]["a"])
 

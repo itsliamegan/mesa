@@ -74,7 +74,7 @@ fn main() {
 		Err((err, mut trace)) => {
 			{
 				let mut frame = trace.first_mut().unwrap();
-				eprintln!("{}: runtime error: {}", frame.1, err);
+				eprintln!("{}: runtime error: {}", frame.1, err.message(&syms, &rt));
 			}
 			{
 				let mut frame = trace.last_mut().unwrap();
