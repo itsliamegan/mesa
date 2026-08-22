@@ -8,7 +8,9 @@ use std::process;
 use mesa::intern::Interner;
 use mesa::load;
 use mesa::pkg::{Package, PackageId, Packages};
-use mesa::rt::{self, CORE_TYPES, NativeTypeSpec, Natives, build_prelude, build_protos};
+use mesa::rt::{
+	self, CORE_TYPES, NativeTypeSpec, Natives, build_errors, build_prelude, build_protos,
+};
 use mesa::sem;
 use mesa::syn;
 
@@ -60,14 +62,9 @@ fn main() {
 			process::exit(1);
 		}
 	};
-	let protos = match build_protos(&pkgs, &mut syms, stdlib_pkg_id) {
-		Ok(protos) => protos,
-		Err(err) => {
-			eprintln!("error: {}", err);
-			process::exit(1);
-		}
-	};
-	let mut rt = rt::Runtime::new(&pkgs, natives, protos);
+	let protos = build_protos(&pkgs, &mut syms, stdlib_pkg_id);
+	let errors = build_errors(&pkgs, &mut syms, stdlib_pkg_id);
+	let mut rt = rt::Runtime::new(&pkgs, natives, protos, errors);
 
 	match rt::eval(&mut syms, &mut rt, &prelude) {
 		Ok(()) => {}

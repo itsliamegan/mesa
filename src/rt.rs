@@ -1,3 +1,4 @@
+mod err;
 mod eval;
 mod modules;
 mod native;
@@ -11,6 +12,7 @@ use crate::pkg::PackageId;
 use crate::sem::types::{ProtoId, Type};
 use crate::src::Location;
 
+pub use err::{Errors, build_errors};
 pub use eval::{Prelude, Proto, Protos, build_prelude, build_protos};
 pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
@@ -24,14 +26,21 @@ pub struct Runtime<'descs> {
 	pub pkgs: Packages<'descs>,
 	pub natives: Natives,
 	pub protos: Protos,
+	pub errors: Errors,
 }
 
 impl<'descs> Runtime<'descs> {
-	pub fn new(descs: &'descs crate::pkg::Packages, natives: Natives, protos: Protos) -> Self {
+	pub fn new(
+		descs: &'descs crate::pkg::Packages,
+		natives: Natives,
+		protos: Protos,
+		errors: Errors,
+	) -> Self {
 		Self {
 			pkgs: Packages::new(descs),
 			natives,
 			protos,
+			errors,
 		}
 	}
 

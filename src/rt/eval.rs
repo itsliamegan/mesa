@@ -74,18 +74,13 @@ pub struct Proto {
 	pub verb: Sym,
 }
 
-// Resolve 'Core's well-known protocols by name against the stdlib's own
-// description. A missing or misnamed one is a broken build, not a user-facing
-// error: nothing has run yet for it to be a 'sem::Error' or 'rt::Error' about.
-pub fn build_protos(
-	descs: &pkg::Packages,
-	syms: &mut Interner,
-	stdlib: PackageId,
-) -> Result<Protos, String> {
+// Resolve 'Core's well-known protocols by name. A missing or misnamed protocol
+// is a broken build.
+pub fn build_protos(descs: &pkg::Packages, syms: &mut Interner, stdlib: PackageId) -> Protos {
 	let stdlib_pkg = descs.get(stdlib);
 	let path = [syms.intern("Core")];
 	let Some(core_mod) = stdlib_pkg.modules.by_path(&path) else {
-		return Err("stdlib does not declare a 'Core' module".to_string());
+		panic!("stdlib does not declare a 'Core' module");
 	};
 	let chunk_id = stdlib_pkg.modules.chunk(core_mod);
 	let chunk = stdlib_pkg.chunks.get(chunk_id);
@@ -104,10 +99,10 @@ pub fn build_protos(
 		}
 	}
 	let Some(order) = order else {
-		return Err("stdlib does not declare a 'Core.Order' protocol".to_string());
+		panic!("stdlib does not declare a 'Core.Order' protocol");
 	};
 
-	Ok(Protos { order })
+	Protos { order }
 }
 
 pub struct Interpreter<'syms, 'descs, 'rt> {

@@ -1,0 +1,45 @@
+module Core.Errors
+
+type Error
+	case ProtocolError(error) end
+	case ArgumentError(error) end
+	case TypeError(error) end
+	case MemberError(error) end
+	case IndexError(error) end
+	case NameError(message) end
+	case KeyError(message) end
+end
+
+type ProtocolError
+	case NotIterable(message) end
+	case NotAccessible(message) end
+	case NotAppendable(message) end
+	case NotOrderable(message) end
+end
+
+type ArgumentError
+	case Missing(message) end
+	case TooMany(message) end
+	case Unknown(message) end
+	case Duplicate(message) end
+end
+
+type TypeError
+	case IndexNonNum(message) end
+	case ArithNonNum(message) end
+	case ConcatNonStr(message) end
+	case NotCallable(message) end
+	case NotConstructible(message) end
+	case NotInvokable(message) end
+	case CaseNonType(message) end
+end
+
+type MemberError
+	case Missing(message) end
+	case ReadOnly(message) end
+end
+
+type IndexError
+	case OutOfRange(message) end
+	case NonIntegral(message) end
+end
