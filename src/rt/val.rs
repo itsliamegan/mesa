@@ -401,7 +401,7 @@ pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 			res.push_str(&format!("{}(", name));
 			for (i, field) in desc.ctor_fields.iter().enumerate() {
 				let val = inst.fields.get(&field.name).unwrap();
-				res.push_str(&rt_print_val(syms, rt, val));
+				res.push_str(&rt_debug_val(syms, rt, val));
 				if i + 1 != desc.ctor_fields.len() {
 					res.push_str(", ");
 				}

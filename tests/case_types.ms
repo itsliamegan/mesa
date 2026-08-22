@@ -2,7 +2,7 @@
 #> 1
 #> true
 #> false
-#> Expr.Ident(x)
+#> Expr.Ident("x")
 #> type Expr.Ident(name)
 
 type Expr

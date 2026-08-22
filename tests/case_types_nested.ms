@@ -20,7 +20,7 @@ $print(Expr.Group.Span(1, 2))
 
 #---
 
-#> Ast.Expr.Ident(x)
+#> Ast.Expr.Ident("x")
 #> type Ast.Expr.Ident(name)
 #> lit
 
@@ -44,7 +44,7 @@ $print(Ast.Expr.Lit(1).label())
 
 #---
 
-#> Stmt.Assign(Expr.Ident(x))
+#> Stmt.Assign(Expr.Ident("x"))
 #> x
 
 # Hierarchy by nesting, not subtyping: a variant's field holds an instance of
