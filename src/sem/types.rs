@@ -31,6 +31,22 @@ impl ProtoId {
 	}
 }
 
+// Identity of a native implementation. Global, unlike a 'TypeId'. Not specific
+// to any one package, since the Rust code it addresses is linked once into the
+// whole program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeTypeId(u32);
+
+impl NativeTypeId {
+	pub(crate) const fn new(id: u32) -> Self {
+		Self(id)
+	}
+
+	pub fn index(self) -> usize {
+		self.0 as usize
+	}
+}
+
 // Every type and protocol that a package declares.
 #[derive(Debug)]
 pub struct Types {
@@ -51,7 +67,43 @@ pub struct Types {
 }
 
 #[derive(Debug)]
-pub struct Type {
+pub enum Type {
+	User(UserType),
+	Native(NativeType),
+}
+
+impl Type {
+	pub fn name(&self) -> Sym {
+		match self {
+			Type::User(typ) => typ.name,
+			Type::Native(typ) => typ.name,
+		}
+	}
+
+	pub fn members(&self) -> &HashMap<Sym, MemberSite> {
+		match self {
+			Type::User(typ) => &typ.members,
+			Type::Native(typ) => &typ.members,
+		}
+	}
+
+	pub fn statics(&self) -> &HashMap<Sym, Static> {
+		match self {
+			Type::User(typ) => &typ.statics,
+			Type::Native(typ) => &typ.statics,
+		}
+	}
+
+	pub fn impls(&self) -> &[(PackageId, ProtoId)] {
+		match self {
+			Type::User(typ) => &typ.impls,
+			Type::Native(typ) => &typ.impls,
+		}
+	}
+}
+
+#[derive(Debug)]
+pub struct UserType {
 	pub name: Sym,
 	pub chunk: ChunkId,
 	pub span: Span,
@@ -72,19 +124,19 @@ pub struct Type {
 // A type whose data and (some of) whose members are implemented in Rust. The
 // implementations themselves are elided, to be specified by the runtime; this
 // is the shape a native member presents to a caller.
-//
-// Seeded when the implementation is registered, and completed when the package
-// whose 'extern' declaration names it is checked.
 #[derive(Debug)]
 pub struct NativeType {
 	pub name: Sym,
+	pub chunk: ChunkId,
+	pub span: Span,
+	// The provider this declaration binds to.
+	pub provider: NativeTypeId,
 	// What Rust provides. Kept apart from the merged sets below because
 	// conformance is decided by comparing against it.
 	pub native_members: HashMap<Sym, Vec<NativeParam>>,
 	pub native_statics: HashMap<Sym, Vec<NativeParam>>,
 	// Every member reachable on a value of this type, flattened: Rust's, the
 	// declaration's, and what it acquires from the protocols it implements.
-	// Empty until the declaration is described.
 	pub members: HashMap<Sym, MemberSite>,
 	pub statics: HashMap<Sym, Static>,
 	pub impls: Vec<(PackageId, ProtoId)>,
@@ -93,10 +145,20 @@ pub struct NativeType {
 // A native member's parameter. Unlike a declared 'Param' there is no default
 // expression to point at, only whether one exists: a native default is a Rust
 // function producing a value, with nothing in any chunk to compare against.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NativeParam {
 	pub name: Sym,
 	pub has_default: bool,
+}
+
+// The minimal information that the semantic checker needs to know about one of
+// a package's native implementations: the provider an 'extern' of this name
+// binds to, and the parameter shapes it must check declared members against
+// for conformance.
+pub struct NativeTypeShape {
+	pub provider: NativeTypeId,
+	pub members: HashMap<Sym, Vec<NativeParam>>,
+	pub statics: HashMap<Sym, Vec<NativeParam>>,
 }
 
 // A declared protocol, its members split by whether they are required to be
@@ -208,7 +270,7 @@ pub fn check(
 	chunks: &Chunks,
 	pkgs: &Packages,
 	mods: &Modules,
-	natives: &mut HashMap<Sym, &mut NativeType>,
+	natives: &HashMap<Sym, NativeTypeShape>,
 ) -> (Types, Vec<Error>) {
 	let mut types = Types {
 		types: Vec::new(),
@@ -247,12 +309,14 @@ pub fn check(
 					);
 					types.type_by_item.insert((chunk_id, *item_id), id);
 				}
-				// An extern type is described into the native type it names, so
-				// it claims no id here and nothing maps its declaration to one.
-				ModuleItem::Extern(extern_) => describe_extern(
-					syms, sources, chunks, pkgs, mods, &types, natives, module, chunk_id, span,
-					extern_, &mut errs,
-				),
+				ModuleItem::Extern(extern_) => {
+					if let Some(id) = describe_extern(
+						syms, sources, chunks, pkgs, mods, &mut types, natives, module, chunk_id,
+						span, extern_, &mut errs,
+					) {
+						types.type_by_item.insert((chunk_id, *item_id), id);
+					}
+				}
 				_ => continue,
 			}
 		}
@@ -332,7 +396,7 @@ fn describe_type(
 	// Claim the id before the body is walked so that a nested type can name the
 	// type enclosing it while that type is still being described.
 	let id = TypeId(types.types.len() as u32);
-	types.types.push(Type {
+	types.types.push(Type::User(UserType {
 		name: type_.name,
 		chunk: chunk_id,
 		span,
@@ -343,7 +407,7 @@ fn describe_type(
 		impls: Vec::new(),
 		enclosing,
 		variants: None,
-	});
+	}));
 
 	let mut body_fields = OrderMap::new();
 	let mut statics = HashMap::new();
@@ -409,7 +473,7 @@ fn describe_type(
 		type_.name,
 		span,
 		&declared,
-		None,
+		&HashMap::new(),
 		inherited,
 		&static_spans,
 		&impls,
@@ -492,7 +556,9 @@ fn describe_type(
 		}
 	}
 
-	let described = &mut types.types[id.index()];
+	let Type::User(described) = &mut types.types[id.index()] else {
+		panic!()
+	};
 	described.body_fields = body_fields;
 	described.members = members;
 	described.statics = statics;
@@ -505,21 +571,24 @@ fn describe_type(
 }
 
 // Describe an 'extern type', a type whose data and some of whose members come
-// from Rust, and whose declaration names the rest.
+// from Rust, and whose declaration names the rest. Allocates a real 'TypeId'
+// like any other type, so a later reference to it resolves the same way;
+// returns 'None' when the declaration names no registered implementation,
+// leaving nothing to describe.
 fn describe_extern(
 	syms: &Interner,
 	sources: &Sources,
 	chunks: &Chunks,
 	pkgs: &Packages,
 	mods: &Modules,
-	types: &Types,
-	natives: &mut HashMap<Sym, &mut NativeType>,
+	types: &mut Types,
+	natives: &HashMap<Sym, NativeTypeShape>,
 	module: ModuleId,
 	chunk_id: ChunkId,
 	span: Span,
 	extern_: &syn::nodes::Extern,
 	errs: &mut Vec<Error>,
-) {
+) -> Option<TypeId> {
 	let chunk = chunks.get(chunk_id);
 	// Resolved before the implementation is looked up: an unresolvable protocol
 	// is a mistake in the declaration either way, and reporting it does not
@@ -538,21 +607,21 @@ fn describe_extern(
 
 	// A declaration with no backing implementation is an implementation error,
 	// and leaves nothing to describe it into.
-	let Some(native) = natives.get_mut(&extern_.name) else {
+	let Some(native) = natives.get(&extern_.name) else {
 		errs.push(Error::UnimplementedExtern(
 			sources.loc(span),
 			syms.resolve(extern_.name).to_string(),
 		));
-		return;
+		return None;
 	};
 
 	let mut declared = HashMap::new();
 	let mut statics = HashMap::new();
 	let mut static_spans: HashMap<Sym, Span> = HashMap::new();
-	for name in native.native_members.keys() {
+	for name in native.members.keys() {
 		declared.insert(*name, MemberSite::Native);
 	}
-	for name in native.native_statics.keys() {
+	for name in native.statics.keys() {
 		statics.insert(*name, Static::Native);
 		static_spans.insert(*name, span);
 	}
@@ -595,7 +664,7 @@ fn describe_extern(
 		extern_.name,
 		span,
 		&declared,
-		Some(native),
+		&native.members,
 		None,
 		&static_spans,
 		&impls,
@@ -605,9 +674,19 @@ fn describe_extern(
 	let mut members = acquired;
 	members.extend(&declared);
 
-	native.members = members;
-	native.statics = statics;
-	native.impls = impls;
+	let id = TypeId(types.types.len() as u32);
+	types.types.push(Type::Native(NativeType {
+		name: extern_.name,
+		chunk: chunk_id,
+		span,
+		provider: native.provider,
+		native_members: native.members.clone(),
+		native_statics: native.statics.clone(),
+		members,
+		statics,
+		impls,
+	}));
+	Some(id)
 }
 
 // Check that the structure of a type is valid. It must not have fields if it is
@@ -616,7 +695,11 @@ fn describe_extern(
 fn check_structure(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Error> {
 	let mut errs = Vec::new();
 	for id in types.ids() {
-		let type_ = types.get_type(id);
+		// A native type has no ctor params or body fields of its own to order
+		// or forbid: its declaration only names an implementation.
+		let Type::User(type_) = types.get_type(id) else {
+			continue;
+		};
 
 		if let Err(err) =
 			check_required_precede_optional(syms, sources, type_.span, &type_.ctor_fields)
@@ -714,7 +797,7 @@ fn acquire_members(
 	type_name: Sym,
 	type_span: Span,
 	declared: &HashMap<Sym, MemberSite>,
-	native: Option<&NativeType>,
+	native_members: &HashMap<Sym, Vec<NativeParam>>,
 	inherited: Option<&Inherited>,
 	static_spans: &HashMap<Sym, Span>,
 	impls: &[(PackageId, ProtoId)],
@@ -781,7 +864,7 @@ fn acquire_members(
 				}
 				Some(MemberSite::Provided(..)) => panic!(),
 				Some(MemberSite::Native) => {
-					let params = &native.unwrap().native_members[member];
+					let params = &native_members[member];
 					if !native_signature_agrees(&def.params, params) {
 						errs.push(Error::SignatureMismatch(
 							sources.loc(type_span),

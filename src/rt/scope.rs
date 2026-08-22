@@ -5,10 +5,10 @@ use rustc_hash::FxHashMap;
 
 use crate::intern::Sym;
 use crate::pkg::PackageId;
-use crate::rt::Error;
 use crate::rt::pkg::Packages;
 use crate::rt::types::{NativeMember, Static, TypeId};
 use crate::rt::val::{Member, Method, Obj, Val};
+use crate::rt::{Error, Runtime};
 use crate::sem;
 use crate::sem::modules::ModuleId;
 use crate::syn::ChunkId;
@@ -67,12 +67,12 @@ impl Place {
 		}
 	}
 
-	pub fn get(&self, pkgs: &Packages) -> Result<Val, Error> {
+	pub fn get(&self, rt: &Runtime) -> Result<Val, Error> {
 		match self {
 			Place::Local(local) => Ok(local.get()),
-			Place::Module(pkg, id) => Ok(Val::Obj(pkgs.get(*pkg).mods.obj(*id))),
+			Place::Module(pkg, id) => Ok(Val::Obj(rt.pkgs.get(*pkg).mods.obj(*id))),
 			Place::Member(Member::Module(pkg, id, name)) => {
-				let pkg_mods = &pkgs.get(*pkg).mods;
+				let pkg_mods = &rt.pkgs.get(*pkg).mods;
 				match pkg_mods.descs.member(*id, *name).unwrap() {
 					sem::modules::Member::Child(child) => Ok(Val::Obj(pkg_mods.obj(child))),
 					sem::modules::Member::Type(_)
@@ -92,7 +92,7 @@ impl Place {
 					TypeId::User(type_pkg, type_id) => {
 						// A nested type is declared inside its enclosing one, so
 						// both live in the same package.
-						let types = &pkgs.get(type_pkg).types;
+						let types = &rt.pkgs.get(type_pkg).types;
 						match types.static_(type_id, *name).unwrap() {
 							Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(
 								Obj::Method(Method::User(Val::Obj(type_rf.clone()), proc_rf)),
@@ -101,7 +101,7 @@ impl Place {
 						}
 					}
 					TypeId::Native(type_id) => {
-						let method = match pkgs.native(type_id).statics.get(name).unwrap() {
+						let method = match rt.natives.get(type_id).statics.get(name).unwrap() {
 							NativeMember::Native(meth) => {
 								Method::Native(Val::Obj(type_rf.clone()), *name, *meth)
 							}
@@ -119,7 +119,7 @@ impl Place {
 				};
 				if let Some(val) = inst.fields.get(name) {
 					Ok(val.clone())
-				} else if let Some(proc_rf) = pkgs.get(inst.pkg).types.method(inst.typ, *name) {
+				} else if let Some(proc_rf) = rt.pkgs.get(inst.pkg).types.method(inst.typ, *name) {
 					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
 						Val::Obj(inst_rf.clone()),
 						proc_rf,
@@ -132,7 +132,7 @@ impl Place {
 				let TypeId::Native(type_id) = recv.type_id() else {
 					panic!();
 				};
-				let method = match pkgs.native(type_id).members.get(name).unwrap() {
+				let method = match rt.natives.get(type_id).members.get(name).unwrap() {
 					NativeMember::Native(meth) => Method::Native(recv.clone(), *name, *meth),
 					NativeMember::User(proc_rf) => Method::User(recv.clone(), proc_rf.clone()),
 				};

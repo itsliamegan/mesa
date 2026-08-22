@@ -181,7 +181,7 @@ pub fn check(
 	pkg_id: PackageId,
 	sources: &Sources,
 	chunks: &Chunks,
-	natives: &mut HashMap<Sym, &mut types::NativeType>,
+	natives: &HashMap<Sym, types::NativeTypeShape>,
 ) -> Result<(Modules, Types), Vec<Error>> {
 	let mods = modules::check(syms, pkgs, pkg_id, sources, chunks)?;
 

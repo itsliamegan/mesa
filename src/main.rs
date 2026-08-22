@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -32,16 +33,13 @@ fn main() {
 		}
 	};
 	let stdlib_pkg_id = pkgs.reserve();
-	// Registered directly against the stdlib's id, ahead of the stdlib's own
-	// native types. These are independent lists that come from the same package.
-	natives.register(&mut syms, stdlib_pkg_id, CORE_TYPES);
 	load_package(
 		&mut syms,
 		&mut pkgs,
 		&mut natives,
 		stdlib_pkg_id,
 		&stdlib_dir,
-		STDLIB_NATIVE_TYPES,
+		&[CORE_TYPES, STDLIB_NATIVE_TYPES],
 	);
 
 	let current_dir = env::current_dir().unwrap();
@@ -62,9 +60,9 @@ fn main() {
 			process::exit(1);
 		}
 	};
-	let mut rt_pkgs = rt::Packages::new(&pkgs, natives);
+	let mut rt = rt::Runtime::new(&pkgs, natives);
 
-	match rt::eval(&mut syms, &mut rt_pkgs, &prelude) {
+	match rt::eval(&mut syms, &mut rt, &prelude) {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{
@@ -89,7 +87,7 @@ fn load_package(
 	natives: &mut Natives,
 	pkg_id: PackageId,
 	start_dir: &Path,
-	native_types: &[NativeTypeSpec],
+	native_type_lists: &[&[NativeTypeSpec]],
 ) {
 	let (root_dir, manifest) = match load::find(start_dir) {
 		Ok(found) => found,
@@ -117,18 +115,12 @@ fn load_package(
 		}
 	};
 
-	// Before the package is checked: an 'extern type' is checked against the
-	// implementation registered for it.
-	natives.register(syms, pkg_id, native_types);
+	let mut native_shapes = HashMap::new();
+	for specs in native_type_lists {
+		native_shapes.extend(natives.register(syms, specs));
+	}
 
-	let (modules, types) = match sem::check(
-		syms,
-		pkgs,
-		pkg_id,
-		&sources,
-		&chunks,
-		&mut natives.descs_mut(pkg_id),
-	) {
+	let (modules, types) = match sem::check(syms, pkgs, pkg_id, &sources, &chunks, &native_shapes) {
 		Ok(checked) => checked,
 		Err(errs) => {
 			for err in errs {

@@ -8,7 +8,6 @@ use crate::rt::val::{NativeData, Num, Obj, Val};
 // The native types the stdlib provides.
 pub const TYPES: &[NativeTypeSpec] = &[NativeTypeSpec {
 	name: "Counter",
-	id: None,
 	new: None,
 	members: &[
 		("count", &[], Counter::count),
