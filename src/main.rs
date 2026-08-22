@@ -9,7 +9,8 @@ use mesa::intern::Interner;
 use mesa::load;
 use mesa::pkg::{Package, PackageId, Packages};
 use mesa::rt::{
-	self, CORE_TYPES, NativeTypeSpec, Natives, build_errors, build_prelude, build_protos,
+	self, CORE_TYPES, NativeTypeSpec, Natives, Raised, build_errors, build_prelude, build_protos,
+	rt_debug_val,
 };
 use mesa::sem;
 use mesa::syn;
@@ -70,8 +71,12 @@ fn main() {
 		Ok(()) => {}
 		Err((err, mut trace)) => {
 			{
+				let message = match &err {
+					Raised::Native(err) => err.message(&syms, &rt),
+					Raised::Val(val) => rt_debug_val(&syms, &rt, val),
+				};
 				let mut frame = trace.first_mut().unwrap();
-				eprintln!("{}: runtime error: {}", frame.1, err.message(&syms, &rt));
+				eprintln!("{}: runtime error: {}", frame.1, message);
 			}
 			{
 				let mut frame = trace.last_mut().unwrap();

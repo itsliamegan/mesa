@@ -71,8 +71,10 @@ fn starts_expr(tag: TokenTag) -> bool {
 		TokenTag::When => true,
 		TokenTag::Each => true,
 		TokenTag::Loop => true,
+		TokenTag::Do => true,
 		TokenTag::Return => true,
 		TokenTag::Break => true,
+		TokenTag::Raise => true,
 		TokenTag::Self_ => true,
 		TokenTag::Not => true,
 		TokenTag::Minus => true,
@@ -633,8 +635,10 @@ impl<'src> Parser<'src> {
 			TokenTag::When => self.parse_when_expr(),
 			TokenTag::Each => self.parse_each_expr(),
 			TokenTag::Loop => self.parse_loop_expr(),
+			TokenTag::Do => self.parse_do_expr(),
 			TokenTag::Return => self.parse_return_expr(),
 			TokenTag::Break => self.parse_break_expr(),
+			TokenTag::Raise => self.parse_raise_expr(),
 			TokenTag::Self_ => self.parse_self_expr(),
 			TokenTag::Not => self.parse_unary_expr(TokenTag::Not, UnaryOp::Not, Precedence::NOT),
 			TokenTag::Minus => {
@@ -722,6 +726,14 @@ impl<'src> Parser<'src> {
 		Ok(expr_id)
 	}
 
+	fn parse_raise_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Raise)?;
+		let val = self.parse_expr()?;
+		let expr = Expr::Raise(Raise { val });
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
 	fn parse_when_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::When)?;
 		let cond = self.parse_expr()?;
@@ -771,6 +783,17 @@ impl<'src> Parser<'src> {
 	}
 
 	fn parse_match_arms(&mut self, tok: Token, scrutinee: ExprId) -> Result<ExprId, Error> {
+		let (arms, else_branch) = self.parse_case_arms()?;
+		let expr = Expr::Match(Match {
+			scrutinee,
+			arms,
+			else_branch,
+		});
+		let expr_id = self.chunk.add_expr(tok.into(), expr);
+		Ok(expr_id)
+	}
+
+	fn parse_case_arms(&mut self) -> Result<(Vec<Arm>, Option<BlockId>), Error> {
 		let mut arms = Vec::new();
 		while self.tag() == TokenTag::Case {
 			self.take(TokenTag::Case)?;
@@ -803,8 +826,34 @@ impl<'src> Parser<'src> {
 			None
 		};
 		self.take(TokenTag::End)?;
-		let expr = Expr::Match(Match {
-			scrutinee,
+		Ok((arms, else_branch))
+	}
+
+	fn parse_do_expr(&mut self) -> Result<ExprId, Error> {
+		let tok = self.take(TokenTag::Do)?;
+		let mut body = Vec::new();
+		while self.cur.index() < self.toks.len()
+			&& self.tag() != TokenTag::Rescue
+			&& self.tag() != TokenTag::End
+		{
+			let expr_id = self.parse_expr()?;
+			body.push(expr_id);
+		}
+		let body = self.chunk.add_block(Block { exprs: body });
+
+		let (binding, arms, else_branch) = if self.tag() == TokenTag::Rescue {
+			self.take(TokenTag::Rescue)?;
+			let binding = self.take(TokenTag::Ident)?.sym.unwrap();
+			let (arms, else_branch) = self.parse_case_arms()?;
+			(Some(binding), arms, else_branch)
+		} else {
+			self.take(TokenTag::End)?;
+			(None, Vec::new(), None)
+		};
+
+		let expr = Expr::Do(Do {
+			body,
+			binding,
 			arms,
 			else_branch,
 		});

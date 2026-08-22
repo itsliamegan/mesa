@@ -22,16 +22,18 @@ impl Sym {
 	pub const WHEN: Sym = Sym(13);
 	pub const THEN: Sym = Sym(14);
 	pub const ELSE: Sym = Sym(15);
-	pub const END: Sym = Sym(16);
-	pub const RETURN: Sym = Sym(17);
-	pub const BREAK: Sym = Sym(18);
-	pub const AND: Sym = Sym(19);
-	pub const OR: Sym = Sym(20);
-	pub const NOT: Sym = Sym(21);
-	pub const SELF: Sym = Sym(22);
-	pub const TRUE: Sym = Sym(23);
-	pub const FALSE: Sym = Sym(24);
-	pub const NIL: Sym = Sym(25);
+	pub const RESCUE: Sym = Sym(16);
+	pub const END: Sym = Sym(17);
+	pub const RETURN: Sym = Sym(18);
+	pub const BREAK: Sym = Sym(19);
+	pub const RAISE: Sym = Sym(20);
+	pub const AND: Sym = Sym(21);
+	pub const OR: Sym = Sym(22);
+	pub const NOT: Sym = Sym(23);
+	pub const SELF: Sym = Sym(24);
+	pub const TRUE: Sym = Sym(25);
+	pub const FALSE: Sym = Sym(26);
+	pub const NIL: Sym = Sym(27);
 }
 
 const KEYWORDS: &[(&str, Sym)] = &[
@@ -51,9 +53,11 @@ const KEYWORDS: &[(&str, Sym)] = &[
 	("when", Sym::WHEN),
 	("then", Sym::THEN),
 	("else", Sym::ELSE),
+	("rescue", Sym::RESCUE),
 	("end", Sym::END),
 	("return", Sym::RETURN),
 	("break", Sym::BREAK),
+	("raise", Sym::RAISE),
 	("and", Sym::AND),
 	("or", Sym::OR),
 	("not", Sym::NOT),

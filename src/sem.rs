@@ -328,6 +328,17 @@ fn check_reach_expr(
 			}
 			Ok(())
 		}
+		Expr::Do(do_) => {
+			check_reach_block(syms, sources, chunk, do_.body, proto, desc)?;
+			for arm in &do_.arms {
+				check_reach_expr(syms, sources, chunk, arm.path, proto, desc)?;
+				check_reach_block(syms, sources, chunk, arm.body, proto, desc)?;
+			}
+			if let Some(else_branch) = do_.else_branch {
+				check_reach_block(syms, sources, chunk, else_branch, proto, desc)?;
+			}
+			Ok(())
+		}
 		Expr::Return(return_) => match return_.val {
 			Some(val) => check_reach_expr(syms, sources, chunk, val, proto, desc),
 			None => Ok(()),
@@ -336,6 +347,7 @@ fn check_reach_expr(
 			Some(val) => check_reach_expr(syms, sources, chunk, val, proto, desc),
 			None => Ok(()),
 		},
+		Expr::Raise(raise) => check_reach_expr(syms, sources, chunk, raise.val, proto, desc),
 		Expr::Self_ => Ok(()),
 		Expr::Call(call) => {
 			check_reach_expr(syms, sources, chunk, call.callee, proto, desc)?;
@@ -470,6 +482,17 @@ fn check_expr(sources: &Sources, chunk: &Chunk, expr_id: ExprId, depth: u32) -> 
 			}
 			Ok(())
 		}
+		Expr::Do(do_) => {
+			check_block(sources, chunk, do_.body, depth)?;
+			for arm in &do_.arms {
+				check_expr(sources, chunk, arm.path, depth)?;
+				check_block(sources, chunk, arm.body, depth)?;
+			}
+			if let Some(else_branch) = do_.else_branch {
+				check_block(sources, chunk, else_branch, depth)?;
+			}
+			Ok(())
+		}
 		Expr::Return(return_) => match return_.val {
 			Some(val) => check_expr(sources, chunk, val, depth),
 			None => Ok(()),
@@ -484,6 +507,7 @@ fn check_expr(sources: &Sources, chunk: &Chunk, expr_id: ExprId, depth: u32) -> 
 				None => Ok(()),
 			}
 		}
+		Expr::Raise(raise) => check_expr(sources, chunk, raise.val, depth),
 		Expr::Self_ => Ok(()),
 		Expr::Call(call) => {
 			check_expr(sources, chunk, call.callee, depth)?;

@@ -186,8 +186,10 @@ pub enum Expr {
 	Loop(Loop),
 	When(When),
 	Match(Match),
+	Do(Do),
 	Return(Return),
 	Break(Break),
+	Raise(Raise),
 	Self_,
 	Call(Call),
 	Member(Member),
@@ -234,6 +236,14 @@ pub struct Arm {
 }
 
 #[derive(Debug)]
+pub struct Do {
+	pub body: BlockId,
+	pub binding: Option<Sym>,
+	pub arms: Vec<Arm>,
+	pub else_branch: Option<BlockId>,
+}
+
+#[derive(Debug)]
 pub struct Return {
 	pub val: Option<ExprId>,
 }
@@ -241,6 +251,11 @@ pub struct Return {
 #[derive(Debug)]
 pub struct Break {
 	pub val: Option<ExprId>,
+}
+
+#[derive(Debug)]
+pub struct Raise {
+	pub val: ExprId,
 }
 
 #[derive(Debug)]

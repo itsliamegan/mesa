@@ -13,12 +13,13 @@ use crate::sem::types::{ProtoId, Type};
 use crate::src::Location;
 
 pub use err::{Errors, build_errors};
-pub use eval::{Prelude, Proto, Protos, build_prelude, build_protos};
+pub use eval::{Prelude, Proto, Protos, Raised, build_prelude, build_protos};
 pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
 pub use types::{CORE_TYPES, NativeTypeSpec, Natives, TypeId};
+pub use val::rt_debug_val;
 
-use val::{Member, Val, namespace_name, rt_debug_val};
+use val::{Member, Val, namespace_name};
 
 // The runtime's representation of the world. Contains every package built so
 // far and the native implementations any of them may bind an 'extern' to.
@@ -133,7 +134,7 @@ pub fn eval(
 	syms: &mut Interner,
 	rt: &mut Runtime,
 	prelude: &Prelude,
-) -> Result<(), (Error, Vec<(String, Location)>)> {
+) -> Result<(), (Raised, Vec<(String, Location)>)> {
 	let ids: Vec<_> = rt.pkgs.ids().collect();
 	for pkg_id in ids {
 		let pkg = pkg::Package::new(
@@ -184,6 +185,7 @@ pub enum TypeError {
 	NotCallable(TypeId),
 	NotConstructible(TypeId),
 	NotInvokable(TypeId),
+	NotRaisable(TypeId),
 	CaseNonType(TypeId),
 }
 
@@ -267,6 +269,7 @@ impl TypeError {
 				format!("type {} cannot be constructed", rt.type_name(syms, *id))
 			}
 			Self::NotInvokable(id) => format!("type {} is not invokable", rt.type_name(syms, *id)),
+			Self::NotRaisable(id) => format!("type {} cannot be raised", rt.type_name(syms, *id)),
 			Self::CaseNonType(id) => {
 				format!("type {} cannot be matched against", rt.type_name(syms, *id))
 			}
