@@ -43,6 +43,7 @@ test_files! {
 	test_local_types => "local_types.ms",
 	test_prelude_names => "prelude.ms",
 	test_core_order => "core_order.ms",
+	test_protocol_identity => "protocol_identity.ms",
 	test_reports_runtime_errors => "rt_errors.ms",
 	test_body_fields => "body_fields.ms",
 	test_honors_significant_newlines => "newlines.ms",

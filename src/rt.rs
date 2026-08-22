@@ -9,10 +9,11 @@ mod val;
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{Interner, Sym};
-use crate::sem::types::Type;
+use crate::pkg::PackageId;
+use crate::sem::types::{ProtoId, Type};
 use crate::src::Location;
 
-pub use eval::{Prelude, build_prelude};
+pub use eval::{Prelude, Proto, Protos, build_prelude, build_protos};
 pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
 pub use types::{CORE_TYPES, NativeTypeSpec, Natives, TypeId};
@@ -24,13 +25,15 @@ use val::{Member, Val};
 pub struct Runtime<'descs> {
 	pub pkgs: Packages<'descs>,
 	pub natives: Natives,
+	pub protos: Protos,
 }
 
 impl<'descs> Runtime<'descs> {
-	pub fn new(descs: &'descs crate::pkg::Packages, natives: Natives) -> Self {
+	pub fn new(descs: &'descs crate::pkg::Packages, natives: Natives, protos: Protos) -> Self {
 		Self {
 			pkgs: Packages::new(descs),
 			natives,
+			protos,
 		}
 	}
 
@@ -50,6 +53,21 @@ impl<'descs> Runtime<'descs> {
 				}
 			}
 			TypeId::Native(id) => syms.resolve(self.natives.get(id).name).to_string(),
+		}
+	}
+
+	// Whether a type conforms to a protocol.
+	pub fn conforms(&self, type_id: TypeId, proto: (PackageId, ProtoId)) -> bool {
+		match type_id {
+			TypeId::User(pkg, id) => self
+				.pkgs
+				.get(pkg)
+				.types
+				.descs
+				.get_type(id)
+				.impls()
+				.contains(&proto),
+			TypeId::Native(id) => self.natives.get(id).impls.contains(&proto),
 		}
 	}
 

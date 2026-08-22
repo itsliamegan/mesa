@@ -16,7 +16,7 @@ use crate::rt::val::{
 };
 use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError};
 use crate::sem::modules;
-use crate::sem::types::Type;
+use crate::sem::types::{self as types, Type};
 use crate::src::{Location, Span};
 use crate::syn::nodes::{
 	BinaryOp, BlockId, Builtin, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, UnaryOp,
@@ -62,6 +62,53 @@ pub fn build_prelude(
 	}));
 
 	Ok(Prelude { scope })
+}
+
+// Identity of every protocol an operator arm dispatches through, resolved
+// once at boot.
+pub struct Protos {
+	pub order: Proto,
+}
+
+pub struct Proto {
+	pub id: (PackageId, types::ProtoId),
+	pub verb: Sym,
+}
+
+// Resolve 'Core's well-known protocols by name against the stdlib's own
+// description. A missing or misnamed one is a broken build, not a user-facing
+// error: nothing has run yet for it to be a 'sem::Error' or 'rt::Error' about.
+pub fn build_protos(
+	descs: &pkg::Packages,
+	syms: &mut Interner,
+	stdlib: PackageId,
+) -> Result<Protos, String> {
+	let stdlib_pkg = descs.get(stdlib);
+	let path = [syms.intern("Core")];
+	let Some(core_mod) = stdlib_pkg.modules.by_path(&path) else {
+		return Err("stdlib does not declare a 'Core' module".to_string());
+	};
+	let chunk_id = stdlib_pkg.modules.chunk(core_mod);
+	let chunk = stdlib_pkg.chunks.get(chunk_id);
+
+	let order_name = syms.intern("Order");
+	let mut order = None;
+	for item_id in &chunk.top {
+		if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
+			if proto.name == order_name {
+				let proto_id = stdlib_pkg.types.get_proto_by_item(chunk_id, *item_id);
+				order = Some(Proto {
+					id: (stdlib, proto_id),
+					verb: syms.intern("order"),
+				});
+			}
+		}
+	}
+	let Some(order) = order else {
+		return Err("stdlib does not declare a 'Core.Order' protocol".to_string());
+	};
+
+	Ok(Protos { order })
 }
 
 pub struct Interpreter<'syms, 'descs, 'rt> {
@@ -483,20 +530,11 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						},
 						Obj::Method(meth) => match meth {
 							Method::User(recv, proc) => {
-								self.eval_proc_call(span, &proc.borrow(), Some(recv.clone()), args)
+								let name = proc.borrow().name;
+								self.call_member(span, recv.clone(), name, args)
 							}
-							Method::Native(recv, _name, meth) => {
-								// Native params carry &'static str names and
-								// fn() -> Val defaults, so they are matched and
-								// filled without an Interner or a scope.
-								let args = self.bind_native_args(span, meth.params, args)?;
-								match (meth.call)(recv, args) {
-									Ok(val) => Ok(val),
-									Err(err) => {
-										let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-										Err(Signal::Error(err, vec![(String::new(), loc)]))
-									}
-								}
+							Method::Native(recv, name, _) => {
+								self.call_member(span, recv.clone(), *name, args)
 							}
 						},
 						obj => {
@@ -757,23 +795,52 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									})))
 								}
 								(lhs, rhs) => {
-									let loc = self
-										.rt
-										.pkgs
-										.desc(self.pkg_id)
-										.loc(chunk.get_expr_span(expr_id));
-									let val = match (&lhs, &rhs) {
-										(Val::Num(_), _) => rhs,
-										(_, Val::Num(_)) => lhs,
-										_ => lhs,
-									};
-									let type_name = self.rt.type_name(self.syms, val.type_id());
-									Err(Signal::Error(
-										Error::ProtocolError(ProtocolError::NotOrderable(
-											type_name,
-										)),
-										vec![(String::new(), loc)],
-									))
+									let span = chunk.get_expr_span(expr_id);
+									if lhs.type_id() == rhs.type_id()
+										&& self.rt.conforms(lhs.type_id(), self.rt.protos.order.id)
+									{
+										let verb = self.rt.protos.order.verb;
+										let sign = self.call_member(
+											span,
+											lhs.clone(),
+											verb,
+											vec![(None, rhs.clone())],
+										)?;
+										// A conforming type promised a 'Num' sign. Anything
+										// else is a in that type's implementation of 'Order'.
+										let Val::Num(Num(sign)) = sign else {
+											let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+											let type_name =
+												self.rt.type_name(self.syms, lhs.type_id());
+											return Err(Signal::Error(
+												Error::ProtocolError(ProtocolError::NotOrderable(
+													type_name,
+												)),
+												vec![(String::new(), loc)],
+											));
+										};
+										Ok(Val::Bool(Bool(match &binary.op {
+											BinaryOp::Lt => sign < 0.0,
+											BinaryOp::Gt => sign > 0.0,
+											BinaryOp::LtEq => sign <= 0.0,
+											BinaryOp::GtEq => sign >= 0.0,
+											_ => panic!(),
+										})))
+									} else {
+										let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+										let val = match (&lhs, &rhs) {
+											(Val::Num(_), _) => rhs,
+											(_, Val::Num(_)) => lhs,
+											_ => lhs,
+										};
+										let type_name = self.rt.type_name(self.syms, val.type_id());
+										Err(Signal::Error(
+											Error::ProtocolError(ProtocolError::NotOrderable(
+												type_name,
+											)),
+											vec![(String::new(), loc)],
+										))
+									}
 								}
 							}
 						}
@@ -967,6 +1034,42 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			}
 		}
 		self.rt.member(val, name)
+	}
+
+	// Resolve and call a member by name on a receiver. The caller vouches for
+	// the member's existence.
+	fn call_member(
+		&mut self,
+		span: Span,
+		recv: Val,
+		name: Sym,
+		args: Vec<(Option<Sym>, Val)>,
+	) -> Result<Val, Signal> {
+		let member = self.rt.member(&recv, name).unwrap();
+		let val = match Place::Member(member).get(self.rt) {
+			Ok(val) => val,
+			Err(err) => {
+				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+				return Err(Signal::Error(err, vec![(String::new(), loc)]));
+			}
+		};
+		let Val::Obj(rf) = val else { panic!() };
+		match &*rf.borrow() {
+			Obj::Method(Method::User(recv, proc)) => {
+				self.eval_proc_call(span, &proc.borrow(), Some(recv.clone()), args)
+			}
+			Obj::Method(Method::Native(recv, _name, meth)) => {
+				let args = self.bind_native_args(span, meth.params, args)?;
+				match (meth.call)(recv, args) {
+					Ok(val) => Ok(val),
+					Err(err) => {
+						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+						Err(Signal::Error(err, vec![(String::new(), loc)]))
+					}
+				}
+			}
+			_ => panic!(),
+		}
 	}
 
 	fn namespace_name(&self, val: &Val) -> String {

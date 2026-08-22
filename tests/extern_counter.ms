@@ -9,6 +9,10 @@
 #> 3
 #> 5
 #> 0
+#> true
+#> true
+#> true
+#> true
 
 import Core.Counter
 
@@ -27,6 +31,10 @@ $print(Counter)
 $print(Counter.at(3).min(Counter.at(5)).count)
 $print(Counter.at(3).max(Counter.at(5)).count)
 $print(Counter.at(4).order(Counter.at(4)))
+$print(Counter.at(3) < Counter.at(5))
+$print(Counter.at(3) <= Counter.at(5))
+$print(Counter.at(5) > Counter.at(3))
+$print(Counter.at(5) >= Counter.at(3))
 
 #---
 

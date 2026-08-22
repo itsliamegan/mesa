@@ -86,6 +86,8 @@ pub struct NativeType {
 	pub val: Rc<RefCell<Obj>>,
 	pub members: FxHashMap<Sym, NativeMember>,
 	pub statics: FxHashMap<Sym, NativeMember>,
+	// Protocols this type conforms to, per its 'extern' declaration.
+	pub impls: Vec<(PackageId, types::ProtoId)>,
 }
 
 impl NativeType {
@@ -260,6 +262,7 @@ impl Natives {
 				val: Rc::new(RefCell::new(Obj::Type(TypeId::Native(id)))),
 				members: build_native_members(syms, spec.members),
 				statics: build_native_members(syms, spec.statics),
+				impls: Vec::new(),
 			});
 			shapes.insert(
 				name,
@@ -438,6 +441,7 @@ pub fn add_extern_members<'descs>(
 		let native = natives.get_mut(desc.provider);
 		native.members.extend(members);
 		native.statics.extend(statics);
+		native.impls.extend(desc.impls.iter().copied());
 	}
 }
 

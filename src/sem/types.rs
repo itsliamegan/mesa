@@ -22,7 +22,7 @@ impl TypeId {
 	}
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct ProtoId(u32);
 
 impl ProtoId {
