@@ -52,6 +52,7 @@ impl Precedence {
 fn terminates_expr(tag: TokenTag) -> bool {
 	match tag {
 		TokenTag::End => true,
+		TokenTag::Self_ => true,
 		TokenTag::Ident => true,
 		TokenTag::Str => true,
 		TokenTag::Char => true,
