@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ordermap::OrderMap;
 
@@ -628,7 +628,9 @@ fn describe_extern(
 	// implemented or not, so a declaration displacing another is a duplicate
 	// whichever kinds the two are. Members and statics keep separate maps and
 	// so are separate namespaces: a name taken in one is still free in the
-	// other.
+	// other. A name reported here is recorded so the sweep below does not
+	// raise a second, derived complaint about the same mistake.
+	let mut collided = HashSet::new();
 	for item_id in &extern_.items {
 		let item_span = chunk.get_type_item_span(*item_id);
 		let (name, claimed) = match chunk.get_type_item(*item_id) {
@@ -675,7 +677,8 @@ fn describe_extern(
 			_ => panic!(),
 		};
 		if claimed {
-			errs.push(Error::NativeMemberCollision(
+			collided.insert(name);
+			errs.push(Error::DuplicateTypeMember(
 				sources.loc(item_span),
 				syms.resolve(extern_.name).to_string(),
 				syms.resolve(name).to_string(),
@@ -691,6 +694,9 @@ fn describe_extern(
 		if let Some(MemberSite::Native) = declared.get(name) {
 			continue;
 		}
+		if collided.contains(name) {
+			continue;
+		}
 		errs.push(Error::UndeclaredNativeMember(
 			sources.loc(span),
 			syms.resolve(extern_.name).to_string(),
@@ -699,6 +705,9 @@ fn describe_extern(
 	}
 	for name in native.statics.keys() {
 		if let Some(Static::Native) = statics.get(name) {
+			continue;
+		}
+		if collided.contains(name) {
 			continue;
 		}
 		errs.push(Error::UndeclaredNativeMember(

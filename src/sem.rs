@@ -27,7 +27,7 @@ pub enum Error {
 	SignatureMismatch(Location, String, String, String),
 	ProtocolConflict(Location, String, String, String),
 	MemberCollision(Location, String, String, String),
-	NativeMemberCollision(Location, String, String),
+	DuplicateTypeMember(Location, String, String),
 	UnimplementedExtern(Location, String),
 	UndeclaredNativeMember(Location, String, String),
 	UnimplementedExternMember(Location, String, String),
@@ -60,7 +60,7 @@ impl Error {
 			Self::SignatureMismatch(loc, ..) => loc,
 			Self::ProtocolConflict(loc, ..) => loc,
 			Self::MemberCollision(loc, ..) => loc,
-			Self::NativeMemberCollision(loc, ..) => loc,
+			Self::DuplicateTypeMember(loc, ..) => loc,
 			Self::UnimplementedExtern(loc, _) => loc,
 			Self::UndeclaredNativeMember(loc, ..) => loc,
 			Self::UnimplementedExternMember(loc, ..) => loc,
@@ -132,11 +132,11 @@ impl Display for Error {
 					member, proto, name
 				)
 			}
-			Self::NativeMemberCollision(_, name, member) => {
+			Self::DuplicateTypeMember(_, name, member) => {
 				write!(
 					f,
-					"member '{}' of extern type '{}' is declared more than once",
-					member, name
+					"type '{}' declares member '{}' more than once",
+					name, member
 				)
 			}
 			Self::UnimplementedExtern(_, name) => {
