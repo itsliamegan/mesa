@@ -5,7 +5,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::{Member, ModuleId, Modules, Resolved};
-use crate::sem::{Error, check_required_precede_optional};
+use crate::sem::{Error, check_params};
 use crate::src::{Sources, Span};
 use crate::syn::Chunks;
 use crate::syn::nodes::{
@@ -418,9 +418,16 @@ fn describe_type(
 	// is not known until it is described, below.
 	let mut static_spans: HashMap<Sym, Span> = HashMap::new();
 	let mut declared = HashMap::new();
+	// A ctor param, a body field and an instance method are recorded in three
+	// different maps but share one namespace: all three are what 'inst.x'
+	// reaches, and two of them claiming one name leaves the earlier
+	// unreachable. Statics, cases and inner types share the other namespace,
+	// the one 'T.x' reaches, which 'static_spans' already collects.
+	let mut instance_names: HashSet<Sym> = type_.params.iter().map(|param| param.name).collect();
+	let mut static_names = HashSet::new();
 	for item_id in &type_.items {
 		let item_span = chunk.get_type_item_span(*item_id);
-		match chunk.get_type_item(*item_id) {
+		let (name, duplicate) = match chunk.get_type_item(*item_id) {
 			// Ignore cases and inner types here because they are described below.
 			//
 			// A variant's members *must* be resolved after their parent's
@@ -430,6 +437,7 @@ fn describe_type(
 			// interleave unrelated work.
 			TypeItem::Case(variant) => {
 				static_spans.insert(variant.name, item_span);
+				(variant.name, !static_names.insert(variant.name))
 			}
 			TypeItem::Field(field) => {
 				body_fields.insert(
@@ -439,20 +447,31 @@ fn describe_type(
 						init: field.init,
 					},
 				);
+				(field.name, !instance_names.insert(field.name))
 			}
 			TypeItem::Type(inner) => {
 				static_spans.insert(inner.name, item_span);
+				(inner.name, !static_names.insert(inner.name))
 			}
 			TypeItem::Method(syn::nodes::Method::Instance(def)) => {
 				declared.insert(def.name, MemberSite::Declared(chunk_id, *item_id));
+				(def.name, !instance_names.insert(def.name))
 			}
 			TypeItem::Method(syn::nodes::Method::Static(def)) => {
 				statics.insert(def.name, Static::Proc(chunk_id, *item_id));
 				static_spans.insert(def.name, item_span);
+				(def.name, !static_names.insert(def.name))
 			}
 			// Only an 'extern type' body can declare a native member; the
 			// parser has no way to reach this from a plain 'type'.
 			TypeItem::Extern(..) => panic!(),
+		};
+		if duplicate {
+			errs.push(Error::DuplicateTypeMember(
+				sources.loc(item_span),
+				syms.resolve(type_.name).to_string(),
+				syms.resolve(name).to_string(),
+			));
 		}
 	}
 
@@ -764,9 +783,7 @@ fn check_structure(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Err
 			continue;
 		};
 
-		if let Err(err) =
-			check_required_precede_optional(syms, sources, type_.span, &type_.ctor_fields)
-		{
+		if let Err(err) = check_params(syms, sources, type_.span, &type_.ctor_fields) {
 			errs.push(err);
 		}
 

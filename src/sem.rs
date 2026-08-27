@@ -1,7 +1,7 @@
 pub mod modules;
 pub mod types;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{Interner, Sym};
@@ -10,13 +10,15 @@ use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Sources, Span};
 use crate::syn::nodes::{
-	BlockId, Builtin, Def, Expr, ExprId, Lit, Member, Method, ModuleItem, Param, Place, TypeItem,
+	BlockId, Builtin, Def, Expr, ExprId, ExternMethod, Lit, Member, Method, ModuleItem, Param,
+	Place, TypeItem,
 };
 use crate::syn::{Chunk, Chunks};
 
 #[derive(Debug)]
 pub enum Error {
 	RequiredAfterDefault(Location, String, String),
+	DuplicateParam(Location, String),
 	BreakOutsideLoop(Location),
 	ParamsOnCaseParent(Location, String),
 	FieldOnCaseParent(Location, String, String),
@@ -50,6 +52,7 @@ impl Error {
 	pub fn loc(&self) -> &Location {
 		match self {
 			Self::RequiredAfterDefault(loc, ..) => loc,
+			Self::DuplicateParam(loc, _) => loc,
 			Self::BreakOutsideLoop(loc) => loc,
 			Self::ParamsOnCaseParent(loc, _) => loc,
 			Self::FieldOnCaseParent(loc, ..) => loc,
@@ -91,6 +94,9 @@ impl Display for Error {
 					"required param '{}' follows defaulted param '{}'",
 					name, defaulted
 				)
+			}
+			Self::DuplicateParam(_, name) => {
+				write!(f, "duplicate param '{}'", name)
 			}
 			Self::BreakOutsideLoop(_) => write!(f, "'break' outside a loop"),
 			Self::ParamsOnCaseParent(_, name) => {
@@ -267,16 +273,21 @@ fn check_chunk(
 	}
 
 	for item_id in chunk.type_item_ids() {
-		let def = match chunk.get_type_item(item_id) {
-			TypeItem::Method(Method::Instance(def)) => def,
-			TypeItem::Method(Method::Static(def)) => def,
-			TypeItem::Case(..)
-			| TypeItem::Field(..)
-			| TypeItem::Type(..)
-			| TypeItem::Extern(..) => continue,
-		};
 		let span = chunk.get_type_item_span(item_id);
-		if let Err(err) = check_def(syms, sources, chunk, span, def) {
+		// A native member declares params like any other and answers to the
+		// same invariants; it just has no body to walk.
+		let result = match chunk.get_type_item(item_id) {
+			TypeItem::Method(Method::Instance(def)) => check_def(syms, sources, chunk, span, def),
+			TypeItem::Method(Method::Static(def)) => check_def(syms, sources, chunk, span, def),
+			TypeItem::Extern(ExternMethod::Instance(def)) => {
+				check_params(syms, sources, span, &def.params)
+			}
+			TypeItem::Extern(ExternMethod::Static(def)) => {
+				check_params(syms, sources, span, &def.params)
+			}
+			TypeItem::Case(..) | TypeItem::Field(..) | TypeItem::Type(..) => continue,
+		};
+		if let Err(err) = result {
 			errs.push(err);
 		}
 	}
@@ -467,7 +478,7 @@ fn check_def(
 	span: Span,
 	def: &Def,
 ) -> Result<(), Error> {
-	check_required_precede_optional(syms, sources, span, &def.params)?;
+	check_params(syms, sources, span, &def.params)?;
 	// A proc body resets the loop-depth counter. break inside a proc can't
 	// reach an outer loop, even if the proc itself is lexically nested in one.
 	check_block(sources, chunk, def.body, 0)
@@ -592,9 +603,41 @@ fn check_expr(sources: &Sources, chunk: &Chunk, expr_id: ExprId, depth: u32) -> 
 	}
 }
 
+// Every invariant a param list must satisfy, wherever one is declared.
+pub fn check_params(
+	syms: &Interner,
+	sources: &Sources,
+	span: Span,
+	params: &[Param],
+) -> Result<(), Error> {
+	check_params_are_distinct(syms, sources, span, params)?;
+	check_required_precede_optional(syms, sources, span, params)
+}
+
+// Ensure that no two params share a name. A later param of the same name would
+// silently win at every call site, and a caller naming it as a keyword arg has
+// no way to reach the earlier one.
+fn check_params_are_distinct(
+	syms: &Interner,
+	sources: &Sources,
+	span: Span,
+	params: &[Param],
+) -> Result<(), Error> {
+	let mut seen = HashSet::new();
+	for param in params {
+		if !seen.insert(param.name) {
+			return Err(Error::DuplicateParam(
+				sources.loc(span),
+				syms.resolve(param.name).to_string(),
+			));
+		}
+	}
+	Ok(())
+}
+
 // Ensure that required params precede optional ones. This is a load-bearing
 // invariant for virtually all arg/param handling.
-pub fn check_required_precede_optional(
+fn check_required_precede_optional(
 	syms: &Interner,
 	sources: &Sources,
 	span: Span,

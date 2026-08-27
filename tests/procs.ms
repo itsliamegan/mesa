@@ -284,3 +284,10 @@ needs()
 #! runtime error: type Num is not invokable
 
 $print(&1)
+
+#---
+
+#! semantic error: duplicate param 'amount'
+
+def total(amount, amount)
+end

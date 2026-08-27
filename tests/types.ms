@@ -134,3 +134,139 @@ Task(1).close
 #! runtime error: type Char cannot be constructed
 
 Char()
+
+#---
+
+#! semantic error: type 'Task' declares member 'priority' more than once
+
+type Task
+	priority := 0
+	priority := 1
+end
+
+#---
+
+#! semantic error: type 'Task' declares member 'priority' more than once
+
+type Task
+	priority := 0
+
+	def priority
+		1
+	end
+end
+
+#---
+
+#! semantic error: type 'Task' declares member 'priority' more than once
+
+type Task(priority)
+	priority := 0
+end
+
+#---
+
+#! semantic error: type 'Task' declares member 'priority' more than once
+
+type Task(priority)
+	def priority
+		1
+	end
+end
+
+#---
+
+#! semantic error: type 'Task' declares member 'close' more than once
+
+type Task
+	def close
+		1
+	end
+
+	def close
+		2
+	end
+end
+
+#---
+
+#! semantic error: type 'Task' declares member 'urgent' more than once
+
+type Task
+	def self.urgent
+		1
+	end
+
+	def self.urgent
+		2
+	end
+end
+
+#---
+
+#! semantic error: type 'Transaction' declares member 'Void' more than once
+
+type Transaction
+	case Void
+	end
+
+	case Void
+	end
+end
+
+#---
+
+#! semantic error: type 'Transaction' declares member 'Void' more than once
+
+type Transaction
+	case Void
+	end
+
+	type Void
+	end
+end
+
+#---
+
+#! semantic error: duplicate param 'priority'
+
+type Task(priority, priority)
+end
+
+#---
+
+#! semantic error: duplicate param 'priority'
+
+type Task
+	def close(priority, priority)
+	end
+end
+
+#---
+
+#! semantic error: duplicate param 'priority'
+
+type Task
+	def self.at(priority, priority)
+	end
+end
+
+#---
+
+#> 1
+#> 2
+
+# An instance member and a static are separate namespaces, so one name can
+# serve both.
+type Task
+	def priority
+		1
+	end
+
+	def self.priority
+		2
+	end
+end
+
+$print(Task().priority)
+$print(Task.priority)
