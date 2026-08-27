@@ -13,6 +13,11 @@ proto Order
 end
 
 extern type Counter impl Order
+	extern def count end
+	extern def bump end
+	extern def order(other) end
+	extern def self.zero end
+
 	def bump_by(n)
 		i := 0
 		loop do

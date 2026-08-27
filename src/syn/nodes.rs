@@ -135,6 +135,7 @@ pub enum TypeItem {
 	Field(Field),
 	Type(Type),
 	Method(Method),
+	Extern(ExternMethod),
 }
 
 #[derive(Debug)]
@@ -147,6 +148,21 @@ pub struct Field {
 pub enum Method {
 	Instance(Def),
 	Static(Def),
+}
+
+// A native member of an 'extern type', named in mesa source but implemented in
+// Rust. It has no body to carry: the declaration says only that the member
+// exists and what it takes.
+#[derive(Debug)]
+pub enum ExternMethod {
+	Instance(ExternDef),
+	Static(ExternDef),
+}
+
+#[derive(Debug)]
+pub struct ExternDef {
+	pub name: Sym,
+	pub params: Vec<Param>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]

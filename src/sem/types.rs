@@ -9,7 +9,8 @@ use crate::sem::{Error, check_required_precede_optional};
 use crate::src::{Sources, Span};
 use crate::syn::Chunks;
 use crate::syn::nodes::{
-	Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem, TypeItemId,
+	Expr, ExprId, ExternDef, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem,
+	TypeItemId,
 };
 use crate::syn::{self, Chunk, ChunkId};
 
@@ -449,6 +450,9 @@ fn describe_type(
 				statics.insert(def.name, Static::Proc(chunk_id, *item_id));
 				static_spans.insert(def.name, item_span);
 			}
+			// Only an 'extern type' body can declare a native member; the
+			// parser has no way to reach this from a plain 'type'.
+			TypeItem::Extern(..) => panic!(),
 		}
 	}
 
@@ -553,6 +557,7 @@ fn describe_type(
 				statics.insert(inner.name, Static::Type(inner_id));
 			}
 			TypeItem::Method(..) => {}
+			TypeItem::Extern(..) => panic!(),
 		}
 	}
 
@@ -618,15 +623,12 @@ fn describe_extern(
 	let mut declared = HashMap::new();
 	let mut statics = HashMap::new();
 	let mut static_spans: HashMap<Sym, Span> = HashMap::new();
-	for name in native.members.keys() {
-		declared.insert(*name, MemberSite::Native);
-	}
-	for name in native.statics.keys() {
-		statics.insert(*name, Static::Native);
-		static_spans.insert(*name, span);
-	}
 
-	// A user method and a native method cannot share names; only one can win.
+	// Every member of an extern type is declared in its own body, natively
+	// implemented or not, so a declaration displacing another is a duplicate
+	// whichever kinds the two are. Members and statics keep separate maps and
+	// so are separate namespaces: a name taken in one is still free in the
+	// other.
 	for item_id in &extern_.items {
 		let item_span = chunk.get_type_item_span(*item_id);
 		let (name, claimed) = match chunk.get_type_item(*item_id) {
@@ -643,6 +645,33 @@ fn describe_extern(
 				static_spans.insert(def.name, item_span);
 				(def.name, claimed)
 			}
+			syn::nodes::TypeItem::Extern(syn::nodes::ExternMethod::Instance(def)) => {
+				check_native_signature(
+					syms,
+					sources,
+					&native.members,
+					extern_.name,
+					def,
+					item_span,
+					errs,
+				);
+				let claimed = declared.insert(def.name, MemberSite::Native).is_some();
+				(def.name, claimed)
+			}
+			syn::nodes::TypeItem::Extern(syn::nodes::ExternMethod::Static(def)) => {
+				check_native_signature(
+					syms,
+					sources,
+					&native.statics,
+					extern_.name,
+					def,
+					item_span,
+					errs,
+				);
+				let claimed = statics.insert(def.name, Static::Native).is_some();
+				static_spans.insert(def.name, item_span);
+				(def.name, claimed)
+			}
 			_ => panic!(),
 		};
 		if claimed {
@@ -652,6 +681,31 @@ fn describe_extern(
 				syms.resolve(name).to_string(),
 			));
 		}
+	}
+
+	// The registration is the source of truth for what a member does, and the
+	// declaration for whether it exists; an implementation the body does not
+	// name is reachable from no mesa source. Reported at the type, which is
+	// the only span there is — the registration has none.
+	for name in native.members.keys() {
+		if let Some(MemberSite::Native) = declared.get(name) {
+			continue;
+		}
+		errs.push(Error::UndeclaredNativeMember(
+			sources.loc(span),
+			syms.resolve(extern_.name).to_string(),
+			syms.resolve(*name).to_string(),
+		));
+	}
+	for name in native.statics.keys() {
+		if let Some(Static::Native) = statics.get(name) {
+			continue;
+		}
+		errs.push(Error::UndeclaredNativeMember(
+			sources.loc(span),
+			syms.resolve(extern_.name).to_string(),
+			syms.resolve(*name).to_string(),
+		));
 	}
 
 	let acquired = acquire_members(
@@ -941,15 +995,43 @@ fn signatures_agree(
 // signature. Arity, param names, and the existence of defaults must match.
 // Default *values* are not compared, because they can be backed by an arbitrary
 // Rust function.
-fn native_signature_agrees(proto: &[Param], native: &[NativeParam]) -> bool {
-	if proto.len() != native.len() {
+// Check one 'extern def' against the registration it names: the member must be
+// implemented, and the params it declares must agree with the implementation's.
+fn check_native_signature(
+	syms: &Interner,
+	sources: &Sources,
+	native: &HashMap<Sym, Vec<NativeParam>>,
+	type_name: Sym,
+	def: &ExternDef,
+	span: Span,
+	errs: &mut Vec<Error>,
+) {
+	let Some(params) = native.get(&def.name) else {
+		errs.push(Error::UnimplementedExternMember(
+			sources.loc(span),
+			syms.resolve(type_name).to_string(),
+			syms.resolve(def.name).to_string(),
+		));
+		return;
+	};
+	if !native_signature_agrees(&def.params, params) {
+		errs.push(Error::ExternSignatureMismatch(
+			sources.loc(span),
+			syms.resolve(type_name).to_string(),
+			syms.resolve(def.name).to_string(),
+		));
+	}
+}
+
+fn native_signature_agrees(declared: &[Param], native: &[NativeParam]) -> bool {
+	if declared.len() != native.len() {
 		return false;
 	}
-	for (proto_param, param) in proto.iter().zip(native) {
-		if proto_param.name != param.name {
+	for (declared_param, param) in declared.iter().zip(native) {
+		if declared_param.name != param.name {
 			return false;
 		}
-		if proto_param.default.is_some() != param.has_default {
+		if declared_param.default.is_some() != param.has_default {
 			return false;
 		}
 	}

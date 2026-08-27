@@ -230,7 +230,11 @@ impl<'src> Parser<'src> {
 		let impls = self.parse_impl_line()?;
 		let mut items = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
-			items.push(self.parse_method_decl()?);
+			items.push(match self.tag() {
+				TokenTag::Extern => self.parse_extern_method_decl()?,
+				TokenTag::Def => self.parse_method_decl()?,
+				_ => return Err(self.unexpected()),
+			});
 		}
 		self.take(TokenTag::End)?;
 		let item = ModuleItem::Extern(Extern { name, impls, items });
@@ -281,7 +285,9 @@ impl<'src> Parser<'src> {
 					}
 					seen_field = true;
 				}
-				TypeItem::Type(..) | TypeItem::Method(..) => seen_method = true,
+				TypeItem::Type(..) | TypeItem::Method(..) | TypeItem::Extern(..) => {
+					seen_method = true
+				}
 			}
 			items.push(item_id);
 		}
@@ -343,6 +349,33 @@ impl<'src> Parser<'src> {
 			Method::Instance(def)
 		};
 		let item = TypeItem::Method(method);
+		let item_id = self.chunk.add_type_item(tok.into(), item);
+		Ok(item_id)
+	}
+
+	// A native member declaration. It takes no body block at all rather than
+	// taking and discarding an empty one, so that 'ExternDef' has no body field
+	// downstream consumers would have to ignore.
+	fn parse_extern_method_decl(&mut self) -> Result<TypeItemId, Error> {
+		let tok = self.take(TokenTag::Extern)?;
+		self.take(TokenTag::Def)?;
+		let is_static = self.tag() == TokenTag::Self_;
+		let name = if is_static {
+			self.take(TokenTag::Self_)?;
+			self.take(TokenTag::Dot)?;
+			self.take(TokenTag::Ident)?.sym.unwrap()
+		} else {
+			self.take(TokenTag::Ident)?.sym.unwrap()
+		};
+		let params = self.parse_params()?;
+		self.take(TokenTag::End)?;
+		let def = ExternDef { name, params };
+		let method = if is_static {
+			ExternMethod::Static(def)
+		} else {
+			ExternMethod::Instance(def)
+		};
+		let item = TypeItem::Extern(method);
 		let item_id = self.chunk.add_type_item(tok.into(), item);
 		Ok(item_id)
 	}

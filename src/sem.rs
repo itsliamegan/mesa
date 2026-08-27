@@ -29,6 +29,9 @@ pub enum Error {
 	MemberCollision(Location, String, String, String),
 	NativeMemberCollision(Location, String, String),
 	UnimplementedExtern(Location, String),
+	UndeclaredNativeMember(Location, String, String),
+	UnimplementedExternMember(Location, String, String),
+	ExternSignatureMismatch(Location, String, String),
 	ProtocolReach(Location, String, String),
 	MissingModuleHeader(Location),
 	DuplicateModuleHeader(Location),
@@ -59,6 +62,9 @@ impl Error {
 			Self::MemberCollision(loc, ..) => loc,
 			Self::NativeMemberCollision(loc, ..) => loc,
 			Self::UnimplementedExtern(loc, _) => loc,
+			Self::UndeclaredNativeMember(loc, ..) => loc,
+			Self::UnimplementedExternMember(loc, ..) => loc,
+			Self::ExternSignatureMismatch(loc, ..) => loc,
 			Self::ProtocolReach(loc, ..) => loc,
 			Self::MissingModuleHeader(loc) => loc,
 			Self::DuplicateModuleHeader(loc) => loc,
@@ -129,12 +135,33 @@ impl Display for Error {
 			Self::NativeMemberCollision(_, name, member) => {
 				write!(
 					f,
-					"member '{}' of extern type '{}' is already implemented natively",
+					"member '{}' of extern type '{}' is declared more than once",
 					member, name
 				)
 			}
 			Self::UnimplementedExtern(_, name) => {
 				write!(f, "extern type '{}' has no native implementation", name)
+			}
+			Self::UndeclaredNativeMember(_, name, member) => {
+				write!(
+					f,
+					"member '{}' of extern type '{}' is implemented natively but not declared",
+					member, name
+				)
+			}
+			Self::UnimplementedExternMember(_, name, member) => {
+				write!(
+					f,
+					"member '{}' of extern type '{}' has no native implementation",
+					member, name
+				)
+			}
+			Self::ExternSignatureMismatch(_, name, member) => {
+				write!(
+					f,
+					"member '{}' of extern type '{}' does not match its native implementation",
+					member, name
+				)
 			}
 			Self::ProtocolReach(_, proto, member) => {
 				write!(
@@ -243,7 +270,10 @@ fn check_chunk(
 		let def = match chunk.get_type_item(item_id) {
 			TypeItem::Method(Method::Instance(def)) => def,
 			TypeItem::Method(Method::Static(def)) => def,
-			TypeItem::Case(..) | TypeItem::Field(..) | TypeItem::Type(..) => continue,
+			TypeItem::Case(..)
+			| TypeItem::Field(..)
+			| TypeItem::Type(..)
+			| TypeItem::Extern(..) => continue,
 		};
 		let span = chunk.get_type_item_span(item_id);
 		if let Err(err) = check_def(syms, sources, chunk, span, def) {
