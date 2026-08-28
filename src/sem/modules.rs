@@ -512,7 +512,7 @@ fn check_members_unique(
 				ModuleItem::Type(type_) => (type_.name, Member::Type(*item_id)),
 				ModuleItem::Extern(extern_) => (extern_.name, Member::Type(*item_id)),
 				ModuleItem::Proto(proto) => (proto.name, Member::Proto(*item_id)),
-				ModuleItem::Def(def) => (def.name, Member::Proc(*item_id)),
+				ModuleItem::Def(def_id) => (chunk.get_def(*def_id).name, Member::Proc(*item_id)),
 				// A second 'x := ...' is reassignment, not redeclaration; a
 				// binding claims its key only if nothing holds it, and names
 				// the declaration that first claimed it.

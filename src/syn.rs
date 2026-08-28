@@ -129,7 +129,8 @@ pub struct Chunk {
 	pub top: Vec<ModuleItemId>,
 	module_items: Nodes<ModuleItem, ModuleItemId>,
 	type_items: Nodes<TypeItem, TypeItemId>,
-	proto_items: Nodes<ProtoItem, ProtoItemId>,
+	extern_items: Nodes<ExternItem, ExternItemId>,
+	defs: Nodes<Def, DefId>,
 	exprs: Nodes<Expr, ExprId>,
 	blocks: Vec<Block>,
 }
@@ -141,7 +142,8 @@ impl Chunk {
 			top: Vec::new(),
 			module_items: Nodes::new(),
 			type_items: Nodes::new(),
-			proto_items: Nodes::new(),
+			extern_items: Nodes::new(),
+			defs: Nodes::new(),
 			exprs: Nodes::new(),
 			blocks: Vec::new(),
 		}
@@ -177,22 +179,32 @@ impl Chunk {
 		(0..self.type_items.len()).map(TypeItemId::from_index)
 	}
 
-	pub fn get_proto_item(&self, item_id: ProtoItemId) -> &ProtoItem {
-		self.proto_items.get(item_id)
+	pub fn get_extern_item(&self, item_id: ExternItemId) -> &ExternItem {
+		self.extern_items.get(item_id)
 	}
 
-	pub fn get_proto_item_span(&self, item_id: ProtoItemId) -> Span {
-		self.proto_items.get_span(item_id)
+	pub fn get_extern_item_span(&self, item_id: ExternItemId) -> Span {
+		self.extern_items.get_span(item_id)
 	}
 
-	pub fn add_proto_item(&mut self, span: Span, item: ProtoItem) -> ProtoItemId {
-		self.proto_items.add(span, item)
+	pub fn add_extern_item(&mut self, span: Span, item: ExternItem) -> ExternItemId {
+		self.extern_items.add(span, item)
 	}
 
-	// Every protocol item in the chunk, across every protocol it declares, in
-	// the order they were added.
-	pub fn proto_item_ids(&self) -> impl ExactSizeIterator<Item = ProtoItemId> {
-		(0..self.proto_items.len()).map(ProtoItemId::from_index)
+	pub fn get_def(&self, def_id: DefId) -> &Def {
+		self.defs.get(def_id)
+	}
+
+	pub fn get_def_span(&self, def_id: DefId) -> Span {
+		self.defs.get_span(def_id)
+	}
+
+	pub fn add_def(&mut self, span: Span, def: Def) -> DefId {
+		self.defs.add(span, def)
+	}
+
+	pub fn def_ids(&self) -> impl ExactSizeIterator<Item = DefId> {
+		(0..self.defs.len()).map(DefId::from_index)
 	}
 
 	pub fn get_expr(&self, expr_id: ExprId) -> &Expr {

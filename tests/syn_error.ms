@@ -15,6 +15,10 @@
 #! src/call_as_case.ms:5,14: syntax error: unexpected token LPAREN
 #! src/extern_field.ms:2,2: syntax error: unexpected token IDENT
 #! src/extern_ctor.ms:1,20: syntax error: unexpected token LPAREN
+#! src/extern_def_body.ms:3,3: syntax error: unexpected token NUM
+#! src/extern_def_outside.ms:2,2: syntax error: unexpected token EXTERN
+#! src/extern_case.ms:2,2: syntax error: unexpected token CASE
+#! src/extern_nested_type.ms:2,2: syntax error: unexpected token TYPE
 
 #:positional_after_keyword.ms
 def add(a, b)
@@ -94,4 +98,26 @@ end
 
 #:extern_ctor.ms
 extern type Counter(step)
+end
+
+#:extern_def_body.ms
+extern type Counter
+	extern def count
+		1
+	end
+end
+
+#:extern_def_outside.ms
+type Tally
+	extern def count end
+end
+
+#:extern_case.ms
+extern type Counter
+	case Zero end
+end
+
+#:extern_nested_type.ms
+extern type Counter
+	type Inner end
 end

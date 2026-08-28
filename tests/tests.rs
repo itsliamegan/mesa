@@ -23,16 +23,16 @@ test_files! {
 	test_str => "str.ms",
 	test_list => "list.ms",
 	test_dict => "dict.ms",
-	test_types => "types.ms",
+	test_type => "type.ms",
 	test_control_flow => "control_flow.ms",
 	test_errors => "errors.ms",
 	test_scope => "scope.ms",
-	test_reports_syntax_errors => "syn_errors.ms",
-	test_procs => "procs.ms",
-	test_case_types => "case_types.ms",
-	test_protocols => "protocols.ms",
-	test_externs => "extern.ms",
-	test_modules => "modules.ms",
+	test_reports_syntax_errors => "syn_error.ms",
+	test_proc => "proc.ms",
+	test_case_type => "case_type.ms",
+	test_proto => "proto.ms",
+	test_extern => "extern.ms",
+	test_module => "module.ms",
 }
 
 fn make_test_dir() -> PathBuf {

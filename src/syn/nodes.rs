@@ -63,7 +63,7 @@ pub enum ModuleItem {
 	Type(Type),
 	Extern(Extern),
 	Proto(Proto),
-	Def(Def),
+	Def(DefId),
 	Expr(ExprId),
 }
 
@@ -94,13 +94,26 @@ pub struct Type {
 pub struct Extern {
 	pub name: Sym,
 	pub impls: Vec<Vec<Sym>>,
-	pub items: Vec<TypeItemId>,
+	pub items: Vec<ExternItemId>,
 }
 
 #[derive(Debug)]
 pub struct Proto {
 	pub name: Sym,
-	pub items: Vec<ProtoItemId>,
+	pub items: Vec<DefId>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct DefId(u32);
+
+impl NodeId for DefId {
+	fn from_index(index: usize) -> Self {
+		Self(index as u32)
+	}
+
+	fn index(&self) -> usize {
+		self.0 as usize
+	}
 }
 
 #[derive(Debug)]
@@ -135,7 +148,6 @@ pub enum TypeItem {
 	Field(Field),
 	Type(Type),
 	Method(Method),
-	Extern(ExternMethod),
 }
 
 #[derive(Debug)]
@@ -146,29 +158,14 @@ pub struct Field {
 
 #[derive(Debug)]
 pub enum Method {
-	Instance(Def),
-	Static(Def),
+	Instance(DefId),
+	Static(DefId),
 }
 
-// A native member of an 'extern type', named in mesa source but implemented in
-// Rust. It has no body to carry: the declaration says only that the member
-// exists and what it takes.
-#[derive(Debug)]
-pub enum ExternMethod {
-	Instance(ExternDef),
-	Static(ExternDef),
-}
+#[derive(Debug, Clone, Copy)]
+pub struct ExternItemId(u32);
 
-#[derive(Debug)]
-pub struct ExternDef {
-	pub name: Sym,
-	pub params: Vec<Param>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
-pub struct ProtoItemId(u32);
-
-impl NodeId for ProtoItemId {
+impl NodeId for ExternItemId {
 	fn from_index(index: usize) -> Self {
 		Self(index as u32)
 	}
@@ -178,9 +175,14 @@ impl NodeId for ProtoItemId {
 	}
 }
 
+// An item of an 'extern type' body: a mesa-defined method, or one named here
+// but implemented in Rust. Both hold a 'Method' — the variant is the only
+// distinction, since a native def is a 'Def' like any other, with a synthetic
+// empty body standing in for the implementation this declaration only names.
 #[derive(Debug)]
-pub struct ProtoItem {
-	pub def: Def,
+pub enum ExternItem {
+	User(Method),
+	Native(Method),
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -232,7 +232,7 @@ impl<'src> Parser<'src> {
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			items.push(match self.tag() {
 				TokenTag::Extern => self.parse_extern_method_decl()?,
-				TokenTag::Def => self.parse_method_decl()?,
+				TokenTag::Def => self.parse_extern_user_method_decl()?,
 				_ => return Err(self.unexpected()),
 			});
 		}
@@ -285,9 +285,7 @@ impl<'src> Parser<'src> {
 					}
 					seen_field = true;
 				}
-				TypeItem::Type(..) | TypeItem::Method(..) | TypeItem::Extern(..) => {
-					seen_method = true
-				}
+				TypeItem::Type(..) | TypeItem::Method(..) => seen_method = true,
 			}
 			items.push(item_id);
 		}
@@ -326,7 +324,10 @@ impl<'src> Parser<'src> {
 		Ok(item_id)
 	}
 
-	fn parse_method_decl(&mut self) -> Result<TypeItemId, Error> {
+	// The 'def name(params) ... end' shape shared by a type's method and an
+	// extern body's mesa-implemented member; only which arena and item enum
+	// the result lands in differs between the two.
+	fn parse_method(&mut self) -> Result<(Token, Method), Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let is_static = self.tag() == TokenTag::Self_;
 		let name = if is_static {
@@ -343,20 +344,32 @@ impl<'src> Parser<'src> {
 			params,
 			body: block,
 		};
+		let def_id = self.chunk.add_def(tok.into(), def);
 		let method = if is_static {
-			Method::Static(def)
+			Method::Static(def_id)
 		} else {
-			Method::Instance(def)
+			Method::Instance(def_id)
 		};
-		let item = TypeItem::Method(method);
-		let item_id = self.chunk.add_type_item(tok.into(), item);
-		Ok(item_id)
+		Ok((tok, method))
 	}
 
-	// A native member declaration. It takes no body block at all rather than
-	// taking and discarding an empty one, so that 'ExternDef' has no body field
-	// downstream consumers would have to ignore.
-	fn parse_extern_method_decl(&mut self) -> Result<TypeItemId, Error> {
+	fn parse_method_decl(&mut self) -> Result<TypeItemId, Error> {
+		let (tok, method) = self.parse_method()?;
+		let item = TypeItem::Method(method);
+		Ok(self.chunk.add_type_item(tok.into(), item))
+	}
+
+	fn parse_extern_user_method_decl(&mut self) -> Result<ExternItemId, Error> {
+		let (tok, method) = self.parse_method()?;
+		let item = ExternItem::User(method);
+		Ok(self.chunk.add_extern_item(tok.into(), item))
+	}
+
+	// A native member declaration. It takes no body block at all; the parser
+	// still rejects one at the first token it would otherwise start, but
+	// synthesizes an empty block afterward so the member is an ordinary 'Def',
+	// like any other, with nothing for a downstream consumer to special-case.
+	fn parse_extern_method_decl(&mut self) -> Result<ExternItemId, Error> {
 		let tok = self.take(TokenTag::Extern)?;
 		self.take(TokenTag::Def)?;
 		let is_static = self.tag() == TokenTag::Self_;
@@ -369,15 +382,16 @@ impl<'src> Parser<'src> {
 		};
 		let params = self.parse_params()?;
 		self.take(TokenTag::End)?;
-		let def = ExternDef { name, params };
+		let body = self.chunk.add_block(Block { exprs: Vec::new() });
+		let def = Def { name, params, body };
+		let def_id = self.chunk.add_def(tok.into(), def);
 		let method = if is_static {
-			ExternMethod::Static(def)
+			Method::Static(def_id)
 		} else {
-			ExternMethod::Instance(def)
+			Method::Instance(def_id)
 		};
-		let item = TypeItem::Extern(method);
-		let item_id = self.chunk.add_type_item(tok.into(), item);
-		Ok(item_id)
+		let item = ExternItem::Native(method);
+		Ok(self.chunk.add_extern_item(tok.into(), item))
 	}
 
 	fn parse_proto_decl(&mut self) -> Result<ModuleItemId, Error> {
@@ -394,20 +408,17 @@ impl<'src> Parser<'src> {
 		Ok(item_id)
 	}
 
-	fn parse_proto_item(&mut self) -> Result<ProtoItemId, Error> {
+	fn parse_proto_item(&mut self) -> Result<DefId, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let params = self.parse_params()?;
 		let block = self.parse_body_block()?;
-		let item = ProtoItem {
-			def: Def {
-				name,
-				params,
-				body: block,
-			},
+		let def = Def {
+			name,
+			params,
+			body: block,
 		};
-		let item_id = self.chunk.add_proto_item(tok.into(), item);
-		Ok(item_id)
+		Ok(self.chunk.add_def(tok.into(), def))
 	}
 
 	fn parse_def_decl(&mut self) -> Result<ModuleItemId, Error> {
@@ -415,11 +426,13 @@ impl<'src> Parser<'src> {
 		let name = self.take(TokenTag::Ident)?.sym.unwrap();
 		let params = self.parse_params()?;
 		let block = self.parse_body_block()?;
-		let item = ModuleItem::Def(Def {
+		let def = Def {
 			name,
 			params,
 			body: block,
-		});
+		};
+		let def_id = self.chunk.add_def(tok.into(), def);
+		let item = ModuleItem::Def(def_id);
 		let item_id = self.chunk.add_module_item(tok.into(), item);
 		Ok(item_id)
 	}

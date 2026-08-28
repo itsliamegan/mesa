@@ -11,8 +11,8 @@ use crate::rt::pkg::Packages;
 use crate::rt::scope::Scopes;
 use crate::rt::val::{Bool, Char, Dict, List, Nil, Num, Obj, Proc, Str, Val};
 use crate::sem::types::{self, MemberSite};
-use crate::syn::nodes::{TypeItem, TypeItemId};
-use crate::syn::{self, ChunkId};
+use crate::syn::ChunkId;
+use crate::syn::nodes::DefId;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum TypeId {
@@ -360,8 +360,8 @@ impl<'descs> Types<'descs> {
 				let static_ = match static_ {
 					types::Static::Type(id) => Static::Type(*id),
 					types::Static::Native => panic!(),
-					types::Static::Proc(chunk_id, item_id) => {
-						Static::Proc(build_static_proc(pkg_id, pkg, scopes, *chunk_id, *item_id))
+					types::Static::Proc(chunk_id, def_id) => {
+						Static::Proc(build_static_proc(pkg_id, pkg, scopes, *chunk_id, *def_id))
 					}
 				};
 				statics.insert(*name, static_);
@@ -431,8 +431,8 @@ pub fn add_extern_members<'descs>(
 				// An extern body admits no case or inner type declarations.
 				types::Static::Type(_) => panic!(),
 				types::Static::Native => continue,
-				types::Static::Proc(chunk_id, item_id) => {
-					build_static_proc(pkg_id, pkg, scopes, *chunk_id, *item_id)
+				types::Static::Proc(chunk_id, def_id) => {
+					build_static_proc(pkg_id, pkg, scopes, *chunk_id, *def_id)
 				}
 			};
 			statics.insert(*name, NativeMember::User(proc_rf));
@@ -446,8 +446,8 @@ pub fn add_extern_members<'descs>(
 }
 
 // Build the proc a member resolves to. A member declared by the type reads
-// off its own item; one acquired from a protocol reads off the protocol's,
-// in whichever chunk that protocol was written.
+// off its own chunk; one acquired from a protocol reads off the protocol's,
+// in whichever chunk and package that protocol was written.
 fn build_member_proc<'descs>(
 	pkgs: &Packages<'descs>,
 	pkg_id: PackageId,
@@ -455,49 +455,32 @@ fn build_member_proc<'descs>(
 	scopes: &Scopes,
 	site: MemberSite,
 ) -> Rc<RefCell<Proc>> {
-	match site {
-		MemberSite::Declared(chunk_id, item_id) => {
-			// Protocols don't involve static methods; assert that this is an
-			// instance method.
-			let TypeItem::Method(syn::nodes::Method::Instance(def)) =
-				pkg.chunks.get(chunk_id).get_type_item(item_id)
-			else {
-				panic!()
-			};
-			Rc::new(RefCell::new(Proc {
-				name: def.name,
-				params: def.params.to_vec(),
-				body: def.body,
-				pkg: pkg_id,
-				chunk: chunk_id,
-				scope: scopes.module(chunk_id),
-			}))
-		}
-		MemberSite::Provided(site_pkg, chunk_id, item_id) => {
-			// The protocol may belong to another package, whose arenas are the
-			// only place its body can be read from; the package being built is
-			// not in 'pkgs' yet, so it supplies its own. The body is written in
-			// the protocol's file and may reference names bound there, so it
-			// closes over that module's scope, not the implementing type's.
-			let (chunks, scope) = match site_pkg == pkg_id {
-				true => (&pkg.chunks, scopes.module(chunk_id)),
-				false => (
-					&pkgs.desc(site_pkg).chunks,
-					pkgs.get(site_pkg).mods.scope(chunk_id),
-				),
-			};
-			let item = chunks.get(chunk_id).get_proto_item(item_id);
-			Rc::new(RefCell::new(Proc {
-				name: item.def.name,
-				params: item.def.params.to_vec(),
-				body: item.def.body,
-				pkg: site_pkg,
-				chunk: chunk_id,
-				scope,
-			}))
-		}
+	let (site_pkg, chunk_id, def_id) = match site {
+		MemberSite::Declared(chunk_id, def_id) => (pkg_id, chunk_id, def_id),
+		MemberSite::Provided(site_pkg, chunk_id, def_id) => (site_pkg, chunk_id, def_id),
 		MemberSite::Native => panic!(),
-	}
+	};
+	// The protocol may belong to another package, whose arenas are the only
+	// place its body can be read from; the package being built is not in
+	// 'pkgs' yet, so it supplies its own. The body is written in the
+	// protocol's file and may reference names bound there, so it closes over
+	// that module's scope, not the implementing type's.
+	let (chunks, scope) = match site_pkg == pkg_id {
+		true => (&pkg.chunks, scopes.module(chunk_id)),
+		false => (
+			&pkgs.desc(site_pkg).chunks,
+			pkgs.get(site_pkg).mods.scope(chunk_id),
+		),
+	};
+	let def = chunks.get(chunk_id).get_def(def_id);
+	Rc::new(RefCell::new(Proc {
+		name: def.name,
+		params: def.params.to_vec(),
+		body: def.body,
+		pkg: site_pkg,
+		chunk: chunk_id,
+		scope,
+	}))
 }
 
 fn build_static_proc(
@@ -505,13 +488,9 @@ fn build_static_proc(
 	pkg: &Package,
 	scopes: &Scopes,
 	chunk_id: ChunkId,
-	item_id: TypeItemId,
+	def_id: DefId,
 ) -> Rc<RefCell<Proc>> {
-	let TypeItem::Method(syn::nodes::Method::Static(def)) =
-		pkg.chunks.get(chunk_id).get_type_item(item_id)
-	else {
-		panic!()
-	};
+	let def = pkg.chunks.get(chunk_id).get_def(def_id);
 	Rc::new(RefCell::new(Proc {
 		name: def.name,
 		params: def.params.to_vec(),

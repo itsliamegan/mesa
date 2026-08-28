@@ -8,10 +8,7 @@ use crate::sem::modules::{Member, ModuleId, Modules, Resolved};
 use crate::sem::{Error, check_params};
 use crate::src::{Sources, Span};
 use crate::syn::Chunks;
-use crate::syn::nodes::{
-	Expr, ExprId, ExternDef, Lit, ModuleItem, ModuleItemId, Param, ProtoItemId, TypeItem,
-	TypeItemId,
-};
+use crate::syn::nodes::{Def, DefId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, TypeItem};
 use crate::syn::{self, Chunk, ChunkId};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -60,11 +57,10 @@ pub struct Types {
 	// Where a protocol's declaration lives, so an 'impl' name resolved through
 	// the module map arrives at the description built for it.
 	proto_by_item: HashMap<(ChunkId, ModuleItemId), ProtoId>,
-	// Which protocol a proto item belongs to, so a flat walk over a chunk's
-	// 'proto_items' arena (which does not itself know which 'ModuleItem::Proto'
-	// grouped it) can still name the protocol and look up whether the item is
-	// required or provided.
-	proto_by_proto_item: HashMap<(ChunkId, ProtoItemId), ProtoId>,
+	// Which protocol a proto item's def belongs to, so a walk that reaches a
+	// def without going through its declaring 'Proto' can still name the
+	// protocol and look up whether the item is required or provided.
+	proto_by_proto_item: HashMap<(ChunkId, DefId), ProtoId>,
 }
 
 #[derive(Debug)]
@@ -169,8 +165,8 @@ pub struct Proto {
 	pub name: Sym,
 	pub chunk: ChunkId,
 	pub span: Span,
-	pub required: OrderMap<Sym, ProtoItemId>,
-	pub provided: OrderMap<Sym, ProtoItemId>,
+	pub required: OrderMap<Sym, DefId>,
+	pub provided: OrderMap<Sym, DefId>,
 }
 
 // A body field's initializer. Carries a span for more precise error reporting.
@@ -188,8 +184,8 @@ pub struct Field {
 pub enum MemberSite {
 	// A type only ever declares a member in its own file, so a declared site
 	// needs no package; a provided one is read from the protocol's.
-	Declared(ChunkId, TypeItemId),
-	Provided(PackageId, ChunkId, ProtoItemId),
+	Declared(ChunkId, DefId),
+	Provided(PackageId, ChunkId, DefId),
 	// An 'extern type' member implemented in Rust. It has no chunk or item to
 	// point at: the implementation is in the native type's member map, and the
 	// declaration only names it.
@@ -204,7 +200,7 @@ pub enum Static {
 	Native,
 	// Like a declared member, a static is always written in the type's own
 	// file; protocols have no static methods to provide.
-	Proc(ChunkId, TypeItemId),
+	Proc(ChunkId, DefId),
 }
 
 // What a case variant takes from the type enclosing it. The two halves must be
@@ -246,9 +242,10 @@ impl Types {
 		self.proto_by_item[&(chunk, item_id)]
 	}
 
-	// The protocol a proto item belongs to.
-	pub fn get_proto_by_proto_item(&self, chunk: ChunkId, item_id: ProtoItemId) -> ProtoId {
-		self.proto_by_proto_item[&(chunk, item_id)]
+	// The protocol a def belongs to, if it is a proto item at all; a
+	// module-level or method def belongs to none.
+	pub fn try_get_proto_by_proto_item(&self, chunk: ChunkId, def_id: DefId) -> Option<ProtoId> {
+		self.proto_by_proto_item.get(&(chunk, def_id)).copied()
 	}
 
 	fn add_proto(&mut self, chunk: ChunkId, item_id: ModuleItemId, proto: Proto) -> ProtoId {
@@ -338,14 +335,14 @@ fn describe_proto(
 ) -> Proto {
 	let mut required = OrderMap::new();
 	let mut provided = OrderMap::new();
-	for item_id in &proto.items {
-		let item = chunk.get_proto_item(*item_id);
+	for def_id in &proto.items {
+		let def = chunk.get_def(*def_id);
 		// A proc is provided if its def block is not empty, otherwise it is
 		// required.
-		if !chunk.get_block(item.def.body).exprs.is_empty() {
-			provided.insert(item.def.name, *item_id);
+		if !chunk.get_block(def.body).exprs.is_empty() {
+			provided.insert(def.name, *def_id);
 		} else {
-			required.insert(item.def.name, *item_id);
+			required.insert(def.name, *def_id);
 		}
 	}
 	Proto {
@@ -453,18 +450,17 @@ fn describe_type(
 				static_spans.insert(inner.name, item_span);
 				(inner.name, !static_names.insert(inner.name))
 			}
-			TypeItem::Method(syn::nodes::Method::Instance(def)) => {
-				declared.insert(def.name, MemberSite::Declared(chunk_id, *item_id));
-				(def.name, !instance_names.insert(def.name))
+			TypeItem::Method(syn::nodes::Method::Instance(def_id)) => {
+				let name = chunk.get_def(*def_id).name;
+				declared.insert(name, MemberSite::Declared(chunk_id, *def_id));
+				(name, !instance_names.insert(name))
 			}
-			TypeItem::Method(syn::nodes::Method::Static(def)) => {
-				statics.insert(def.name, Static::Proc(chunk_id, *item_id));
-				static_spans.insert(def.name, item_span);
-				(def.name, !static_names.insert(def.name))
+			TypeItem::Method(syn::nodes::Method::Static(def_id)) => {
+				let name = chunk.get_def(*def_id).name;
+				statics.insert(name, Static::Proc(chunk_id, *def_id));
+				static_spans.insert(name, item_span);
+				(name, !static_names.insert(name))
 			}
-			// Only an 'extern type' body can declare a native member; the
-			// parser has no way to reach this from a plain 'type'.
-			TypeItem::Extern(..) => panic!(),
 		};
 		if duplicate {
 			errs.push(Error::DuplicateTypeMember(
@@ -576,7 +572,6 @@ fn describe_type(
 				statics.insert(inner.name, Static::Type(inner_id));
 			}
 			TypeItem::Method(..) => {}
-			TypeItem::Extern(..) => panic!(),
 		}
 	}
 
@@ -651,22 +646,25 @@ fn describe_extern(
 	// raise a second, derived complaint about the same mistake.
 	let mut collided = HashSet::new();
 	for item_id in &extern_.items {
-		let item_span = chunk.get_type_item_span(*item_id);
-		let (name, claimed) = match chunk.get_type_item(*item_id) {
-			syn::nodes::TypeItem::Method(syn::nodes::Method::Instance(def)) => {
+		let item_span = chunk.get_extern_item_span(*item_id);
+		let (name, claimed) = match chunk.get_extern_item(*item_id) {
+			syn::nodes::ExternItem::User(syn::nodes::Method::Instance(def_id)) => {
+				let name = chunk.get_def(*def_id).name;
 				let claimed = declared
-					.insert(def.name, MemberSite::Declared(chunk_id, *item_id))
+					.insert(name, MemberSite::Declared(chunk_id, *def_id))
 					.is_some();
-				(def.name, claimed)
+				(name, claimed)
 			}
-			syn::nodes::TypeItem::Method(syn::nodes::Method::Static(def)) => {
+			syn::nodes::ExternItem::User(syn::nodes::Method::Static(def_id)) => {
+				let name = chunk.get_def(*def_id).name;
 				let claimed = statics
-					.insert(def.name, Static::Proc(chunk_id, *item_id))
+					.insert(name, Static::Proc(chunk_id, *def_id))
 					.is_some();
-				static_spans.insert(def.name, item_span);
-				(def.name, claimed)
+				static_spans.insert(name, item_span);
+				(name, claimed)
 			}
-			syn::nodes::TypeItem::Extern(syn::nodes::ExternMethod::Instance(def)) => {
+			syn::nodes::ExternItem::Native(syn::nodes::Method::Instance(def_id)) => {
+				let def = chunk.get_def(*def_id);
 				check_native_signature(
 					syms,
 					sources,
@@ -679,7 +677,8 @@ fn describe_extern(
 				let claimed = declared.insert(def.name, MemberSite::Native).is_some();
 				(def.name, claimed)
 			}
-			syn::nodes::TypeItem::Extern(syn::nodes::ExternMethod::Static(def)) => {
+			syn::nodes::ExternItem::Native(syn::nodes::Method::Static(def_id)) => {
+				let def = chunk.get_def(*def_id);
 				check_native_signature(
 					syms,
 					sources,
@@ -693,7 +692,6 @@ fn describe_extern(
 				static_spans.insert(def.name, item_span);
 				(def.name, claimed)
 			}
-			_ => panic!(),
 		};
 		if claimed {
 			collided.insert(name);
@@ -908,8 +906,7 @@ fn acquire_members(
 			.iter()
 			.map(|(member, item)| (member, item, true));
 		for (member, item_id, provided) in required.chain(provided) {
-			let item = proto_chunk.get_proto_item(*item_id);
-			let def = &item.def;
+			let def = proto_chunk.get_def(*item_id);
 
 			// A required member is satisfied, or a provided one overridden, by
 			// either the type's own declaration or one it inherits from a case
@@ -925,16 +922,12 @@ fn acquire_members(
 				None
 			};
 			match own {
-				Some(MemberSite::Declared(site_chunk, site_item)) => {
+				Some(MemberSite::Declared(site_chunk, site_def)) => {
 					let site_chunk = chunks.get(*site_chunk);
-					let TypeItem::Method(syn::nodes::Method::Instance(method_def)) =
-						site_chunk.get_type_item(*site_item)
-					else {
-						panic!()
-					};
+					let method_def = site_chunk.get_def(*site_def);
 					if !signatures_agree(proto_chunk, site_chunk, &def.params, &method_def.params) {
 						errs.push(Error::SignatureMismatch(
-							sources.loc(site_chunk.get_type_item_span(*site_item)),
+							sources.loc(site_chunk.get_def_span(*site_def)),
 							syms.resolve(type_name).to_string(),
 							syms.resolve(proto.name).to_string(),
 							syms.resolve(*member).to_string(),
@@ -1028,7 +1021,7 @@ fn check_native_signature(
 	sources: &Sources,
 	native: &HashMap<Sym, Vec<NativeParam>>,
 	type_name: Sym,
-	def: &ExternDef,
+	def: &Def,
 	span: Span,
 	errs: &mut Vec<Error>,
 ) {

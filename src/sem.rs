@@ -10,8 +10,7 @@ use crate::sem::modules::{ModuleId, Modules};
 use crate::sem::types::Types;
 use crate::src::{Location, Sources, Span};
 use crate::syn::nodes::{
-	BlockId, Builtin, Def, Expr, ExprId, ExternMethod, Lit, Member, Method, ModuleItem, Param,
-	Place, TypeItem,
+	BlockId, Builtin, DefId, Expr, ExprId, Lit, Member, ModuleItem, Param, Place,
 };
 use crate::syn::{Chunk, Chunks};
 
@@ -251,62 +250,29 @@ fn check_chunk(
 	let chunk = chunks.get(chunk_id);
 	let mut errs = Vec::new();
 
-	// 'Def' has no expression-level variant so every def in the chunk is
-	// reachable as a 'ModuleItem', a 'TypeItem::Method' or a 'ProtoItem'. A
-	// flat walk over the three arenas finds all of them, once each, with no
-	// structure to descend, however deeply the type declaring one is nested.
-	for item_id in &chunk.top {
-		let span = chunk.get_module_item_span(*item_id);
-		let result = match chunk.get_module_item(*item_id) {
-			ModuleItem::Module(_) => Ok(()),
-			ModuleItem::Import(_) => Ok(()),
-			ModuleItem::Export(_) => Ok(()),
-			ModuleItem::Type(_) => Ok(()),
-			ModuleItem::Extern(_) => Ok(()),
-			ModuleItem::Proto(_) => Ok(()),
-			ModuleItem::Def(def) => check_def(syms, sources, chunk, span, def),
-			ModuleItem::Expr(expr_id) => check_expr(sources, chunk, *expr_id, 0),
-		};
-		if let Err(err) = result {
-			errs.push(err);
-		}
-	}
-
-	for item_id in chunk.type_item_ids() {
-		let span = chunk.get_type_item_span(item_id);
-		// A native member declares params like any other and answers to the
-		// same invariants; it just has no body to walk.
-		let result = match chunk.get_type_item(item_id) {
-			TypeItem::Method(Method::Instance(def)) => check_def(syms, sources, chunk, span, def),
-			TypeItem::Method(Method::Static(def)) => check_def(syms, sources, chunk, span, def),
-			TypeItem::Extern(ExternMethod::Instance(def)) => {
-				check_params(syms, sources, span, &def.params)
-			}
-			TypeItem::Extern(ExternMethod::Static(def)) => {
-				check_params(syms, sources, span, &def.params)
-			}
-			TypeItem::Case(..) | TypeItem::Field(..) | TypeItem::Type(..) => continue,
-		};
-		if let Err(err) = result {
-			errs.push(err);
-		}
-	}
-
-	// Check that none of the provided members violate standard block-level
-	// invariants or reach the implementing instance outside of the protocol's
-	// declared members.
-	for item_id in chunk.proto_item_ids() {
-		let item_span = chunk.get_proto_item_span(item_id);
-		let item = chunk.get_proto_item(item_id);
-		let def = &item.def;
-		if let Err(err) = check_def(syms, sources, chunk, item_span, def) {
+	// Every def in the chunk, module-level, method, or protocol item, in one
+	// walk. A proto item additionally checks that its provided body only
+	// reaches the implementing instance through its own protocol's declared
+	// members; a def belongs to no protocol unless the lookup below says so.
+	for def_id in chunk.def_ids() {
+		if let Err(err) = check_def(syms, sources, chunk, def_id) {
 			errs.push(err);
 			continue;
 		}
-		let proto_id = types.get_proto_by_proto_item(chunk_id, item_id);
-		let desc = types.get_proto(proto_id);
-		if desc.provided.contains_key(&def.name)
-			&& let Err(err) = check_reach_block(syms, sources, chunk, def.body, desc.name, desc)
+		if let Some(proto_id) = types.try_get_proto_by_proto_item(chunk_id, def_id) {
+			let def = chunk.get_def(def_id);
+			let desc = types.get_proto(proto_id);
+			if desc.provided.contains_key(&def.name)
+				&& let Err(err) = check_reach_block(syms, sources, chunk, def.body, desc.name, desc)
+			{
+				errs.push(err);
+			}
+		}
+	}
+
+	for item_id in &chunk.top {
+		if let ModuleItem::Expr(expr_id) = chunk.get_module_item(*item_id)
+			&& let Err(err) = check_expr(sources, chunk, *expr_id, 0)
 		{
 			errs.push(err);
 		}
@@ -475,10 +441,10 @@ fn check_def(
 	syms: &Interner,
 	sources: &Sources,
 	chunk: &Chunk,
-	span: Span,
-	def: &Def,
+	def_id: DefId,
 ) -> Result<(), Error> {
-	check_params(syms, sources, span, &def.params)?;
+	let def = chunk.get_def(def_id);
+	check_params(syms, sources, chunk.get_def_span(def_id), &def.params)?;
 	// A proc body resets the loop-depth counter. break inside a proc can't
 	// reach an outer loop, even if the proc itself is lexically nested in one.
 	check_block(sources, chunk, def.body, 0)

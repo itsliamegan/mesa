@@ -204,7 +204,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				let val = Val::Obj(Rc::new(RefCell::new(Obj::Proto(self.pkg_id, id))));
 				self.scope.borrow_mut().locals.insert(proto.name, val);
 			}
-			ModuleItem::Def(def) => {
+			ModuleItem::Def(def_id) => {
+				let def = chunk.get_def(*def_id);
 				let obj = Obj::Proc(Proc {
 					name: def.name,
 					params: def.params.to_vec(),
