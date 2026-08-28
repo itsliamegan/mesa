@@ -1,6 +1,3 @@
-#> 1
-#> 1
-
 import Test.Order.Order
 
 type Task(priority)
@@ -11,7 +8,9 @@ type Task(priority)
 	end
 end
 
+#> 1
 $print(Task(1).min(Task(5)).priority)
+#> 1
 $print(Task(5).min(Task(1)).priority)
 
 #:order.ms
@@ -30,33 +29,31 @@ end
 
 #---
 
-#> 3
-#> 9
-
 import Test.Utils
 
+#> 3
 $print(Utils.count)
-$print(Utils.helper())
+#> 9
+$print(Utils.helper)
 
 #:utils.ms
 module Test.Utils
 
 count := 3
-def helper()
+def helper
 	return 9
 end
 
 #---
 
+import Test.Tracker.Order
+
 #> proto Order
-
-import Test.Protos.Order
-
 $print(Order)
 
-#:protos.ms
+#:tracker.ms
 
-module Test.Protos
+module Test.Tracker
 
 proto Order
 	def compare(other) end
@@ -64,19 +61,18 @@ end
 
 #---
 
+import Test.Ledger
+
 #> 5
+$print(Ledger.Transaction.decode(4))
 
-import Test.Codec
+#:ledger.ms
 
-$print(Codec.Json.decode(4))
+module Test.Ledger
 
-#:codec.ms
+#:ledger/transaction.ms
 
-module Test.Codec
-
-#:codec/json.ms
-
-module Test.Codec.Json
+module Test.Ledger.Transaction
 
 def decode(x)
 	return x + 1
@@ -84,11 +80,10 @@ end
 
 #---
 
-#> 1
-
 import Test.Counter
 
-Counter.bump()
+Counter.bump
+#> 1
 $print(Counter.n)
 
 #:counter.ms
@@ -97,41 +92,34 @@ module Test.Counter
 
 n := 0
 
-def bump()
+def bump
 	n := n + 1
 end
 
 #---
 
-#> module Test.Codec
+import Test.Ledger
 
-import Test.Codec
+#> module Test.Ledger
+$print(Ledger)
 
-$print(Codec)
-
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
 #---
 
+#:d.ms
+module Test.D
+
 #> D
-#> B
-#> C
-#> A
-
-#:a.ms
-module Test.A
-
-import Test.B
-import Test.C
-
-$print("A")
+$print("D")
 
 #:b.ms
 module Test.B
 
 import Test.D
 
+#> B
 $print("B")
 
 #:c.ms
@@ -139,63 +127,67 @@ module Test.C
 
 import Test.D
 
+#> C
 $print("C")
 
-#:d.ms
-module Test.D
+#:a.ms
+module Test.A
 
-$print("D")
+import Test.B
+import Test.C
+
+#> A
+$print("A")
 
 #---
 
-#> 1
+#:ledger.ms
+module Test.Ledger
 
-#:codec.ms
-module Test.Codec
-
-def helper()
+def helper
 	return 1
 end
 
-def main()
-	return helper()
+def main
+	return helper
 end
 
-$print(main())
+#> 1
+$print(main)
 
 #---
 
-#! member 'limit' on module Test.Codec is read-only
+#! member 'limit' on module Test.Ledger is read-only
 
-import Test.Codec
+import Test.Ledger
 
-Codec.limit := 5
+Ledger.limit := 5
 
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
 limit := 8
 
 #---
 
-#! module Test.Codec has no such member 'missing'
+#! module Test.Ledger has no such member 'missing'
 
-import Test.Codec
+import Test.Ledger
 
-$print(Codec.missing)
+$print(Ledger.missing)
 
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
 #---
 
-#! module Test.Codec has no such member 'Utils'
+#! module Test.Ledger has no such member 'Utils'
 
-import Test.Codec
-$print(Codec.Utils)
+import Test.Ledger
+$print(Ledger.Utils)
 
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
 import Test.Utils
 
@@ -204,14 +196,14 @@ module Test.Utils
 
 #---
 
-#! src/codec.ms:3,1: syntax error: unexpected token EOF
+#! src/ledger.ms:3,1: syntax error: unexpected token EOF
 #! src/package.ms:3,1: syntax error: unexpected token EOF
 
 $print(
 
-#:codec.ms
+#:ledger.ms
 
-module Test.Codec
+module Test.Ledger
 def f(
 
 #---
@@ -221,11 +213,11 @@ def f(
 #! src/twice.ms:2,1: semantic error: file declares more than one module
 
 #:bare.ms
-def f()
+def f
 end
 
 #:late.ms
-def f()
+def f
 end
 
 module Test.Late
@@ -236,23 +228,23 @@ module Test.Again
 
 #---
 
-#! module 'Test.Json' must be declared under 'Test.Codec'
+#! module 'Test.Receipt' must be declared under 'Test.Ledger'
 
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
-#:codec/json.ms
-module Test.Json
+#:ledger/receipt.ms
+module Test.Receipt
 
 #---
 
-#! semantic error: duplicate member 'Codec'
+#! semantic error: duplicate member 'Ledger'
 
-type Codec
+type Ledger
 end
 
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
 #---
 
@@ -275,37 +267,35 @@ import Test.A
 #:a.ms
 module Test.X
 
-def one()
+def one
 end
 
 #:b.ms
 module Test.X
 
-def two()
+def two
 end
 
 #---
 
 #! semantic error: unknown import 'Test.Missing'
-#! semantic error: unknown import 'Test.Protos.absent'
+#! semantic error: unknown import 'Test.Tracker.absent'
 
-#:protos.ms
-module Test.Protos
+#:tracker.ms
+module Test.Tracker
 
-def helper()
+def helper
 end
 
 #:ring.ms
 module Test.Ring
 
 import Test.Missing
-import Test.Protos.absent
+import Test.Tracker.absent
 
 #---
 
 #> root
-#> child
-
 $print("root")
 
 #:a.ms
@@ -313,32 +303,33 @@ module Test.A
 
 import Test
 
+#> child
 $print("child")
 
 #---
 
 #! runtime error: name 'helper' is not defined
 
-import Test.Protos.Order
+import Test.Tracker.Order
 
-helper()
+helper
 
-#:protos.ms
-module Test.Protos
+#:tracker.ms
+module Test.Tracker
 
 proto Order
 	def compare(other) end
 end
 
-def helper()
+def helper
 end
 
 #---
 
 #! semantic error: unknown protocol 'Order'
 
-#:protos.ms
-module Test.Protos
+#:tracker.ms
+module Test.Tracker
 
 proto Order
 	def compare(other) end
@@ -356,10 +347,10 @@ end
 
 #---
 
-#! semantic error: 'Protos' is not a protocol
+#! semantic error: 'Tracker' is not a protocol
 
-#:protos.ms
-module Test.Protos
+#:tracker.ms
+module Test.Tracker
 
 proto Order
 	def compare(other) end
@@ -368,10 +359,10 @@ end
 #:task.ms
 module Test.Task
 
-import Test.Protos
+import Test.Tracker
 
 type Task
-	impl Protos
+	impl Tracker
 	def compare(other)
 		return 0
 	end
@@ -381,20 +372,20 @@ end
 
 #! semantic error: 'helper' is not a protocol
 
-#:protos.ms
-module Test.Protos
+#:tracker.ms
+module Test.Tracker
 
 proto Order
 	def compare(other) end
 end
 
-def helper()
+def helper
 end
 
 #:task.ms
 module Test.Task
 
-import Test.Protos.helper
+import Test.Tracker.helper
 
 type Task
 	impl helper
@@ -405,52 +396,47 @@ end
 
 #---
 
-#! runtime error: name 'Codec' is not defined
+#! runtime error: name 'Ledger' is not defined
 
-#:json.ms
-module Test.Json
+#:receipt.ms
+module Test.Receipt
 
-$print(Codec)
+$print(Ledger)
 
-#:json/codec.ms
-module Test.Json.Codec
-
-#---
-
-#> type Frame()
-
-import Test.Codec
-
-$print(Codec.Frame)
-
-#:codec.ms
-module Test.Codec
-
-type Frame
-end
-
+#:receipt/ledger.ms
+module Test.Receipt.Ledger
 
 #---
 
-import Test.Protos
+import Test.Ledger
 
-type Point
-	impl Protos.Order
+#> type Group()
+$print(Ledger.Group)
+
+#:ledger.ms
+module Test.Ledger
+
+type Group
 end
 
-#:protos.ms
-module Test.Protos
+#---
+
+import Test.Tracker
+
+type Task(priority)
+	impl Tracker.Order
+end
+
+#:tracker.ms
+module Test.Tracker
 
 proto Order
 end
 
 #---
 
-#> 5
-#> 9
-
 count := 5
-def helper()
+def helper
 	return 9
 end
 
@@ -459,25 +445,26 @@ module Test.Child
 
 import Test
 
+#> 5
 $print(Test.count)
-$print(Test.helper())
+#> 9
+$print(Test.helper)
 
 #---
-
-#> 5
 
 #:child.ms
 module Test.Child
 
 import Test
 
-$print(Test.Codec.Json.decode(4))
+#> 5
+$print(Test.Ledger.Transaction.decode(4))
 
-#:codec.ms
-module Test.Codec
+#:ledger.ms
+module Test.Ledger
 
-#:codec/json.ms
-module Test.Codec.Json
+#:ledger/transaction.ms
+module Test.Ledger.Transaction
 
 def decode(x)
 	return x + 1
@@ -485,12 +472,116 @@ end
 
 #---
 
-#> 5
-
 #:child.ms
 module Test.Child
 
 import Test
 
 Test := 5
+#> 5
 $print(Test)
+
+#---
+
+import Core.IO
+
+#> module Core.IO
+$print(IO)
+
+#---
+
+import Core.IO
+
+#> hello
+IO.print("hello")
+
+#---
+
+import Core.Order
+
+type Task(priority)
+	impl Order
+
+	def order(other)
+		return self.priority - other.priority
+	end
+end
+
+#> proto Order
+$print(Order)
+#> 1
+$print(Task(1).min(Task(5)).priority)
+#> 5
+$print(Task(1).max(Task(5)).priority)
+#> Task(1)
+$print(Task(5).min(Task(1)))
+
+#---
+
+#! semantic error: required param 'b' follows defaulted param 'a'
+#! semantic error: case type 'Transaction' cannot declare params
+
+def add(a: 0, b)
+	a + b
+end
+
+type Transaction(name)
+	 case Credit(amount) end
+end
+
+#---
+
+#! semantic error: duplicate member 'encode'
+
+def encode
+end
+def encode
+end
+
+#---
+
+#! semantic error: duplicate member 'Task'
+
+type Task
+end
+def Task
+end
+
+#---
+
+#! semantic error: duplicate member 'Order'
+
+proto Order
+	def before(other) end
+end
+type Order
+end
+
+#---
+
+x := 1
+x := 2
+def f
+end
+
+#---
+
+#! semantic error: duplicate member 'count'
+
+count := 1
+def count
+end
+
+#---
+
+#! src/ledger/transaction: semantic error: directory has no sibling module file
+#! src/package: semantic error: 'src/package/' is reserved; the root module's children live in src/
+
+#:ledger.ms
+module Test.Ledger
+
+#:package/ext.ms
+module Test.Package.Ext
+
+#:ledger/transaction/encode.ms
+module Test.Ledger.Transaction.Encode

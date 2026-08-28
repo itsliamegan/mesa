@@ -12,15 +12,47 @@ end
 
 #---
 
-#! syntax error: unexpected token IDENT
+import Core.Counter
 
-extern type Counter
-	step := 1
-end
+c := Counter.zero
+#> 0
+$print(c.count)
+#> 1
+$print(c.bump)
+#> 2
+$print(c.bump)
+#> 5
+$print(Counter.at(5).count)
+#> 5
+$print(Counter.at(5).bump_by(0))
+#> 3
+$print(Counter.zero.bump_by(3))
+#> <native Counter>
+$print(c)
+#> type Counter
+$print(Counter)
+
+# 'order' is satisfied natively; 'min' and 'max' are acquired from the protocol
+# and run as mesa procs on native data.
+#> 3
+$print(Counter.at(3).min(Counter.at(5)).count)
+#> 5
+$print(Counter.at(3).max(Counter.at(5)).count)
+#> 0
+$print(Counter.at(4).order(Counter.at(4)))
+#> true
+$print(Counter.at(3) < Counter.at(5))
+#> true
+$print(Counter.at(3) <= Counter.at(5))
+#> true
+$print(Counter.at(5) > Counter.at(3))
+#> true
+$print(Counter.at(5) >= Counter.at(3))
 
 #---
 
-#! syntax error: unexpected token LPAREN
+#! runtime error: type Counter cannot be constructed
 
-extern type Counter(step)
-end
+import Core.Counter
+
+Counter()

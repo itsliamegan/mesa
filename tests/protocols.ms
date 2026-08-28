@@ -1,0 +1,429 @@
+proto Order
+	def compare(other) end
+
+	def min(other)
+		when self.compare(other) <= 0 then return self else return other end
+	end
+
+	def max(other)
+		when self.compare(other) <= 0 then return other else return self end
+	end
+end
+
+type Task(priority, name)
+	impl Order
+
+	def compare(other)
+		return self.priority - other.priority
+	end
+end
+
+#> proto Order
+$print(Order)
+
+low := Task(1, "low")
+high := Task(5, "high")
+#> low
+$print(low.min(high).name)
+#> high
+$print(low.max(high).name)
+#> low
+$print(high.min(low).name)
+#> high
+$print(high.max(low).name)
+
+#---
+
+proto Sized
+	def size end
+
+	def empty
+		return self.size == 0
+	end
+
+	def full
+		return not self.empty
+	end
+end
+
+type Group(tasks: [])
+	impl Sized
+
+	def size
+		return self.tasks.size
+	end
+end
+
+type Task(priority)
+	impl Sized
+
+	def size
+		return self.priority
+	end
+
+	def full
+		return "always full"
+	end
+end
+
+#> true
+$print(Group().empty)
+#> false
+$print(Group(tasks: [1, 2, 3]).empty)
+#> false
+$print(Group().full)
+#> true
+$print(Group(tasks: [1, 2, 3]).full)
+#> always full
+$print(Task(0).full)
+
+#---
+
+type Task(priority)
+	impl Power
+
+	def of
+		return self.priority
+	end
+end
+
+proto Power
+	def of end
+
+	def pow(n)
+		when n == 0 then return 1 end
+		return self.of * self.pow(n - 1)
+	end
+end
+
+#> 32
+$print(Task(2).pow(5))
+#> 1
+$print(Task(7).pow(0))
+
+#---
+
+proto Order
+	def compare(other) end
+
+	def min(other)
+		when self.compare(other) <= 0 then return self else return other end
+	end
+
+	def max(other)
+		when self.compare(other) <= 0 then return other else return self end
+	end
+end
+
+type Transaction
+	impl Order
+
+	case Credit(amount)
+	end
+
+	case Debit(amount)
+		impl Order
+
+		def compare(other)
+			return self.amount - other.amount
+		end
+	end
+
+	def compare(other)
+		return 0
+	end
+end
+
+#> 2
+$print(Transaction.Credit(2).min(Transaction.Credit(9)).amount)
+#> 9
+$print(Transaction.Debit(9).max(Transaction.Debit(4)).amount)
+#> 4
+$print(Transaction.Debit(9).min(Transaction.Debit(4)).amount)
+
+#---
+
+proto Named
+	def name end
+
+	def label
+		return "provided"
+	end
+end
+
+type Transaction
+	case Credit(note)
+		impl Named
+		def name
+			return self.note
+		end
+	end
+
+	def label
+		return "parent"
+	end
+end
+
+entry := Transaction.Credit("x")
+#> parent
+$print(entry.label)
+#> x
+$print(entry.name)
+
+#---
+
+#! semantic error: protocol 'Mixin' provides members but requires none
+
+proto Mixin
+	def helper
+		return 1
+	end
+end
+
+#---
+
+#! semantic error: unknown protocol 'Ordering'
+
+type Task(priority)
+	impl Ordering
+end
+
+#---
+
+#! semantic error: type 'Task' does not implement 'compare', required by protocol 'Order'
+
+proto Order
+	def compare(other) end
+end
+
+type Task(priority)
+	impl Order
+end
+
+#---
+
+#! semantic error: 'compare' on type 'Task' does not match the signature declared by protocol 'Order'
+
+proto Order
+	def compare(other) end
+end
+
+type Task(priority)
+	impl Order
+
+	def compare(thing)
+		return 0
+	end
+end
+
+#---
+
+#! semantic error: 'at' on type 'Task' does not match the signature declared by protocol 'Sliced'
+
+proto Sliced
+	def at(i, step: 1) end
+end
+
+type Task(priority)
+	impl Sliced
+
+	def at(i, step: 2)
+		return i
+	end
+end
+
+#---
+
+#! semantic error: protocols 'Order' and 'Named' both provide 'label'
+
+proto Order
+	def compare(other) end
+
+	def label
+		return "order"
+	end
+end
+
+proto Named
+	def name end
+
+	def label
+		return "named"
+	end
+end
+
+type Task(priority)
+	impl Order, Named
+
+	def compare(other)
+		return 0
+	end
+
+	def name
+		return "task"
+	end
+end
+
+#---
+
+#! semantic error: member 'label' provided by protocol 'Order' collides with a member of type 'Task'
+
+proto Order
+	def compare(other) end
+
+	def label
+		return "order"
+	end
+end
+
+type Task(priority)
+	impl Order
+
+	def compare(other)
+		return 0
+	end
+
+	type label
+	end
+end
+
+#---
+
+#! semantic error: provided body cannot reference 'self.priority', which protocol 'Order' does not declare
+
+proto Order
+	def compare(other) end
+
+	def min(other)
+		return self.priority
+	end
+end
+
+#---
+
+#! semantic error: 'Sub' is not a protocol
+
+import Test.Sub
+
+type Task(priority)
+	impl Sub
+end
+
+#:sub.ms
+module Test.Sub
+
+#---
+
+#! semantic error: 'Sub.Tag.Extra' is not a protocol
+
+import Test.Sub
+
+type Task(priority)
+	impl Sub.Tag.Extra
+end
+
+#:sub.ms
+module Test.Sub
+
+type Tag(label)
+end
+
+#---
+
+#! runtime error: type Task is not orderable
+
+# A locally-declared protocol, same package as 'Task', whose required verb
+# happens to also be spelled 'order'. Conformance is identity-based, not
+# name-based: implementing this 'Order' is not implementing 'Core.Order', so
+# the '<' operator — which only ever dispatches through 'Core.Order' — must
+# still reject the comparison.
+proto Order
+	def order(other) end
+end
+
+type Task(priority)
+	impl Order
+
+	def order(other)
+		self.priority - other.priority
+	end
+end
+
+$print(Task(1) < Task(2))
+
+#---
+
+x := 5
+y := 3
+#> 3
+$print(x.min(y))
+#> 5
+$print(x.max(y))
+#> b
+$print("a".max("b"))
+#> a
+$print("a".min("b"))
+#> a
+$print('a'.min('z'))
+#> z
+$print('a'.max('z'))
+
+#---
+
+#> true
+$print("".empty?)
+#> false
+$print("x".empty?)
+#> 10
+$print([10, 20].first)
+
+#---
+
+import Core.Order
+
+type Task(priority)
+	impl Order
+
+	def order(other)
+		self.priority - other.priority
+	end
+end
+
+#> true
+$print(Task(1) < Task(5))
+#> false
+$print(Task(1) > Task(5))
+#> true
+$print(Task(5) >= Task(1))
+#> false
+$print(Task(1) >= Task(5))
+
+#---
+
+#! runtime error: type Task is not orderable
+
+import Core.Order
+
+type Task(priority)
+	impl Order
+
+	def order(other)
+		self.priority - other.priority
+	end
+end
+
+$print(Task(1) < 5)
+
+#---
+
+#! runtime error: type Task is not orderable
+
+# Defines 'order' but never declares 'impl Order' — a same-named member does
+# not make a type conform.
+type Task(priority)
+	def order(other)
+		self.priority - other.priority
+	end
+end
+
+$print(Task(1) < Task(2))

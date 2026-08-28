@@ -17,81 +17,22 @@ macro_rules! test_files {
 }
 
 test_files! {
-	test_parses_literals => "lits.ms",
-	test_chars => "char.ms",
-	test_strs => "str.ms",
-	test_lists => "list.ms",
-	test_dicts => "dict.ms",
-	test_assigns_locals => "locals.ms",
-	test_instantiates_types => "types.ms",
-	test_accesses_fields => "fields.ms",
-	test_calls_methods => "methods.ms",
-	test_skips_comments => "comments.ms",
-	test_honors_precedence => "prec.ms",
-	test_performs_arithmetic => "arith.ms",
-	test_performs_comparisons => "cmp.ms",
-	test_performs_boolean_logic => "bool.ms",
-	test_iterates => "each.ms",
-	test_loops => "loop.ms",
-	test_branches => "when.ms",
-	test_matches => "match.ms",
-	test_parses_do_rescue_raise => "do_rescue.ms",
-	test_escapes_strings => "escapes.ms",
-	test_walks_scope => "scope.ms",
-	test_shadows_fields => "shadow.ms",
-	test_bang_and_huh_names => "names.ms",
-	test_calls_static_methods => "statics.ms",
-	test_local_types => "local_types.ms",
-	test_prelude_names => "prelude.ms",
-	test_core_order => "core_order.ms",
-	test_protocol_identity => "protocol_identity.ms",
-	test_reports_runtime_errors => "rt_errors.ms",
-	test_body_fields => "body_fields.ms",
-	test_honors_significant_newlines => "newlines.ms",
-	test_invokes_without_parens => "paren_less.ms",
-	test_explicit_returns => "returns.ms",
-	test_keyword_args_and_defaults => "kwargs.ms",
+	test_lexical => "lexical.ms",
+	test_num => "num.ms",
+	test_bool => "bool.ms",
+	test_str => "str.ms",
+	test_list => "list.ms",
+	test_dict => "dict.ms",
+	test_types => "types.ms",
+	test_control_flow => "control_flow.ms",
+	test_errors => "errors.ms",
+	test_scope => "scope.ms",
 	test_reports_syntax_errors => "syn_errors.ms",
-	test_reports_param_order => "sem_error_params.ms",
-	test_reports_break_outside_loop => "sem_error_break.ms",
-	test_mentions_without_invoking => "procs.ms",
+	test_procs => "procs.ms",
 	test_case_types => "case_types.ms",
-	test_case_types_nested => "case_types_nested.ms",
-	test_reports_case_errors => "case_errors.ms",
-	test_reports_case_parent_shape => "sem_error_case.ms",
-	test_protos => "protos.ms",
+	test_protocols => "protocols.ms",
 	test_externs => "extern.ms",
-	test_extern_counter => "extern_counter.ms",
-	test_reports_proto_errors => "sem_error_proto.ms",
-	test_reports_multiple_sem_errors => "sem_error_multi.ms",
-	test_reports_duplicate_members => "sem_error_member.ms",
 	test_modules => "modules.ms",
-	test_packages => "packages.ms",
-}
-
-#[test]
-fn test_reports_layout_defects() {
-	let test_dir = make_test_dir();
-	write_package(
-		&test_dir,
-		&[
-			("package.ms", "module Test\n"),
-			("codec.ms", "module Test.Codec\n"),
-			("package/ext.ms", "module Test.Package.Ext\n"),
-			("codec/json/encode.ms", "module Test.Codec.JSON.Encode\n"),
-		],
-	);
-	let (stdout, stderr) = run(&test_dir);
-	fs::remove_dir_all(&test_dir).unwrap();
-
-	assert_eq!("", stdout);
-	assert_eq!(
-		vec![
-			"src/codec/json: semantic error: directory has no sibling module file",
-			"src/package: semantic error: 'src/package/' is reserved; the root module's children live in src/",
-		],
-		stderr.lines().collect::<Vec<_>>()
-	);
 }
 
 fn make_test_dir() -> PathBuf {

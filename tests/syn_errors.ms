@@ -1,48 +1,47 @@
-#! syntax error: positional argument after keyword argument
+#! src/positional_after_keyword.ms:4,11: syntax error: positional argument after keyword argument
+#! src/multi_char_literal.ms:1,8: syntax error: character literal must hold exactly one character
+#! src/empty_char_literal.ms:1,8: syntax error: character literal must hold exactly one character
+#! src/unterminated_char_literal.ms:1,8: syntax error: unterminated character literal
+#! src/bad_ref_assign.ms:1,4: syntax error: unexpected token EQ
+#! src/case_after_field.ms:3,2: syntax error: unexpected token CASE
+#! src/nested_case.ms:3,3: syntax error: unexpected token CASE
+#! src/paren_in_type_body.ms:2,2: syntax error: unexpected token LPAREN
+#! src/field_after_method.ms:5,2: syntax error: unexpected token IDENT
+#! src/num_in_type_body.ms:2,2: syntax error: unexpected token NUM
+#! src/newline_before_assign.ms:2,1: syntax error: unexpected token EQ
+#! src/multi_num_tokens.ms:1,10: syntax error: unexpected token NUM
+#! src/bad_char.ms:1,6: syntax error: unexpected character '@'
+#! src/unknown_builtin.ms:1,1: syntax error: unknown builtin '$unknown'
+#! src/call_as_case.ms:5,14: syntax error: unexpected token LPAREN
+#! src/extern_field.ms:2,2: syntax error: unexpected token IDENT
+#! src/extern_ctor.ms:1,20: syntax error: unexpected token LPAREN
 
+#:positional_after_keyword.ms
 def add(a, b)
 	a + b
 end
 add(a: 1, 2)
 
-#---
-
-#! syntax error: character literal must hold exactly one character
-
+#:multi_char_literal.ms
 $print('ab')
 
-#---
-
-#! syntax error: character literal must hold exactly one character
-
+#:empty_char_literal.ms
 $print('')
 
-#---
-
-#! syntax error: unterminated character literal
-
+#:unterminated_char_literal.ms
 $print('a)
 
-#---
-
-#! syntax error: unexpected token EQ
-
+#:bad_ref_assign.ms
 &x := 1
 
-#---
-
-#! syntax error: unexpected token CASE
-
+#:case_after_field.ms
 type Expr
 	seen := false
 	case Ident(name)
 	end
 end
 
-#---
-
-#! syntax error: unexpected token CASE
-
+#:nested_case.ms
 type Expr
 	case Ident(name)
 		case Inner(x)
@@ -50,18 +49,12 @@ type Expr
 	end
 end
 
-#---
-
-#! syntax error: unexpected token LPAREN
-
+#:paren_in_type_body.ms
 type Point
 	(1)
 end
 
-#---
-
-#! syntax error: unexpected token IDENT
-
+#:field_after_method.ms
 type Bad
 	def m()
 		1
@@ -69,17 +62,36 @@ type Bad
 	x := 1
 end
 
-#---
-
-#! syntax error: unexpected token NUM
-
+#:num_in_type_body.ms
 type T(a)
 	1 + 1
 end
 
-#---
-
-#! syntax error: unexpected token EQ
-
+#:newline_before_assign.ms
 x
 := 5
+
+#:multi_num_tokens.ms
+$print(1 2)
+
+#:bad_char.ms
+x := @
+
+#:unknown_builtin.ms
+$unknown(1)
+
+#:call_as_case.ms
+def f()
+	1
+end
+
+when 1 case f() then "x" end
+
+#:extern_field.ms
+extern type Counter
+	step := 1
+end
+
+#:extern_ctor.ms
+extern type Counter(step)
+end
