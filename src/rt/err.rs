@@ -98,7 +98,7 @@ fn case_type(pkg: &pkg::Package, syms: &Interner, base: types::TypeId, name: Sym
 
 // Walk 'TAXONOMY' against the standard library's actual description, checking
 // every path resolves and every case has the single constructor field a reified
-// instance needs ('message' on a leaf, 'error' on a group)
+// instance needs ('message' on a leaf, 'cause' on a group)
 fn validate_taxonomy(pkg: &pkg::Package, syms: &mut Interner, errors: &Errors) {
 	let error_sym = syms.intern("Error");
 	let error_id = module_type(pkg, syms, errors.module, error_sym);

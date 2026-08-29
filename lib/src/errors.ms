@@ -1,11 +1,11 @@
 module Core.Errors
 
 type Error
-	case ProtocolError(error) end
-	case ArgumentError(error) end
-	case TypeError(error) end
-	case MemberError(error) end
-	case IndexError(error) end
+	case ProtocolError(cause) end
+	case ArgumentError(cause) end
+	case TypeError(cause) end
+	case MemberError(cause) end
+	case IndexError(cause) end
 	case NameError(message) end
 	case KeyError(message) end
 end
