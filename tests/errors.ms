@@ -247,6 +247,40 @@ rescue e case Error.KeyError then
 	$print(e)
 end
 
+do
+	raise Error.KeyError("boom")
+rescue case Error.KeyError then
+	#> caught without binding
+	$print("caught without binding")
+end
+
+do
+	raise Error.KeyError("boom")
+rescue case Error.IndexError then
+	$print("wrong arm")
+else
+	#> other, no binding
+	$print("other, no binding")
+end
+
+do
+	unknown()
+rescue case Error.NameError then
+	#> caught native error without binding
+	$print("caught native error without binding")
+end
+
+do
+	do
+		raise Error.KeyError("boom")
+	rescue case Error.KeyError then
+		$print(e)
+	end
+rescue e case Error.NameError then
+	#> name 'e' is not defined
+	$print(e.message)
+end
+
 #---
 
 #! runtime error: Error.KeyError("boom")

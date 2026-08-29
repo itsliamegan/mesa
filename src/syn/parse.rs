@@ -890,9 +890,13 @@ impl<'src> Parser<'src> {
 
 		let (binding, arms, else_branch) = if self.tag() == TokenTag::Rescue {
 			self.take(TokenTag::Rescue)?;
-			let binding = self.take(TokenTag::Ident)?.sym.unwrap();
+			let binding = if self.tag() == TokenTag::Ident {
+				Some(self.take(TokenTag::Ident)?.sym.unwrap())
+			} else {
+				None
+			};
 			let (arms, else_branch) = self.parse_case_arms()?;
-			(Some(binding), arms, else_branch)
+			(binding, arms, else_branch)
 		} else {
 			self.take(TokenTag::End)?;
 			(None, Vec::new(), None)
