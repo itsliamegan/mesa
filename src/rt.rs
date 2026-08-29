@@ -184,7 +184,7 @@ pub enum TypeError {
 	ConcatNonStr(TypeId),
 	NotCallable(TypeId),
 	NotConstructible(TypeId),
-	NotInvokable(TypeId),
+	NotInvocable(TypeId),
 	CaseNonType(TypeId),
 }
 
@@ -267,7 +267,7 @@ impl TypeError {
 			Self::NotConstructible(id) => {
 				format!("type {} cannot be constructed", rt.type_name(syms, *id))
 			}
-			Self::NotInvokable(id) => format!("type {} is not invokable", rt.type_name(syms, *id)),
+			Self::NotInvocable(id) => format!("type {} is not invocable", rt.type_name(syms, *id)),
 			Self::CaseNonType(id) => {
 				format!("type {} cannot be matched against", rt.type_name(syms, *id))
 			}

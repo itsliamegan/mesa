@@ -281,7 +281,7 @@ needs()
 
 #---
 
-#! runtime error: type Num is not invokable
+#! runtime error: type Num is not invocable
 
 $print(&1)
 

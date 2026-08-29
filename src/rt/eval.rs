@@ -1301,7 +1301,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.desc(self.pkg_id)
 			.loc(chunk.get_expr_span(expr_id));
 		Err(Signal::Error(
-			Raised::Native(Error::TypeError(TypeError::NotInvokable(val.type_id()))),
+			Raised::Native(Error::TypeError(TypeError::NotInvocable(val.type_id()))),
 			vec![(String::new(), loc)],
 		))
 	}

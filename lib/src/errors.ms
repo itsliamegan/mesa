@@ -30,7 +30,7 @@ type TypeError
 	case ConcatNonStr(message) end
 	case NotCallable(message) end
 	case NotConstructible(message) end
-	case NotInvokable(message) end
+	case NotInvocable(message) end
 	case CaseNonType(message) end
 end
 

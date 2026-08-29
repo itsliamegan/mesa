@@ -127,7 +127,7 @@ end
 do
 	&1
 rescue e case Error.TypeError then
-	#> Error.TypeError(TypeError.NotInvokable("type Num is not invokable"))
+	#> Error.TypeError(TypeError.NotInvocable("type Num is not invocable"))
 	$print(e)
 end
 
