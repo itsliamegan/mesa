@@ -439,30 +439,6 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					.pkgs
 					.desc(self.pkg_id)
 					.loc(chunk.get_expr_span(expr_id));
-				// Only a case variant's own instance may be raised: not a bare
-				// value, a type, an uncalled variant, or an ordinary (non-case)
-				// instance. A case variant is exactly a user type described
-				// with no variants of its own.
-				let is_case_instance = match &val {
-					Val::Obj(rf) => match &*rf.borrow() {
-						Obj::Instance(inst) => {
-							let Type::User(desc) =
-								self.rt.pkgs.get(inst.pkg).types.descs.get_type(inst.typ)
-							else {
-								panic!()
-							};
-							desc.variants.is_none()
-						}
-						_ => false,
-					},
-					_ => false,
-				};
-				if !is_case_instance {
-					return Err(Signal::Error(
-						Raised::Native(Error::TypeError(TypeError::NotRaisable(val.type_id()))),
-						vec![(String::new(), loc)],
-					));
-				}
 				Err(Signal::Error(Raised::Val(val), vec![(String::new(), loc)]))
 			}
 			Expr::Call(call) => {

@@ -185,7 +185,6 @@ pub enum TypeError {
 	NotCallable(TypeId),
 	NotConstructible(TypeId),
 	NotInvokable(TypeId),
-	NotRaisable(TypeId),
 	CaseNonType(TypeId),
 }
 
@@ -269,7 +268,6 @@ impl TypeError {
 				format!("type {} cannot be constructed", rt.type_name(syms, *id))
 			}
 			Self::NotInvokable(id) => format!("type {} is not invokable", rt.type_name(syms, *id)),
-			Self::NotRaisable(id) => format!("type {} cannot be raised", rt.type_name(syms, *id)),
 			Self::CaseNonType(id) => {
 				format!("type {} cannot be matched against", rt.type_name(syms, *id))
 			}

@@ -31,7 +31,6 @@ type TypeError
 	case NotCallable(message) end
 	case NotConstructible(message) end
 	case NotInvokable(message) end
-	case NotRaisable(message) end
 	case CaseNonType(message) end
 end
 

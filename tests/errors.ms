@@ -46,10 +46,38 @@ else
 	$print("other")
 end
 
+do
+	raise 5
+rescue e case Num then
+	#> 5
+	$print(e)
+end
+
+do
+	raise "boom"
+rescue e case Str then
+	#> boom
+	$print(e)
+end
+
+do
+	raise [1, 2]
+rescue e case List then
+	#> [1, 2]
+	$print(e)
+end
+
 type Task(priority)
 	def status
 		"queued"
 	end
+end
+
+do
+	raise Task(1)
+rescue e case Task then
+	#> 1
+	$print(e.priority)
 end
 
 do
@@ -100,13 +128,6 @@ do
 	&1
 rescue e case Error.TypeError then
 	#> Error.TypeError(TypeError.NotInvokable("type Num is not invokable"))
-	$print(e)
-end
-
-do
-	raise Task(1)
-rescue e case Error.TypeError then
-	#> Error.TypeError(TypeError.NotRaisable("type Task cannot be raised"))
 	$print(e)
 end
 
@@ -248,13 +269,19 @@ end
 
 #---
 
-#! runtime error: type Num cannot be raised
+#! runtime error: 5
 
 raise 5
 
 #---
 
-#! runtime error: type Type cannot be raised
+#! runtime error: "boom"
+
+raise "boom"
+
+#---
+
+#! runtime error: type Error()
 
 import Core.Errors.Error
 
@@ -262,7 +289,7 @@ raise Error
 
 #---
 
-#! runtime error: type Type cannot be raised
+#! runtime error: type Error.KeyError(message)
 
 import Core.Errors.Error
 
@@ -270,7 +297,7 @@ raise Error.KeyError
 
 #---
 
-#! runtime error: type Point cannot be raised
+#! runtime error: Point(1, 2)
 
 type Point(x, y) end
 
