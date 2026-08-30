@@ -172,6 +172,173 @@ $print(entry.name)
 
 #---
 
+x := 5
+y := 3
+#> 3
+$print(x.min(y))
+#> 5
+$print(x.max(y))
+#> b
+$print("a".max("b"))
+#> a
+$print("a".min("b"))
+#> a
+$print('a'.min('z'))
+#> z
+$print('a'.max('z'))
+
+#---
+
+import Core.Order
+
+type Task(priority)
+	impl Order
+
+	def order(other)
+		self.priority - other.priority
+	end
+end
+
+#> true
+$print(Task(1) < Task(5))
+#> false
+$print(Task(1) > Task(5))
+#> true
+$print(Task(5) >= Task(1))
+#> false
+$print(Task(1) >= Task(5))
+
+#---
+
+proto Equal
+	def equal(other) end
+
+	def label
+		return "equal"
+	end
+end
+
+proto Hash impl Equal
+	def hash end
+
+	def label
+		return "hash"
+	end
+
+	def same_priority(other)
+		return self.equal(other)
+	end
+end
+
+type Task(priority)
+	impl Hash
+
+	def equal(other)
+		return self.priority == other.priority
+	end
+
+	def hash
+		return self.priority
+	end
+end
+
+#> true
+$print(Task(1).equal(Task(1)))
+#> hash
+$print(Task(1).label)
+#> true
+$print(Task(1).same_priority(Task(1)))
+
+#---
+
+proto Equal
+	def equal(other) end
+end
+
+proto Hash impl Equal
+	def hash end
+end
+
+proto Order impl Equal
+	def compare(other) end
+end
+
+type Task(priority)
+	impl Hash, Order
+
+	def equal(other)
+		return self.priority == other.priority
+	end
+
+	def hash
+		return self.priority
+	end
+
+	def compare(other)
+		return self.priority - other.priority
+	end
+end
+
+type Group(tasks: [])
+	impl Order, Hash
+
+	def equal(other)
+		return self.tasks.size == other.tasks.size
+	end
+
+	def hash
+		return self.tasks.size
+	end
+
+	def compare(other)
+		return self.tasks.size - other.tasks.size
+	end
+end
+
+#> true
+$print(Task(1).equal(Task(1)))
+#> true
+$print(Group(tasks: [1]).equal(Group(tasks: [2])))
+
+#---
+
+proto Equal
+	def equal(other) end
+end
+
+proto Hash impl Equal
+	def hash end
+end
+
+type Task(priority)
+	impl Equal, Hash
+
+	def equal(other)
+		return self.priority == other.priority
+	end
+
+	def hash
+		return self.priority
+	end
+end
+
+#> true
+$print(Task(1).equal(Task(1)))
+
+#---
+
+proto Equal
+	def equal(other) end
+end
+
+proto Hash impl Equal
+	def hash()
+		return 0
+	end
+end
+
+#---
+
 #! semantic error: protocol 'Mixin' provides members but requires none
 
 proto Mixin
@@ -330,13 +497,82 @@ end
 
 #---
 
+#! semantic error: type 'Task' does not implement 'equal', required by protocol 'Equal'
+
+proto Equal
+	def equal(other) end
+end
+
+proto Hash impl Equal
+	def hash end
+end
+
+type Task(priority)
+	impl Hash
+
+	def hash
+		return self.priority
+	end
+end
+
+#---
+
+#! semantic error: protocol cycle: Draw → Erase → Draw
+
+proto Draw impl Erase
+	def draw end
+end
+
+proto Erase impl Draw
+	def erase end
+end
+
+#---
+
+#! semantic error: protocol 'Order' is named twice
+
+proto Order
+	def compare(other) end
+end
+
+type Task(priority)
+	impl Order, Order
+end
+
+#---
+
+#! semantic error: protocol 'Equal' is named twice
+
+proto Equal
+	def equal(other) end
+end
+
+proto Hash impl Equal, Equal
+	def hash end
+end
+
+#---
+
+#! semantic error: protocol 'Sub.Equal' is named twice
+
+import Test.Sub.Equal
+import Test.Sub
+
+type Task(priority)
+	impl Equal, Sub.Equal
+end
+
+#:sub.ms
+module Test.Sub
+
+proto Equal
+	def equal(other) end
+end
+
+#---
+
 #! runtime error: type Task is not orderable
 
-# A locally-declared protocol, same package as 'Task', whose required verb
-# happens to also be spelled 'order'. Conformance is identity-based, not
-# name-based: implementing this 'Order' is not implementing 'Core.Order', so
-# the '<' operator — which only ever dispatches through 'Core.Order' — must
-# still reject the comparison.
 proto Order
 	def order(other) end
 end
@@ -350,53 +586,6 @@ type Task(priority)
 end
 
 $print(Task(1) < Task(2))
-
-#---
-
-x := 5
-y := 3
-#> 3
-$print(x.min(y))
-#> 5
-$print(x.max(y))
-#> b
-$print("a".max("b"))
-#> a
-$print("a".min("b"))
-#> a
-$print('a'.min('z'))
-#> z
-$print('a'.max('z'))
-
-#---
-
-#> true
-$print("".empty?)
-#> false
-$print("x".empty?)
-#> 10
-$print([10, 20].first)
-
-#---
-
-import Core.Order
-
-type Task(priority)
-	impl Order
-
-	def order(other)
-		self.priority - other.priority
-	end
-end
-
-#> true
-$print(Task(1) < Task(5))
-#> false
-$print(Task(1) > Task(5))
-#> true
-$print(Task(5) >= Task(1))
-#> false
-$print(Task(1) >= Task(5))
 
 #---
 
@@ -418,8 +607,6 @@ $print(Task(1) < 5)
 
 #! runtime error: type Task is not orderable
 
-# Defines 'order' but never declares 'impl Order' — a same-named member does
-# not make a type conform.
 type Task(priority)
 	def order(other)
 		self.priority - other.priority

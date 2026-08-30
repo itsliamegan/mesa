@@ -397,13 +397,14 @@ impl<'src> Parser<'src> {
 	fn parse_proto_decl(&mut self) -> Result<ModuleItemId, Error> {
 		let tok = self.take(TokenTag::Proto)?;
 		let name = self.take_type_name()?;
+		let impls = self.parse_impl_line()?;
 		let mut items = Vec::new();
 		while self.cur.index() < self.toks.len() && self.tag() != TokenTag::End {
 			let item_id = self.parse_proto_item()?;
 			items.push(item_id);
 		}
 		self.take(TokenTag::End)?;
-		let item = ModuleItem::Proto(Proto { name, items });
+		let item = ModuleItem::Proto(Proto { name, impls, items });
 		let item_id = self.chunk.add_module_item(tok.into(), item);
 		Ok(item_id)
 	}

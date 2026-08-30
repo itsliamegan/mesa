@@ -5,7 +5,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::{Member, ModuleId, Modules, Resolved};
-use crate::sem::{Error, check_params};
+use crate::sem::{Error, Visit, check_params};
 use crate::src::{Sources, Span};
 use crate::syn::Chunks;
 use crate::syn::nodes::{Def, DefId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, TypeItem};
@@ -20,7 +20,7 @@ impl TypeId {
 	}
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct ProtoId(u32);
 
 impl ProtoId {
@@ -167,6 +167,12 @@ pub struct Proto {
 	pub span: Span,
 	pub required: OrderMap<Sym, DefId>,
 	pub provided: OrderMap<Sym, DefId>,
+	// Every protocol reachable through this one's prerequisites, itself
+	// included, ordered so that a protocol always follows everything it
+	// requires.
+	pub impls: Vec<(PackageId, ProtoId)>,
+	// Every member name declared anywhere in 'impls'.
+	pub effective: HashSet<Sym>,
 }
 
 // A body field's initializer. Carries a span for more precise error reporting.
@@ -292,7 +298,41 @@ pub fn check(
 			}
 		}
 	}
-	errs.append(&mut check_protos(syms, sources, &types));
+	// Resolve after every protocol is described, so a prerequisite may be
+	// declared in any file of the package, and after every dependency package
+	// is built, so a prerequisite may cross a package boundary.
+	let mut impls: Vec<Vec<(PackageId, ProtoId)>> = vec![Vec::new(); types.protos.len()];
+	for module in mods.ids() {
+		let chunk_id = mods.chunk(module);
+		let chunk = chunks.get(chunk_id);
+		for item_id in &chunk.top {
+			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
+				let span = chunk.get_module_item_span(*item_id);
+				let id = types.get_proto_by_item(chunk_id, *item_id);
+				impls[id.index()] = resolve_impls(
+					syms,
+					sources,
+					pkgs,
+					mods,
+					&types,
+					module,
+					span,
+					&proto.impls,
+					&mut errs,
+				);
+			}
+		}
+	}
+	errs.append(&mut close_protos(
+		syms,
+		sources,
+		pkgs,
+		mods.pkg(),
+		&mut types,
+		&impls,
+	));
+
+	errs.append(&mut check_protos(syms, sources, pkgs, mods, &types));
 
 	for module in mods.ids() {
 		let chunk_id = mods.chunk(module);
@@ -351,17 +391,32 @@ fn describe_proto(
 		span,
 		required,
 		provided,
+		impls: Vec::new(),
+		effective: HashSet::new(),
 	}
 }
 
-// A protocol must either provide members or only require them: a protocol
-// that provides members but requires none has nothing a type must declare to
-// implement it.
-fn check_protos(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Error> {
+// Check that a protocol provides members only if it also requires at least one
+// other member. A protocol with no members at all also passes this check. If a
+// protocol had only provided members, it would have no contract for an
+// implementing type to implement.
+fn check_protos(
+	syms: &Interner,
+	sources: &Sources,
+	pkgs: &Packages,
+	mods: &Modules,
+	types: &Types,
+) -> Vec<Error> {
 	let mut errs = Vec::new();
 	for id in types.proto_ids() {
 		let proto = types.get_proto(id);
-		if !proto.provided.is_empty() && proto.required.is_empty() {
+		// A protocol satisfies the rule if anything it requires, *directly or
+		// through a prerequisite*, has a required member.
+		let has_requirement = proto.impls.iter().any(|(pkg, id)| {
+			let owner = owner_types(pkgs, mods.pkg(), types, *pkg);
+			!owner.get_proto(*id).required.is_empty()
+		});
+		if !proto.provided.is_empty() && !has_requirement {
 			errs.push(Error::ProvidedWithoutRequired(
 				sources.loc(proto.span),
 				syms.resolve(proto.name).to_string(),
@@ -369,6 +424,164 @@ fn check_protos(syms: &Interner, sources: &Sources, types: &Types) -> Vec<Error>
 		}
 	}
 	errs
+}
+
+// Walk each proto's implied impls to build a transitive closure of each proto's
+// impl set and an effective set of required & provided members. A DFS that
+// marks each proto on entry and unmarks it on exit, so an impl of a proto still
+// marked is one that impls back onto the path being walked.
+//
+// *Import* cycles are already ruled out by the module-level cycle check. An
+// impl cycle could occur by two protocols requiring one another.
+fn close_protos(
+	syms: &Interner,
+	sources: &Sources,
+	pkgs: &Packages,
+	pkg_id: PackageId,
+	types: &mut Types,
+	impls: &[Vec<(PackageId, ProtoId)>],
+) -> Vec<Error> {
+	let mut errs = Vec::new();
+	let mut visits = vec![Visit::Unseen; types.protos.len()];
+	let mut path = Vec::new();
+	let ids: Vec<ProtoId> = types.proto_ids().collect();
+	for id in ids {
+		close_proto(
+			syms,
+			sources,
+			pkgs,
+			pkg_id,
+			types,
+			impls,
+			id,
+			&mut visits,
+			&mut path,
+			&mut errs,
+		);
+	}
+	errs
+}
+
+fn close_proto(
+	syms: &Interner,
+	sources: &Sources,
+	pkgs: &Packages,
+	pkg_id: PackageId,
+	types: &mut Types,
+	impls: &[Vec<(PackageId, ProtoId)>],
+	id: ProtoId,
+	visits: &mut [Visit],
+	path: &mut Vec<ProtoId>,
+	errs: &mut Vec<Error>,
+) {
+	// Reached only for a protocol already walked to completion: the loop below
+	// never recurses into one still on the path, having reported it instead.
+	if visits[id.index()] != Visit::Unseen {
+		return;
+	}
+	visits[id.index()] = Visit::OnPath;
+	path.push(id);
+
+	// Walk into every prerequisite this protocol declares, so that each has a
+	// closure to splice by the time this one is expanded.
+	let direct = &impls[id.index()];
+	for (dep_pkg, dep_id) in direct {
+		// Don't walk a prerequisite in another package. Packages load in a
+		// fixed order, so the current package can only name one already fully
+		// described.
+		if *dep_pkg != pkg_id {
+			continue;
+		}
+		// If this protocol impls one still being walked, it's a cycle. The
+		// location is this protocol's declaration, the nearest thing to the
+		// impl closing the loop that a resolved impl can point at.
+		if visits[dep_id.index()] == Visit::OnPath {
+			errs.push(Error::ProtocolCycle(
+				sources.loc(types.get_proto(id).span),
+				render_proto_cycle(syms, types, path, *dep_id),
+			));
+			continue;
+		}
+		close_proto(
+			syms, sources, pkgs, pkg_id, types, impls, *dep_id, visits, path, errs,
+		);
+	}
+	// A cut back edge leaves its protocol's closure empty, contributing
+	// nothing here, which is what keeps a reported cycle from expanding
+	// forever. Nothing else can reach back to this protocol, so it is never
+	// already present in its own expansion.
+	let mut closure = expand_impls(pkgs, pkg_id, types, direct);
+	closure.push((pkg_id, id));
+
+	path.pop();
+	visits[id.index()] = Visit::Done;
+	let effective = effective_members(pkgs, pkg_id, types, &closure);
+	let proto = &mut types.protos[id.index()];
+	proto.impls = closure;
+	proto.effective = effective;
+}
+
+// Every member name a closure declares, required or provided, which is exactly
+// what a body written in any of those protocols may reach for on 'self'.
+fn effective_members(
+	pkgs: &Packages,
+	pkg_id: PackageId,
+	types: &Types,
+	closure: &[(PackageId, ProtoId)],
+) -> HashSet<Sym> {
+	let mut effective = HashSet::new();
+	for (pkg, id) in closure {
+		let proto = owner_types(pkgs, pkg_id, types, *pkg).get_proto(*id);
+		effective.extend(proto.required.keys().copied());
+		effective.extend(proto.provided.keys().copied());
+	}
+	effective
+}
+
+// Render a protocol cycle as the walk found it, e.g. 'Hash → Equal → Hash',
+// rather than naming only the back edge.
+fn render_proto_cycle(syms: &Interner, types: &Types, path: &[ProtoId], back: ProtoId) -> String {
+	let start = path.iter().position(|id| *id == back).unwrap();
+	let mut names: Vec<String> = path[start..]
+		.iter()
+		.map(|id| syms.resolve(types.get_proto(*id).name).to_string())
+		.collect();
+	names.push(syms.resolve(types.get_proto(back).name).to_string());
+	names.join(" → ")
+}
+
+// The 'Types' a package reference points into. The package being checked is not
+// in 'pkgs' yet, so a reference to it reads from the arena still being built.
+fn owner_types<'types>(
+	pkgs: &'types Packages,
+	pkg_id: PackageId,
+	types: &'types Types,
+	pkg: PackageId,
+) -> &'types Types {
+	match pkg == pkg_id {
+		true => types,
+		false => &pkgs.get(pkg).types,
+	}
+}
+
+// Expand resolved prerequisites into everything they imply. The return value
+// contains no duplicates and is ordered so that a prerequisite's own
+// implication comes before it. This latter guarantee ensures that, when
+// iterating this result, a body of a nearer impl can refine a farther one.
+fn expand_impls(
+	pkgs: &Packages,
+	pkg_id: PackageId,
+	types: &Types,
+	direct: &[(PackageId, ProtoId)],
+) -> Vec<(PackageId, ProtoId)> {
+	let mut expanded = Vec::new();
+	for (pkg, id) in direct {
+		let owner = owner_types(pkgs, pkg_id, types, *pkg);
+		expanded.extend(owner.get_proto(*id).impls.iter().copied());
+	}
+	let mut seen = HashSet::with_capacity(expanded.len());
+	expanded.retain(|item| seen.insert(*item));
+	expanded
 }
 
 // Describe a type declaration, producing a description that reduces all later
@@ -471,7 +684,7 @@ fn describe_type(
 		}
 	}
 
-	let impls = resolve_impls(
+	let direct = resolve_impls(
 		syms,
 		sources,
 		pkgs,
@@ -482,6 +695,7 @@ fn describe_type(
 		&type_.impls,
 		errs,
 	);
+	let impls = expand_impls(pkgs, mods.pkg(), types, &direct);
 	let acquired = acquire_members(
 		syms,
 		sources,
@@ -612,7 +826,7 @@ fn describe_extern(
 	// Resolved before the implementation is looked up: an unresolvable protocol
 	// is a mistake in the declaration either way, and reporting it does not
 	// depend on there being anything to describe.
-	let impls = resolve_impls(
+	let direct = resolve_impls(
 		syms,
 		sources,
 		pkgs,
@@ -623,6 +837,7 @@ fn describe_extern(
 		&extern_.impls,
 		errs,
 	);
+	let impls = expand_impls(pkgs, mods.pkg(), types, &direct);
 
 	// A declaration with no backing implementation is an implementation error,
 	// and leaves nothing to describe it into.
@@ -834,15 +1049,21 @@ fn resolve_impls(
 				} else {
 					&pkgs.get(pkg).modules
 				};
-				let owner_types = if pkg == mods.pkg() {
-					types
-				} else {
-					&pkgs.get(pkg).types
-				};
-				impls.push((
-					pkg,
-					owner_types.get_proto_by_item(owner_mods.chunk(owner), item_id),
-				));
+				let id = owner_types(pkgs, mods.pkg(), types, pkg)
+					.get_proto_by_item(owner_mods.chunk(owner), item_id);
+				// One protocol named twice in one clause is a typo with no
+				// reading that the author meant. Implication is silent, but
+				// repetition is not: a name reached through a prerequisite is a
+				// choice, a name written twice is a slip. Compared by id rather
+				// than by path, so two spellings of one protocol still collide.
+				if impls.contains(&(pkg, id)) {
+					errs.push(Error::DuplicateImpl(
+						sources.loc(span),
+						syms.resolve_path(path),
+					));
+					continue;
+				}
+				impls.push((pkg, id));
 			}
 			Some(Resolved::Member(..) | Resolved::Module(..) | Resolved::Partial(..)) => {
 				errs.push(Error::NotAProtocol(
@@ -882,9 +1103,9 @@ fn acquire_members(
 	errs: &mut Vec<Error>,
 ) -> HashMap<Sym, MemberSite> {
 	let mut acquired: HashMap<Sym, MemberSite> = HashMap::new();
-	// The protocol each acquired member came from, kept only to name both
-	// sides of a 'ProtocolConflict'.
-	let mut from: HashMap<Sym, Sym> = HashMap::new();
+	// The protocol each acquired member came from, kept so the next provider
+	// of the same name can ask whether it is related to this one.
+	let mut from: HashMap<Sym, (PackageId, ProtoId)> = HashMap::new();
 	for (proto_pkg, proto_id) in impls {
 		// The protocol may belong to another package, whose arenas are the only
 		// place its declaration and body can be read from.
@@ -971,14 +1192,23 @@ fn acquire_members(
 				continue;
 			}
 
-			if let Some(first) = from.insert(*member, proto.name) {
-				errs.push(Error::ProtocolConflict(
-					sources.loc(type_span),
-					syms.resolve(first).to_string(),
-					syms.resolve(proto.name).to_string(),
-					syms.resolve(*member).to_string(),
-				));
-				continue;
+			if let Some(first) = from.insert(*member, (*proto_pkg, *proto_id)) {
+				let first_proto = owner_types(pkgs, pkg_id, types, first.0).get_proto(first.1);
+				// Related protocols do not conflict; the nearer body refines
+				// the farther one, and the traversal order guarantees this
+				// write is the nearer. Unrelated ones do, and the type
+				// resolves it by declaring the member.
+				let related = first_proto.impls.contains(&(*proto_pkg, *proto_id))
+					|| proto.impls.contains(&first);
+				if !related {
+					errs.push(Error::ProtocolConflict(
+						sources.loc(type_span),
+						syms.resolve(first_proto.name).to_string(),
+						syms.resolve(proto.name).to_string(),
+						syms.resolve(*member).to_string(),
+					));
+					continue;
+				}
 			}
 
 			acquired.insert(

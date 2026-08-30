@@ -27,6 +27,7 @@ pub enum Error {
 	MissingMember(Location, String, String, String),
 	SignatureMismatch(Location, String, String, String),
 	ProtocolConflict(Location, String, String, String),
+	DuplicateImpl(Location, String),
 	MemberCollision(Location, String, String, String),
 	DuplicateTypeMember(Location, String, String),
 	UnimplementedExtern(Location, String),
@@ -45,6 +46,7 @@ pub enum Error {
 	DuplicateMember(Location, String),
 	UnknownImport(Location, String),
 	ImportCycle(Location, String),
+	ProtocolCycle(Location, String),
 }
 
 impl Error {
@@ -61,6 +63,7 @@ impl Error {
 			Self::MissingMember(loc, ..) => loc,
 			Self::SignatureMismatch(loc, ..) => loc,
 			Self::ProtocolConflict(loc, ..) => loc,
+			Self::DuplicateImpl(loc, _) => loc,
 			Self::MemberCollision(loc, ..) => loc,
 			Self::DuplicateTypeMember(loc, ..) => loc,
 			Self::UnimplementedExtern(loc, _) => loc,
@@ -79,6 +82,7 @@ impl Error {
 			Self::DuplicateMember(loc, _) => loc,
 			Self::UnknownImport(loc, _) => loc,
 			Self::ImportCycle(loc, _) => loc,
+			Self::ProtocolCycle(loc, _) => loc,
 		}
 	}
 }
@@ -130,6 +134,7 @@ impl Display for Error {
 					first, second, member
 				)
 			}
+			Self::DuplicateImpl(_, name) => write!(f, "protocol '{}' is named twice", name),
 			Self::MemberCollision(_, name, proto, member) => {
 				write!(
 					f,
@@ -203,8 +208,20 @@ impl Display for Error {
 			Self::DuplicateMember(_, name) => write!(f, "duplicate member '{}'", name),
 			Self::UnknownImport(_, path) => write!(f, "unknown import '{}'", path),
 			Self::ImportCycle(_, cycle) => write!(f, "import cycle: {}", cycle),
+			Self::ProtocolCycle(_, cycle) => write!(f, "protocol cycle: {}", cycle),
 		}
 	}
+}
+
+// The possible flags for a node in a cycle-detection walk.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub enum Visit {
+	// Unseen, never entered.
+	Unseen,
+	// Entered and still on the path below this one.
+	OnPath,
+	// Entered and left.
+	Done,
 }
 
 pub fn check(
@@ -425,7 +442,7 @@ fn check_reaches_member(
 	member: &Member,
 ) -> Result<(), Error> {
 	if let Expr::Self_ = chunk.get_expr(member.receiver) {
-		if !desc.required.contains_key(&member.name) && !desc.provided.contains_key(&member.name) {
+		if !desc.effective.contains(&member.name) {
 			let span = chunk.get_expr_span(expr_id);
 			return Err(Error::ProtocolReach(
 				sources.loc(span),

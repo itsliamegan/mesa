@@ -6,7 +6,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::load::{RESERVED_DIR, ROOT_FILE};
 use crate::pkg::{PackageId, Packages};
-use crate::sem::Error;
+use crate::sem::{Error, Visit};
 use crate::src::{Location, Sources, Span};
 use crate::syn::nodes::{Expr, ExprId, ModuleItem, ModuleItemId, Place};
 use crate::syn::{Chunk, ChunkId, Chunks};
@@ -624,15 +624,6 @@ fn resolve_import_path_in(mods: &Modules, path: &[Sym]) -> Option<Target> {
 		return Some(Target::Member(id, *last));
 	}
 	None
-}
-
-// Where a module stands in the cycle-detection walk: never entered, entered and
-// still on the path below the current one, or entered and left again.
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum Visit {
-	Unseen,
-	OnPath,
-	Done,
 }
 
 // Walk the entire module graph, checking whether there are any import cycles.

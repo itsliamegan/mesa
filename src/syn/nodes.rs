@@ -100,6 +100,7 @@ pub struct Extern {
 #[derive(Debug)]
 pub struct Proto {
 	pub name: Sym,
+	pub impls: Vec<Vec<Sym>>,
 	pub items: Vec<DefId>,
 }
 
