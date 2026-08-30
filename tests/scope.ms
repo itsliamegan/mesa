@@ -166,3 +166,31 @@ each k in {1: "a", 2: "b"} do
 		$print(leak)
 	end
 end
+
+#---
+
+import Test.Other
+
+Num := 5
+
+#> 5
+$print(Num)
+#> type Num
+$print(Other.num)
+
+def shadows
+	Str := "local"
+	Str
+end
+
+#> local
+$print(shadows)
+#> type Str
+$print(Str)
+
+#:other.ms
+module Test.Other
+
+def num
+	Num
+end

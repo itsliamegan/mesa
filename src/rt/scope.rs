@@ -34,6 +34,11 @@ pub struct Local {
 }
 
 impl Local {
+	pub fn new(scope: Rc<RefCell<Scope>>, name: Sym) -> Local {
+		let tier = scope.borrow().tier;
+		Local { name, tier, scope }
+	}
+
 	pub fn is_bound(&self) -> bool {
 		self.scope.borrow().locals.contains_key(&self.name)
 	}
@@ -184,11 +189,7 @@ impl Scope {
 			if let Some(outer) = outer {
 				scope = outer;
 			} else {
-				return Local {
-					name,
-					tier: origin.borrow().tier,
-					scope: origin.clone(),
-				};
+				return Local::new(origin.clone(), name);
 			}
 		}
 	}

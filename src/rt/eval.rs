@@ -8,7 +8,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use crate::intern::{Interner, Sym};
 use crate::pkg::{self, PackageId};
 use crate::rt::modules::Modules;
-use crate::rt::scope::{Place, Scope, Tier};
+use crate::rt::scope::{Local, Place, Scope, Tier};
 use crate::rt::types::{NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
 	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_print_val,
@@ -659,7 +659,16 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				match &assign.place {
 					syn::nodes::Place::Name(name) => {
 						let sym = name.sym;
-						let place = self.resolve_name(sym);
+						let place = {
+							let place = self.resolve_name(sym);
+							if let Place::Local(local) = &place
+								&& local.tier == Tier::Prelude
+							{
+								Place::Local(Local::new(self.scope.clone(), sym))
+							} else {
+								place
+							}
+						};
 						if let Err(()) = place.set(&self.rt.pkgs, val.clone()) {
 							let namespace = match &place {
 								Place::Member(Member::Module(pkg, id, name)) => {
