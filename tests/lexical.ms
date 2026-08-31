@@ -124,3 +124,36 @@ type Task(priority)
 end
 #> 9
 $print(Task(1).compute)
+
+#---
+
+values := (
+	[
+		1, # after
+		# before
+		2,
+	]
+)
+
+# between
+def total # after
+	values[0] + # between
+		values[1]
+end # after
+
+#> 3
+$print(total) # after
+
+empty := [
+	# empty
+]
+#> []
+$print(empty)
+empty := {
+	# empty
+}
+#> {}
+$print(empty)
+
+#> # not a comment
+$print("# not a comment")

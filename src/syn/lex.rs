@@ -164,6 +164,12 @@ impl TokenTag {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TokenId(pub u32);
 
+#[derive(Debug, Clone, Copy)]
+pub struct TokenRange {
+	pub start: TokenId,
+	pub end: TokenId,
+}
+
 impl TokenId {
 	pub fn index(self) -> usize {
 		self.0 as usize
@@ -175,6 +181,62 @@ impl TokenId {
 
 	pub fn prev(self) -> Self {
 		Self(self.0 - 1)
+	}
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct CommentId(u32);
+
+impl CommentId {
+	fn from_index(index: usize) -> Self {
+		Self(index as u32)
+	}
+
+	fn index(self) -> usize {
+		self.0 as usize
+	}
+}
+
+#[derive(Debug)]
+pub struct Comment {
+	start: usize,
+	end: usize,
+}
+
+#[derive(Debug)]
+pub struct Comments {
+	comments: Vec<Comment>,
+}
+
+impl Comments {
+	fn new() -> Self {
+		Self {
+			comments: Vec::new(),
+		}
+	}
+
+	fn add(&mut self, comment: Comment) -> CommentId {
+		let id = CommentId::from_index(self.comments.len());
+		self.comments.push(comment);
+		id
+	}
+
+	pub fn ids(&self) -> impl ExactSizeIterator<Item = CommentId> {
+		(0..self.comments.len()).map(CommentId::from_index)
+	}
+
+	pub fn get(&self, id: CommentId) -> &Comment {
+		&self.comments[id.index()]
+	}
+}
+
+impl Comment {
+	pub fn start(&self) -> usize {
+		self.start
+	}
+
+	pub fn end(&self) -> usize {
+		self.end
 	}
 }
 
@@ -238,33 +300,53 @@ impl Tokens {
 	pub fn nl_before(&self, id: TokenId) -> bool {
 		self.nl_befores[id.index()]
 	}
+
+	pub fn span(&self, src: SourceId, range: TokenRange) -> Span {
+		Span {
+			src,
+			start: self.start(range.start),
+			end: self.end(range.end),
+		}
+	}
 }
 
 pub struct Lexer<'syms, 'src> {
 	syms: &'syms mut Interner,
 	src: &'src Source,
 	pos: usize,
+	toks: Tokens,
+	comments: Comments,
 }
 
 impl<'syms, 'src> Lexer<'syms, 'src> {
 	pub fn new(syms: &'syms mut Interner, src: &'src Source) -> Self {
-		Self { syms, src, pos: 0 }
+		Self {
+			syms,
+			src,
+			pos: 0,
+			toks: Tokens::new(),
+			comments: Comments::new(),
+		}
 	}
 
-	pub fn lex(mut self) -> Result<Tokens, Error> {
-		let mut toks = Tokens::new();
+	pub fn lex(mut self) -> Result<(Tokens, Comments), Error> {
 		loop {
-			let (tok, nl_before) = self.lex_next_skip_space()?;
-			toks.push(tok.tag, tok.sym, tok.pos, tok.end, nl_before);
+			let (tok, nl_before, comments) = self.lex_next()?;
+			self.toks
+				.push(tok.tag, tok.sym, tok.pos, tok.end, nl_before);
+			for comment in comments.into_iter().flatten() {
+				self.comments.add(comment);
+			}
 			if tok.tag == TokenTag::Eof {
 				break;
 			}
 		}
-		Ok(toks)
+		Ok((self.toks, self.comments))
 	}
 
-	fn lex_next_skip_space(&mut self) -> Result<(Token, bool), Error> {
+	fn lex_next(&mut self) -> Result<(Token, bool, Option<Vec<Comment>>), Error> {
 		let mut nl_before = false;
+		let mut comments = None;
 		while self.pos < self.src.len() {
 			if self.src[self.pos] == b'\n' {
 				nl_before = true;
@@ -272,18 +354,27 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			} else if self.src[self.pos].is_ascii_whitespace() {
 				self.pos += 1;
 			} else if self.src[self.pos] == b'#' {
+				let start = self.pos;
 				while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
 					self.pos += 1;
 				}
+				let end = if self.pos > start && self.src[self.pos - 1] == b'\r' {
+					self.pos - 1
+				} else {
+					self.pos
+				};
+				comments
+					.get_or_insert_with(Vec::new)
+					.push(Comment { start, end });
 			} else {
 				break;
 			}
 		}
-		let tok = self.lex_next()?;
-		Ok((tok, nl_before))
+		let tok = self.lex_token()?;
+		Ok((tok, nl_before, comments))
 	}
 
-	fn lex_next(&mut self) -> Result<Token, Error> {
+	fn lex_token(&mut self) -> Result<Token, Error> {
 		if self.pos == self.src.len() {
 			return Ok(Token {
 				src: self.src.id(),

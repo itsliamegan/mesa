@@ -1,5 +1,5 @@
 use crate::intern::Sym;
-use crate::src::Span;
+use crate::syn::lex::TokenRange;
 
 pub trait NodeId: Copy {
 	fn from_index(index: usize) -> Self;
@@ -9,7 +9,7 @@ pub trait NodeId: Copy {
 #[derive(Debug)]
 pub struct Nodes<Node, Id> {
 	nodes: Vec<Node>,
-	spans: Vec<Span>,
+	ranges: Vec<TokenRange>,
 	_id: std::marker::PhantomData<Id>,
 }
 
@@ -17,7 +17,7 @@ impl<Node, Id: NodeId> Nodes<Node, Id> {
 	pub fn new() -> Self {
 		Self {
 			nodes: Vec::new(),
-			spans: Vec::new(),
+			ranges: Vec::new(),
 			_id: std::marker::PhantomData,
 		}
 	}
@@ -30,14 +30,18 @@ impl<Node, Id: NodeId> Nodes<Node, Id> {
 		&self.nodes[id.index()]
 	}
 
-	pub fn get_span(&self, id: Id) -> Span {
-		self.spans[id.index()]
+	pub fn get_token_range(&self, id: Id) -> TokenRange {
+		self.ranges[id.index()]
 	}
 
-	pub fn add(&mut self, span: Span, node: Node) -> Id {
+	pub fn set_token_range(&mut self, id: Id, range: TokenRange) {
+		self.ranges[id.index()] = range;
+	}
+
+	pub fn add(&mut self, range: TokenRange, node: Node) -> Id {
 		let id = Id::from_index(self.nodes.len());
 		self.nodes.push(node);
-		self.spans.push(span);
+		self.ranges.push(range);
 		id
 	}
 }
