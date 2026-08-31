@@ -6,7 +6,7 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::intern::Interner;
 use crate::src::{Location, SourceId, Sources, Span};
-use crate::syn::lex::{Comments, Lexer, TokenRange, TokenTag, Tokens};
+use crate::syn::lex::{Lexer, TokenId, TokenRange, TokenTag, Tokens, Trivia, Trivias};
 use crate::syn::nodes::*;
 use crate::syn::parse::Parser;
 
@@ -16,14 +16,14 @@ pub fn parse(syms: &mut Interner, sources: &Sources) -> Result<Chunks, Vec<Error
 
 	for id in sources.ids() {
 		let source = sources.get(id);
-		let (toks, comments) = match Lexer::new(syms, source).lex() {
+		let (toks, trivias) = match Lexer::new(syms, source).lex() {
 			Ok(lexed) => lexed,
 			Err(err) => {
 				errs.push(err);
 				continue;
 			}
 		};
-		let chunk = match Parser::new(source, toks, comments).parse() {
+		let chunk = match Parser::new(source, toks, trivias).parse() {
 			Ok(chunk) => chunk,
 			Err(err) => {
 				errs.push(err);
@@ -128,7 +128,7 @@ pub struct Chunk {
 	pub src: SourceId,
 	pub top: Vec<ModuleItemId>,
 	tokens: Tokens,
-	comments: Comments,
+	trivias: Trivias,
 	module_items: Nodes<ModuleItem, ModuleItemId>,
 	type_items: Nodes<TypeItem, TypeItemId>,
 	extern_items: Nodes<ExternItem, ExternItemId>,
@@ -138,12 +138,12 @@ pub struct Chunk {
 }
 
 impl Chunk {
-	pub(crate) fn new(src: SourceId, tokens: Tokens, comments: Comments) -> Self {
+	pub(crate) fn new(src: SourceId, tokens: Tokens, trivias: Trivias) -> Self {
 		Self {
 			src,
 			top: Vec::new(),
 			tokens,
-			comments,
+			trivias,
 			module_items: Nodes::new(),
 			type_items: Nodes::new(),
 			extern_items: Nodes::new(),
@@ -157,8 +157,25 @@ impl Chunk {
 		&self.tokens
 	}
 
-	pub fn comments(&self) -> &Comments {
-		&self.comments
+	pub fn trivias(&self) -> &Trivias {
+		&self.trivias
+	}
+
+	pub fn trivia_before(&self, token: TokenId) -> &[Trivia] {
+		let start = self.tokens.trivia_start(token);
+		let end = if token.next().index() < self.tokens.len() {
+			self.tokens.trivia_start(token.next())
+		} else {
+			self.trivias.end()
+		};
+		self.trivias.range(start, end)
+	}
+
+	pub fn has_newline_before(&self, token: TokenId) -> bool {
+		self.trivia_before(token).iter().any(|trivia| match trivia {
+			Trivia::Comment(..) => false,
+			Trivia::Newlines(_) => true,
+		})
 	}
 
 	pub fn get_module_item(&self, item_id: ModuleItemId) -> &ModuleItem {

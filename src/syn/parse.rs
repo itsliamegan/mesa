@@ -1,6 +1,6 @@
 use crate::intern::Sym;
 use crate::src::Source;
-use crate::syn::lex::{Comments, Token, TokenId, TokenRange, TokenTag, Tokens};
+use crate::syn::lex::{Token, TokenId, TokenRange, TokenTag, Tokens, Trivias};
 use crate::syn::nodes::*;
 use crate::syn::{Chunk, Error};
 
@@ -119,11 +119,11 @@ pub struct Parser<'src> {
 }
 
 impl<'src> Parser<'src> {
-	pub fn new(src: &'src Source, toks: Tokens, comments: Comments) -> Self {
+	pub fn new(src: &'src Source, toks: Tokens, trivias: Trivias) -> Self {
 		Self {
 			src,
 			cur: TokenId(0),
-			chunk: Chunk::new(src.id(), toks, comments),
+			chunk: Chunk::new(src.id(), toks, trivias),
 		}
 	}
 
@@ -478,7 +478,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_params(&mut self) -> Result<Vec<Param>, Error> {
 		let mut params = Vec::new();
-		if self.tag() != TokenTag::LParen || self.chunk.tokens().nl_before(self.cur) {
+		if self.tag() != TokenTag::LParen || self.chunk.has_newline_before(self.cur) {
 			return Ok(params);
 		}
 		self.take(TokenTag::LParen)?;
@@ -510,7 +510,7 @@ impl<'src> Parser<'src> {
 	fn parse_expr_prec(&mut self, min_prec: Precedence) -> Result<ExprId, Error> {
 		let mut expr_id = self.parse_expr_unit()?;
 		while Precedence::of(self.tag()) > min_prec {
-			if self.chunk.tokens().nl_before(self.cur)
+			if self.chunk.has_newline_before(self.cur)
 				&& terminates_expr(self.chunk.tokens().tag(self.cur.prev()))
 				&& !continues_expr(self.tag())
 			{
@@ -764,7 +764,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_return_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Return)?;
-		let val_expr_id = if self.chunk.tokens().nl_before(self.cur) || !starts_expr(self.tag()) {
+		let val_expr_id = if self.chunk.has_newline_before(self.cur) || !starts_expr(self.tag()) {
 			None
 		} else {
 			Some(self.parse_expr()?)
@@ -776,7 +776,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_break_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Break)?;
-		let val_expr_id = if self.chunk.tokens().nl_before(self.cur) || !starts_expr(self.tag()) {
+		let val_expr_id = if self.chunk.has_newline_before(self.cur) || !starts_expr(self.tag()) {
 			None
 		} else {
 			Some(self.parse_expr()?)

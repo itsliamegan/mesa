@@ -157,3 +157,17 @@ $print(empty)
 
 #> # not a comment
 $print("# not a comment")
+#> #
+$print('#')
+
+def sum(a, b)
+	a + b
+end
+#> 7
+$print(sum(
+	3, # first
+	# second
+	4
+))
+
+# A comment at end of file.

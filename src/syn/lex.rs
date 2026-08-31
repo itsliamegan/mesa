@@ -174,9 +174,15 @@ impl TokenId {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct CommentId(u32);
+pub enum Trivia {
+	Comment(usize, usize),
+	Newlines(u32),
+}
 
-impl CommentId {
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TriviaId(u32);
+
+impl TriviaId {
 	fn from_index(index: usize) -> Self {
 		Self(index as u32)
 	}
@@ -187,45 +193,35 @@ impl CommentId {
 }
 
 #[derive(Debug)]
-pub struct Comment {
-	start: usize,
-	end: usize,
+pub struct Trivias {
+	trivias: Vec<Trivia>,
 }
 
-#[derive(Debug)]
-pub struct Comments {
-	comments: Vec<Comment>,
-}
-
-impl Comments {
+impl Trivias {
 	fn new() -> Self {
 		Self {
-			comments: Vec::new(),
+			trivias: Vec::new(),
 		}
 	}
 
-	fn add(&mut self, comment: Comment) -> CommentId {
-		let id = CommentId::from_index(self.comments.len());
-		self.comments.push(comment);
-		id
+	fn add(&mut self, trivia: Trivia) {
+		self.trivias.push(trivia);
 	}
 
-	pub fn ids(&self) -> impl ExactSizeIterator<Item = CommentId> {
-		(0..self.comments.len()).map(CommentId::from_index)
+	pub fn ids(&self) -> impl ExactSizeIterator<Item = TriviaId> {
+		(0..self.trivias.len()).map(TriviaId::from_index)
 	}
 
-	pub fn get(&self, id: CommentId) -> &Comment {
-		&self.comments[id.index()]
-	}
-}
-
-impl Comment {
-	pub fn start(&self) -> usize {
-		self.start
+	pub fn get(&self, id: TriviaId) -> Trivia {
+		self.trivias[id.index()]
 	}
 
-	pub fn end(&self) -> usize {
-		self.end
+	pub fn end(&self) -> TriviaId {
+		TriviaId::from_index(self.trivias.len())
+	}
+
+	pub fn range(&self, start: TriviaId, end: TriviaId) -> &[Trivia] {
+		&self.trivias[start.index()..end.index()]
 	}
 }
 
@@ -235,7 +231,7 @@ pub struct Tokens {
 	syms: Vec<Option<Sym>>,
 	starts: Vec<usize>,
 	ends: Vec<usize>,
-	nl_befores: Vec<bool>,
+	trivia_starts: Vec<TriviaId>,
 }
 
 impl Tokens {
@@ -245,7 +241,7 @@ impl Tokens {
 			syms: Vec::new(),
 			starts: Vec::new(),
 			ends: Vec::new(),
-			nl_befores: Vec::new(),
+			trivia_starts: Vec::new(),
 		}
 	}
 
@@ -259,14 +255,14 @@ impl Tokens {
 		sym: Option<Sym>,
 		start: usize,
 		end: usize,
-		nl_before: bool,
+		trivia_start: TriviaId,
 	) -> TokenId {
 		let id = TokenId(self.tags.len() as u32);
 		self.tags.push(tag);
 		self.syms.push(sym);
 		self.starts.push(start);
 		self.ends.push(end);
-		self.nl_befores.push(nl_before);
+		self.trivia_starts.push(trivia_start);
 		id
 	}
 
@@ -286,8 +282,8 @@ impl Tokens {
 		self.ends[id.index()]
 	}
 
-	pub fn nl_before(&self, id: TokenId) -> bool {
-		self.nl_befores[id.index()]
+	pub fn trivia_start(&self, id: TokenId) -> TriviaId {
+		self.trivia_starts[id.index()]
 	}
 
 	pub fn span(&self, src: SourceId, range: TokenRange) -> Span {
@@ -304,7 +300,7 @@ pub struct Lexer<'syms, 'src> {
 	src: &'src Source,
 	pos: usize,
 	toks: Tokens,
-	comments: Comments,
+	trivias: Trivias,
 }
 
 impl<'syms, 'src> Lexer<'syms, 'src> {
@@ -314,56 +310,52 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			src,
 			pos: 0,
 			toks: Tokens::new(),
-			comments: Comments::new(),
+			trivias: Trivias::new(),
 		}
 	}
 
-	pub fn lex(mut self) -> Result<(Tokens, Comments), Error> {
+	pub fn lex(mut self) -> Result<(Tokens, Trivias), Error> {
 		loop {
-			let (tok, nl_before, comments) = self.lex_next()?;
+			let trivia_start = self.trivias.end();
+			self.skip_trivia();
+			let tok = self.lex_next()?;
 			self.toks
-				.push(tok.tag, tok.sym, tok.start, tok.end, nl_before);
-			for comment in comments.into_iter().flatten() {
-				self.comments.add(comment);
-			}
+				.push(tok.tag, tok.sym, tok.start, tok.end, trivia_start);
 			if tok.tag == TokenTag::Eof {
 				break;
 			}
 		}
-		Ok((self.toks, self.comments))
+		Ok((self.toks, self.trivias))
 	}
 
-	fn lex_next(&mut self) -> Result<(Token, bool, Option<Vec<Comment>>), Error> {
-		let mut nl_before = false;
-		let mut comments = None;
+	fn skip_trivia(&mut self) {
+		let mut newlines = 0;
 		while self.pos < self.src.len() {
 			if self.src[self.pos] == b'\n' {
-				nl_before = true;
+				newlines += 1;
 				self.pos += 1;
 			} else if self.src[self.pos].is_ascii_whitespace() {
 				self.pos += 1;
 			} else if self.src[self.pos] == b'#' {
+				if newlines > 0 {
+					self.trivias.add(Trivia::Newlines(newlines));
+					newlines = 0;
+				}
 				let start = self.pos;
 				while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
 					self.pos += 1;
 				}
-				let end = if self.pos > start && self.src[self.pos - 1] == b'\r' {
-					self.pos - 1
-				} else {
-					self.pos
-				};
-				comments
-					.get_or_insert_with(Vec::new)
-					.push(Comment { start, end });
+				self.trivias.add(Trivia::Comment(start, self.pos));
 			} else {
 				break;
 			}
 		}
-		let tok = self.lex_token()?;
-		Ok((tok, nl_before, comments))
+		if newlines > 0 {
+			self.trivias.add(Trivia::Newlines(newlines));
+		}
 	}
 
-	fn lex_token(&mut self) -> Result<Token, Error> {
+	fn lex_next(&mut self) -> Result<Token, Error> {
 		if self.pos == self.src.len() {
 			return Ok(Token {
 				tag: TokenTag::Eof,
