@@ -133,10 +133,9 @@ impl<'src> Parser<'src> {
 
 	fn tok(&self, id: TokenId) -> Token {
 		Token {
-			src: self.src.id(),
 			tag: self.chunk.tokens().tag(id),
 			sym: self.chunk.tokens().sym(id),
-			pos: self.chunk.tokens().start(id),
+			start: self.chunk.tokens().start(id),
 			end: self.chunk.tokens().end(id),
 		}
 	}
@@ -633,7 +632,7 @@ impl<'src> Parser<'src> {
 			Expr::Name(name) => Place::Name(name.clone()),
 			Expr::Member(member) => Place::Member(member.clone()),
 			Expr::Access(access) => Place::Access(access.clone()),
-			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.1.pos), tok.1.tag)),
+			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.1.start), tok.1.tag)),
 		};
 		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
 		let expr = Expr::Assign(Assign {
@@ -946,7 +945,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_builtin_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Builtin)?;
-		let span = &self.src[tok.1.pos..tok.1.end];
+		let span = &self.src[tok.1.start..tok.1.end];
 		match span {
 			"$print" => {
 				self.take(TokenTag::LParen)?;
@@ -965,7 +964,7 @@ impl<'src> Parser<'src> {
 				Ok(expr_id)
 			}
 			_ => Err(Error::UnknownBuiltin(
-				self.src.loc(tok.1.pos),
+				self.src.loc(tok.1.start),
 				span.to_string(),
 			)),
 		}
@@ -985,7 +984,7 @@ impl<'src> Parser<'src> {
 		let mut chars = str.chars();
 		let char = match chars.next() {
 			Some(char) if chars.next().is_none() => char,
-			_ => return Err(Error::MultiCharLit(self.src.loc(tok.1.pos))),
+			_ => return Err(Error::MultiCharLit(self.src.loc(tok.1.start))),
 		};
 		let expr = Expr::Lit(Lit::Char(char));
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
@@ -993,8 +992,8 @@ impl<'src> Parser<'src> {
 	}
 
 	fn unescape_quoted_lit(&self, tok: &Token, quote: u8) -> Result<String, Error> {
-		let mut pos = tok.pos + 1;
-		let mut str = String::with_capacity(tok.end - tok.pos);
+		let mut pos = tok.start + 1;
+		let mut str = String::with_capacity(tok.end - tok.start);
 		let mut chunk_pos = pos;
 		while pos < tok.end - 1 {
 			if self.src[pos] == b'\\' {
@@ -1022,7 +1021,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_num_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Num)?;
-		let span = &self.src[tok.1.pos..tok.1.end];
+		let span = &self.src[tok.1.start..tok.1.end];
 		let num = span.parse().unwrap();
 		let expr = Expr::Lit(Lit::Num(num));
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
@@ -1031,7 +1030,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_bool_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Bool)?;
-		let span = &self.src[tok.1.pos..tok.1.end];
+		let span = &self.src[tok.1.start..tok.1.end];
 		let bool = span.parse().unwrap();
 		let expr = Expr::Lit(Lit::Bool(bool));
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);

@@ -4,21 +4,10 @@ use crate::syn::Error;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
-	pub src: SourceId,
 	pub tag: TokenTag,
 	pub sym: Option<Sym>,
-	pub pos: usize,
+	pub start: usize,
 	pub end: usize,
-}
-
-impl From<Token> for Span {
-	fn from(tok: Token) -> Span {
-		Span {
-			src: tok.src,
-			start: tok.pos,
-			end: tok.end,
-		}
-	}
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -333,7 +322,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 		loop {
 			let (tok, nl_before, comments) = self.lex_next()?;
 			self.toks
-				.push(tok.tag, tok.sym, tok.pos, tok.end, nl_before);
+				.push(tok.tag, tok.sym, tok.start, tok.end, nl_before);
 			for comment in comments.into_iter().flatten() {
 				self.comments.add(comment);
 			}
@@ -377,10 +366,9 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_token(&mut self) -> Result<Token, Error> {
 		if self.pos == self.src.len() {
 			return Ok(Token {
-				src: self.src.id(),
 				tag: TokenTag::Eof,
 				sym: None,
-				pos: self.pos,
+				start: self.pos,
 				end: self.pos,
 			});
 		}
@@ -390,19 +378,17 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::Eq,
 						sym: None,
-						pos: self.pos - 2,
+						start: self.pos - 2,
 						end: self.pos,
 					})
 				} else {
 					self.pos += 1;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::Colon,
 						sym: None,
-						pos: self.pos - 1,
+						start: self.pos - 1,
 						end: self.pos,
 					})
 				}
@@ -411,10 +397,9 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::EqEq,
 						sym: None,
-						pos: self.pos - 2,
+						start: self.pos - 2,
 						end: self.pos,
 					})
 				} else {
@@ -425,10 +410,9 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::NotEq,
 						sym: None,
-						pos: self.pos - 2,
+						start: self.pos - 2,
 						end: self.pos,
 					})
 				} else {
@@ -439,28 +423,25 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::LtEq,
 						sym: None,
-						pos: self.pos - 2,
+						start: self.pos - 2,
 						end: self.pos,
 					})
 				} else if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'<' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::LtLt,
 						sym: None,
-						pos: self.pos - 2,
+						start: self.pos - 2,
 						end: self.pos,
 					})
 				} else {
 					self.pos += 1;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::Lt,
 						sym: None,
-						pos: self.pos - 1,
+						start: self.pos - 1,
 						end: self.pos,
 					})
 				}
@@ -469,19 +450,17 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::GtEq,
 						sym: None,
-						pos: self.pos - 2,
+						start: self.pos - 2,
 						end: self.pos,
 					})
 				} else {
 					self.pos += 1;
 					Ok(Token {
-						src: self.src.id(),
 						tag: TokenTag::Gt,
 						sym: None,
-						pos: self.pos - 1,
+						start: self.pos - 1,
 						end: self.pos,
 					})
 				}
@@ -489,130 +468,117 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			b'+' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Plus,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'-' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Minus,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'*' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Star,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'/' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Slash,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'&' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Amp,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'{' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::LBrace,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'}' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::RBrace,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'[' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::LBrack,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b']' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::RBrack,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'(' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::LParen,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b')' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::RParen,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b',' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Comma,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
 			b'.' => {
 				self.pos += 1;
 				Ok(Token {
-					src: self.src.id(),
 					tag: TokenTag::Dot,
 					sym: None,
-					pos: self.pos - 1,
+					start: self.pos - 1,
 					end: self.pos,
 				})
 			}
@@ -633,7 +599,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	}
 
 	fn lex_ident(&mut self) -> Result<Token, Error> {
-		let pos = self.pos;
+		let start = self.pos;
 		while self.pos < self.src.len()
 			&& (self.src[self.pos].is_ascii_alphabetic()
 				|| self.src[self.pos].is_ascii_digit()
@@ -652,7 +618,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				self.pos += 1;
 			}
 		}
-		let span = &self.src[pos..self.pos];
+		let span = &self.src[start..self.pos];
 		let sym = self.syms.intern(span);
 		let tag = match sym {
 			Sym::MODULE => TokenTag::Module,
@@ -685,29 +651,27 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			_ => TokenTag::Ident,
 		};
 		Ok(Token {
-			src: self.src.id(),
 			tag,
 			sym: Some(sym),
-			pos,
+			start,
 			end: self.pos,
 		})
 	}
 
 	fn lex_builtin(&mut self) -> Result<Token, Error> {
-		let pos = self.pos;
+		let start = self.pos;
 		self.pos += 1;
 		let ident = self.lex_ident()?;
 		Ok(Token {
-			src: self.src.id(),
 			tag: TokenTag::Builtin,
 			sym: ident.sym,
-			pos,
+			start,
 			end: ident.end,
 		})
 	}
 
 	fn lex_str(&mut self) -> Result<Token, Error> {
-		let pos = self.pos;
+		let start = self.pos;
 		self.pos += 1;
 		while self.pos < self.src.len() && self.src[self.pos] != b'"' {
 			if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
@@ -717,20 +681,19 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			}
 		}
 		if self.pos == self.src.len() {
-			return Err(Error::UnterminatedStrLit(self.src.loc(pos)));
+			return Err(Error::UnterminatedStrLit(self.src.loc(start)));
 		}
 		self.pos += 1;
 		Ok(Token {
-			src: self.src.id(),
 			tag: TokenTag::Str,
 			sym: None,
-			pos,
+			start,
 			end: self.pos,
 		})
 	}
 
 	fn lex_char(&mut self) -> Result<Token, Error> {
-		let pos = self.pos;
+		let start = self.pos;
 		self.pos += 1;
 		while self.pos < self.src.len() && self.src[self.pos] != b'\'' {
 			if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
@@ -740,20 +703,19 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			}
 		}
 		if self.pos == self.src.len() {
-			return Err(Error::UnterminatedCharLit(self.src.loc(pos)));
+			return Err(Error::UnterminatedCharLit(self.src.loc(start)));
 		}
 		self.pos += 1;
 		Ok(Token {
-			src: self.src.id(),
 			tag: TokenTag::Char,
 			sym: None,
-			pos,
+			start,
 			end: self.pos,
 		})
 	}
 
 	fn lex_num(&mut self) -> Result<Token, Error> {
-		let pos = self.pos;
+		let start = self.pos;
 		while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
 			self.pos += 1;
 		}
@@ -764,10 +726,9 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			}
 		}
 		Ok(Token {
-			src: self.src.id(),
 			tag: TokenTag::Num,
 			sym: None,
-			pos,
+			start,
 			end: self.pos,
 		})
 	}
