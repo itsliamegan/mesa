@@ -230,8 +230,7 @@ pub fn check(
 	pkg_id: PackageId,
 	natives: &HashMap<Sym, types::NativeTypeShape>,
 ) -> Result<(), Vec<Error>> {
-	let pkg = pkgs.get(pkg_id);
-	let mods = modules::check(syms, pkgs, pkg_id, pkg.sources(), pkg.chunks())?;
+	let mods = modules::check(syms, pkgs, pkg_id)?;
 	pkgs.publish_modules(pkg_id, mods);
 
 	let (protos, mut errs) = protos::check(syms, pkgs, pkg_id);
@@ -268,8 +267,6 @@ fn check_chunk(
 	module: ModuleId,
 ) -> Result<(), Vec<Error>> {
 	let pkg = pkgs.get(pkg_id);
-	let sources = pkg.sources();
-	let protos = pkg.protos();
 	let chunk_id = pkg.modules().chunk(module);
 	let chunk = pkg.chunks().get(chunk_id);
 	let mut errs = Vec::new();
@@ -279,15 +276,16 @@ fn check_chunk(
 	// reaches the implementing instance through its own protocol's declared
 	// members; a def belongs to no protocol unless the lookup below says so.
 	for def_id in chunk.def_ids() {
-		if let Err(err) = check_def(syms, sources, chunk, def_id) {
+		if let Err(err) = check_def(syms, pkg.sources(), chunk, def_id) {
 			errs.push(err);
 			continue;
 		}
-		if let Some(proto_id) = protos.try_get_proto_by_proto_item(chunk_id, def_id) {
+		if let Some(proto_id) = pkg.protos().try_get_proto_by_proto_item(chunk_id, def_id) {
 			let def = chunk.get_def(def_id);
-			let desc = protos.get_proto(proto_id);
+			let desc = pkg.protos().get_proto(proto_id);
 			if desc.provided.contains_key(&def.name)
-				&& let Err(err) = check_reach_block(syms, sources, chunk, def.body, desc.name, desc)
+				&& let Err(err) =
+					check_reach_block(syms, pkg.sources(), chunk, def.body, desc.name, desc)
 			{
 				errs.push(err);
 			}
@@ -296,7 +294,7 @@ fn check_chunk(
 
 	for item_id in &chunk.top {
 		if let ModuleItem::Expr(expr_id) = chunk.get_module_item(*item_id)
-			&& let Err(err) = check_expr(sources, chunk, *expr_id, 0)
+			&& let Err(err) = check_expr(pkg.sources(), chunk, *expr_id, 0)
 		{
 			errs.push(err);
 		}

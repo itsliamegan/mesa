@@ -4,9 +4,9 @@ use ordermap::OrderMap;
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::{PackageId, Packages};
-use crate::sem::modules::{Member, ModuleId, Modules, Resolved};
+use crate::sem::modules::{Member, ModuleId, Resolved};
 use crate::sem::{Error, Visit};
-use crate::src::{Sources, Span};
+use crate::src::Span;
 use crate::syn::nodes::{DefId, ModuleItem, ModuleItemId};
 use crate::syn::{self, Chunk, ChunkId};
 
@@ -82,9 +82,6 @@ impl Protos {
 
 pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> (Protos, Vec<Error>) {
 	let pkg = pkgs.get(pkg_id);
-	let sources = pkg.sources();
-	let chunks = pkg.chunks();
-	let mods = pkg.modules();
 	let mut protos = Protos {
 		protos: Vec::new(),
 		proto_by_item: HashMap::new(),
@@ -94,9 +91,9 @@ pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> (Protos, Ve
 
 	// Describe protocols first, package-wide, so a type can implement one
 	// declared in any file.
-	for module in mods.ids() {
-		let chunk_id = mods.chunk(module);
-		let chunk = chunks.get(chunk_id);
+	for module in pkg.modules().ids() {
+		let chunk_id = pkg.modules().chunk(module);
+		let chunk = pkg.chunks().get(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
@@ -109,18 +106,17 @@ pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> (Protos, Ve
 	// declared in any file of the package, and after every dependency package
 	// is built, so a prerequisite may cross a package boundary.
 	let mut impls: Vec<Vec<(PackageId, ProtoId)>> = vec![Vec::new(); protos.protos.len()];
-	for module in mods.ids() {
-		let chunk_id = mods.chunk(module);
-		let chunk = chunks.get(chunk_id);
+	for module in pkg.modules().ids() {
+		let chunk_id = pkg.modules().chunk(module);
+		let chunk = pkg.chunks().get(chunk_id);
 		for item_id in &chunk.top {
 			if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
 				let span = chunk.get_module_item_span(*item_id);
 				let id = protos.get_proto_by_item(chunk_id, *item_id);
 				impls[id.index()] = resolve_impls(
 					syms,
-					sources,
 					pkgs,
-					mods,
+					pkg_id,
 					&protos,
 					module,
 					span,
@@ -130,15 +126,8 @@ pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> (Protos, Ve
 			}
 		}
 	}
-	errs.append(&mut close_protos(
-		syms,
-		sources,
-		pkgs,
-		pkg_id,
-		&mut protos,
-		&impls,
-	));
-	errs.append(&mut check_protos(syms, sources, pkgs, pkg_id, &protos));
+	errs.append(&mut close_protos(syms, pkgs, pkg_id, &mut protos, &impls));
+	errs.append(&mut check_protos(syms, pkgs, pkg_id, &protos));
 
 	(protos, errs)
 }
@@ -180,11 +169,11 @@ fn describe_proto(
 // implementing type to implement.
 fn check_protos(
 	syms: &Interner,
-	sources: &Sources,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	protos: &Protos,
 ) -> Vec<Error> {
+	let pkg = pkgs.get(pkg_id);
 	let mut errs = Vec::new();
 	for id in protos.proto_ids() {
 		let proto = protos.get_proto(id);
@@ -196,7 +185,7 @@ fn check_protos(
 		});
 		if !proto.provided.is_empty() && !has_requirement {
 			errs.push(Error::ProvidedWithoutRequired(
-				sources.loc(proto.span),
+				pkg.sources().loc(proto.span),
 				syms.resolve(proto.name).to_string(),
 			));
 		}
@@ -213,7 +202,6 @@ fn check_protos(
 // impl cycle could occur by two protocols requiring one another.
 fn close_protos(
 	syms: &Interner,
-	sources: &Sources,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	protos: &mut Protos,
@@ -226,7 +214,6 @@ fn close_protos(
 	for id in ids {
 		close_proto(
 			syms,
-			sources,
 			pkgs,
 			pkg_id,
 			protos,
@@ -242,7 +229,6 @@ fn close_protos(
 
 fn close_proto(
 	syms: &Interner,
-	sources: &Sources,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	protos: &mut Protos,
@@ -252,6 +238,7 @@ fn close_proto(
 	path: &mut Vec<ProtoId>,
 	errs: &mut Vec<Error>,
 ) {
+	let pkg = pkgs.get(pkg_id);
 	// Reached only for a protocol already walked to completion: the loop below
 	// never recurses into one still on the path, having reported it instead.
 	if visits[id.index()] != Visit::Unseen {
@@ -275,13 +262,13 @@ fn close_proto(
 		// impl closing the loop that a resolved impl can point at.
 		if visits[dep_id.index()] == Visit::OnPath {
 			errs.push(Error::ProtocolCycle(
-				sources.loc(protos.get_proto(id).span),
+				pkg.sources().loc(protos.get_proto(id).span),
 				render_proto_cycle(syms, protos, path, *dep_id),
 			));
 			continue;
 		}
 		close_proto(
-			syms, sources, pkgs, pkg_id, protos, impls, *dep_id, visits, path, errs,
+			syms, pkgs, pkg_id, protos, impls, *dep_id, visits, path, errs,
 		);
 	}
 	// A cut back edge leaves its protocol's closure empty, contributing
@@ -346,45 +333,44 @@ fn owner_protos<'protos>(
 // declaring file binds. A name that fails to resolve contributes no 'ProtoId'.
 pub(super) fn resolve_impls(
 	syms: &Interner,
-	sources: &Sources,
 	pkgs: &Packages,
-	mods: &Modules,
+	pkg_id: PackageId,
 	protos: &Protos,
 	module: ModuleId,
 	span: Span,
 	paths: &[Vec<Sym>],
 	errs: &mut Vec<Error>,
 ) -> Vec<(PackageId, ProtoId)> {
+	let pkg = pkgs.get(pkg_id);
 	let mut impls = Vec::with_capacity(paths.len());
 	for path in paths {
-		match mods.resolve_path_from(pkgs, module, path) {
-			Some(Resolved::Member(pkg, owner, Member::Proto(item_id))) => {
-				let owner_mods = pkgs.get(pkg).modules();
-				let id = owner_protos(pkgs, mods.pkg(), protos, pkg)
-					.get_proto_by_item(owner_mods.chunk(owner), item_id);
+		match pkg.modules().resolve_path_from(pkgs, module, path) {
+			Some(Resolved::Member(owner_pkg, owner, Member::Proto(item_id))) => {
+				let id = owner_protos(pkgs, pkg_id, protos, owner_pkg)
+					.get_proto_by_item(pkgs.get(owner_pkg).modules().chunk(owner), item_id);
 				// One protocol named twice in one clause is a typo with no
 				// reading that the author meant. Implication is silent, but
 				// repetition is not: a name reached through a prerequisite is a
 				// choice, a name written twice is a slip. Compared by id rather
 				// than by path, so two spellings of one protocol still collide.
-				if impls.contains(&(pkg, id)) {
+				if impls.contains(&(owner_pkg, id)) {
 					errs.push(Error::DuplicateImpl(
-						sources.loc(span),
+						pkg.sources().loc(span),
 						syms.resolve_path(path),
 					));
 					continue;
 				}
-				impls.push((pkg, id));
+				impls.push((owner_pkg, id));
 			}
 			Some(Resolved::Member(..) | Resolved::Module(..) | Resolved::Partial(..)) => {
 				errs.push(Error::NotAProtocol(
-					sources.loc(span),
+					pkg.sources().loc(span),
 					syms.resolve_path(path),
 				));
 			}
 			None => {
 				errs.push(Error::UnknownProtocol(
-					sources.loc(span),
+					pkg.sources().loc(span),
 					syms.resolve_path(path),
 				));
 			}
