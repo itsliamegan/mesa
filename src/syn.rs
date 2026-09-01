@@ -125,7 +125,7 @@ impl ChunkId {
 
 #[derive(Debug)]
 pub struct Chunk {
-	pub src: SourceId,
+	pub source: SourceId,
 	pub top: Vec<ModuleItemId>,
 	tokens: Tokens,
 	trivias: Trivias,
@@ -138,9 +138,9 @@ pub struct Chunk {
 }
 
 impl Chunk {
-	pub(crate) fn new(src: SourceId, tokens: Tokens, trivias: Trivias) -> Self {
+	pub(crate) fn new(source: SourceId, tokens: Tokens, trivias: Trivias) -> Self {
 		Self {
-			src,
+			source,
 			top: Vec::new(),
 			tokens,
 			trivias,
@@ -184,7 +184,7 @@ impl Chunk {
 
 	pub fn get_module_item_span(&self, item_id: ModuleItemId) -> Span {
 		self.tokens
-			.span(self.src, self.module_items.get_token_range(item_id))
+			.span(self.source, self.module_items.get_token_range(item_id))
 	}
 
 	pub fn add_module_item(&mut self, range: TokenRange, item: ModuleItem) -> ModuleItemId {
@@ -197,7 +197,7 @@ impl Chunk {
 
 	pub fn get_type_item_span(&self, item_id: TypeItemId) -> Span {
 		self.tokens
-			.span(self.src, self.type_items.get_token_range(item_id))
+			.span(self.source, self.type_items.get_token_range(item_id))
 	}
 
 	pub fn add_type_item(&mut self, range: TokenRange, item: TypeItem) -> TypeItemId {
@@ -216,7 +216,7 @@ impl Chunk {
 
 	pub fn get_extern_item_span(&self, item_id: ExternItemId) -> Span {
 		self.tokens
-			.span(self.src, self.extern_items.get_token_range(item_id))
+			.span(self.source, self.extern_items.get_token_range(item_id))
 	}
 
 	pub fn add_extern_item(&mut self, range: TokenRange, item: ExternItem) -> ExternItemId {
@@ -229,7 +229,7 @@ impl Chunk {
 
 	pub fn get_def_span(&self, def_id: DefId) -> Span {
 		self.tokens
-			.span(self.src, self.defs.get_token_range(def_id))
+			.span(self.source, self.defs.get_token_range(def_id))
 	}
 
 	pub fn add_def(&mut self, range: TokenRange, def: Def) -> DefId {
@@ -246,7 +246,7 @@ impl Chunk {
 
 	pub fn get_expr_span(&self, expr_id: ExprId) -> Span {
 		self.tokens
-			.span(self.src, self.exprs.get_token_range(expr_id))
+			.span(self.source, self.exprs.get_token_range(expr_id))
 	}
 
 	pub fn get_expr_token_range(&self, expr_id: ExprId) -> TokenRange {

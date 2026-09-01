@@ -190,11 +190,11 @@ impl Errors {
 	// of 'Core.Errors' or of an outer variant's own group type ('base'). The
 	// second component is one of the outer type's case variants ('leaf').
 	fn resolve(&self, rt: &Runtime, syms: &Interner, base: Sym, leaf: Sym) -> types::TypeId {
-		let mods = &rt.pkgs.get(self.pkg).mods;
-		let Some(modules::Member::Type(item_id)) = mods.descs.member(self.module, base) else {
+		let modules = &rt.pkgs.get(self.pkg).modules;
+		let Some(modules::Member::Type(item_id)) = modules.descs.member(self.module, base) else {
 			panic!("'Core.Errors' does not declare '{}'", syms.resolve(base));
 		};
-		let chunk_id = mods.descs.chunk(self.module);
+		let chunk_id = modules.descs.chunk(self.module);
 		let base_id = rt
 			.pkgs
 			.get(self.pkg)

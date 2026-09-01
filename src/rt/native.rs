@@ -55,10 +55,10 @@ impl Counter {
 	}
 
 	fn count(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Obj(rf) = val else {
+		let Val::Obj(obj) = val else {
 			panic!();
 		};
-		let Obj::Native(_, data) = &*rf.borrow() else {
+		let Obj::Native(_, data) = &*obj.borrow() else {
 			panic!();
 		};
 		Ok(Val::Num(Num(data
@@ -69,10 +69,10 @@ impl Counter {
 	}
 
 	fn bump(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Obj(rf) = val else {
+		let Val::Obj(obj) = val else {
 			panic!();
 		};
-		let Obj::Native(_, data) = &mut *rf.borrow_mut() else {
+		let Obj::Native(_, data) = &mut *obj.borrow_mut() else {
 			panic!();
 		};
 		let counter = data.0.downcast_mut::<Counter>().unwrap();

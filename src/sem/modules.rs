@@ -23,7 +23,7 @@ impl ModuleId {
 #[derive(Debug)]
 pub struct Modules {
 	pkg: PackageId,
-	mods: Vec<Module>,
+	modules: Vec<Module>,
 	by_file: HashMap<PathBuf, ModuleId>,
 	by_name: HashMap<Vec<Sym>, ModuleId>,
 	by_chunk: HashMap<ChunkId, ModuleId>,
@@ -105,7 +105,7 @@ impl Target {
 
 impl Modules {
 	fn get(&self, id: ModuleId) -> &Module {
-		&self.mods[id.index()]
+		&self.modules[id.index()]
 	}
 
 	pub fn pkg(&self) -> PackageId {
@@ -113,7 +113,7 @@ impl Modules {
 	}
 
 	pub fn ids(&self) -> impl Iterator<Item = ModuleId> + use<> {
-		(0..self.mods.len() as u32).map(ModuleId)
+		(0..self.modules.len() as u32).map(ModuleId)
 	}
 
 	pub fn chunk(&self, id: ModuleId) -> ChunkId {
@@ -269,8 +269,8 @@ impl Modules {
 pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modules, Vec<Error>> {
 	let mut errs = check_sibling_files_exist(pkgs, pkg_id);
 
-	let mut mods = match build(syms, pkgs, pkg_id) {
-		Ok(mods) => mods,
+	let mut modules = match build(syms, pkgs, pkg_id) {
+		Ok(modules) => modules,
 		Err(mut header_errs) => {
 			// If there are errors in the module headers, checking them won't
 			// result in anything sensible; error early.
@@ -279,14 +279,16 @@ pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modu
 		}
 	};
 
-	errs.append(&mut check_child_prefixes_match(syms, pkgs, pkg_id, &mods));
-	errs.append(&mut check_members_unique(syms, pkgs, pkg_id, &mut mods));
+	errs.append(&mut check_child_prefixes_match(
+		syms, pkgs, pkg_id, &modules,
+	));
+	errs.append(&mut check_members_unique(syms, pkgs, pkg_id, &mut modules));
 
 	// Resolution reads every module's members, so it runs after they are
 	// filled. Cycles are a property of the resolved edges, so they run after
 	// that.
-	errs.append(&mut resolve_imports(syms, pkgs, pkg_id, &mut mods));
-	errs.append(&mut check_import_cycles(syms, pkgs, pkg_id, &mods));
+	errs.append(&mut resolve_imports(syms, pkgs, pkg_id, &mut modules));
+	errs.append(&mut check_import_cycles(syms, pkgs, pkg_id, &modules));
 
 	if !errs.is_empty() {
 		return Err(errs);
@@ -294,15 +296,15 @@ pub fn check(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modu
 
 	// The order walk needs to know that the import graph is acyclic, so it runs
 	// after.
-	mods.order = compute_order(&mods);
+	modules.order = compute_order(&modules);
 
-	Ok(mods)
+	Ok(modules)
 }
 
 // Build the *incomplete* module graph. Later passes will flesh out its data.
 fn build(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modules, Vec<Error>> {
 	let pkg = pkgs.get(pkg_id);
-	let mut mods = Vec::new();
+	let mut modules = Vec::new();
 	let mut by_file = HashMap::new();
 	let mut by_name = HashMap::new();
 	let mut by_chunk = HashMap::new();
@@ -310,7 +312,7 @@ fn build(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modules,
 
 	for chunk_id in pkg.chunks().ids() {
 		let chunk = pkg.chunks().get(chunk_id);
-		let file = pkg.sources().get(chunk.src).file().to_path_buf();
+		let file = pkg.sources().get(chunk.source).file().to_path_buf();
 		let (name, name_span) = match read_header(pkgs, pkg_id, chunk_id) {
 			Ok(header) => header,
 			Err(mut header_errs) => {
@@ -318,7 +320,7 @@ fn build(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modules,
 				continue;
 			}
 		};
-		let id = ModuleId(mods.len() as u32);
+		let id = ModuleId(modules.len() as u32);
 		by_file.insert(file.clone(), id);
 		by_chunk.insert(chunk_id, id);
 		// Nothing ties a module's last segment to its file name, so two files
@@ -342,7 +344,7 @@ fn build(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modules,
 				));
 			}
 		}
-		mods.push(Module {
+		modules.push(Module {
 			chunk: chunk_id,
 			file,
 			name,
@@ -359,7 +361,7 @@ fn build(syms: &Interner, pkgs: &Packages, pkg_id: PackageId) -> Result<Modules,
 
 	Ok(Modules {
 		pkg: pkg_id,
-		mods,
+		modules,
 		by_file,
 		by_name,
 		by_chunk,
@@ -396,7 +398,7 @@ fn read_header(
 	}
 
 	if header.is_none() {
-		let file = pkg.sources().get(chunk.src).file();
+		let file = pkg.sources().get(chunk.source).file();
 		errs.push(Error::MissingModuleHeader(Location::file(
 			file.to_path_buf(),
 		)));
@@ -452,16 +454,16 @@ fn check_child_prefixes_match(
 	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
-	mods: &Modules,
+	modules: &Modules,
 ) -> Vec<Error> {
 	let pkg = pkgs.get(pkg_id);
 	let mut errs = Vec::new();
-	for id in mods.ids() {
-		let parent = match mods.parent(id) {
-			Some(parent) => mods.get(parent),
+	for id in modules.ids() {
+		let parent = match modules.parent(id) {
+			Some(parent) => modules.get(parent),
 			None => continue,
 		};
-		let module = mods.get(id);
+		let module = modules.get(id);
 		if module.name.len() == parent.name.len() + 1
 			&& module.name[..parent.name.len()] == parent.name
 		{
@@ -483,13 +485,13 @@ fn check_members_unique(
 	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
-	mods: &mut Modules,
+	modules: &mut Modules,
 ) -> Vec<Error> {
 	let pkg = pkgs.get(pkg_id);
 	let mut errs = Vec::new();
 
-	for id in mods.ids() {
-		let chunk = pkg.chunks().get(mods.get(id).chunk);
+	for id in modules.ids() {
+		let chunk = pkg.chunks().get(modules.get(id).chunk);
 		let mut members = OrderMap::new();
 		for item_id in &chunk.top {
 			let span = chunk.get_module_item_span(*item_id);
@@ -519,24 +521,24 @@ fn check_members_unique(
 				));
 			}
 		}
-		mods.mods[id.index()].members = members;
+		modules.modules[id.index()].members = members;
 	}
 
 	// A child module's name is a member of its parent, so it collides with the
 	// parent's declarations even though the two live in different files.
-	for id in mods.ids() {
-		let parent_id = match mods.parent(id) {
+	for id in modules.ids() {
+		let parent_id = match modules.parent(id) {
 			Some(parent_id) => parent_id,
 			None => continue,
 		};
-		let leaf = *mods.get(id).name.last().unwrap();
-		if mods.mods[parent_id.index()]
+		let leaf = *modules.get(id).name.last().unwrap();
+		if modules.modules[parent_id.index()]
 			.members
 			.insert(leaf, Member::Child(id))
 			.is_some()
 		{
 			errs.push(Error::DuplicateMember(
-				pkg.sources().loc(mods.get(id).name_span),
+				pkg.sources().loc(modules.get(id).name_span),
 				syms.resolve(leaf).to_string(),
 			));
 		}
@@ -551,20 +553,20 @@ fn resolve_imports(
 	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
-	mods: &mut Modules,
+	modules: &mut Modules,
 ) -> Vec<Error> {
 	let pkg = pkgs.get(pkg_id);
 	let mut errs = Vec::new();
 
-	for id in mods.ids() {
-		let chunk = pkg.chunks().get(mods.get(id).chunk);
+	for id in modules.ids() {
+		let chunk = pkg.chunks().get(modules.get(id).chunk);
 		let mut imports = Vec::new();
 		for item_id in &chunk.top {
 			let ModuleItem::Import(import) = chunk.get_module_item(*item_id) else {
 				continue;
 			};
 			let span = chunk.get_module_item_span(*item_id);
-			match resolve_import_path(mods, pkgs, pkg_id, &import.path) {
+			match resolve_import_path(modules, pkgs, pkg_id, &import.path) {
 				Some((pkg, target)) => imports.push(Import { pkg, target, span }),
 				None => errs.push(Error::UnknownImport(
 					pkg.sources().loc(span),
@@ -572,7 +574,7 @@ fn resolve_imports(
 				)),
 			}
 		}
-		mods.mods[id.index()].imports = imports;
+		modules.modules[id.index()].imports = imports;
 	}
 
 	errs
@@ -582,12 +584,12 @@ fn resolve_imports(
 // module itself or a member of a module. Tries the local package first, then
 // falls through to other packages in the arena.
 fn resolve_import_path(
-	mods: &Modules,
+	modules: &Modules,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	path: &[Sym],
 ) -> Option<(PackageId, Target)> {
-	if let Some(found) = resolve_import_path_in(mods, path) {
+	if let Some(found) = resolve_import_path_in(modules, path) {
 		return Some((pkg_id, found));
 	}
 	for (other_id, other_pkg) in pkgs.iter() {
@@ -601,13 +603,13 @@ fn resolve_import_path(
 	None
 }
 
-fn resolve_import_path_in(mods: &Modules, path: &[Sym]) -> Option<Target> {
-	if let Some(id) = mods.by_name.get(path) {
+fn resolve_import_path_in(modules: &Modules, path: &[Sym]) -> Option<Target> {
+	if let Some(id) = modules.by_name.get(path) {
 		return Some(Target::Module(*id));
 	}
 	let (last, prefix) = path.split_last()?;
-	let id = *mods.by_name.get(prefix)?;
-	if mods.get(id).members.contains_key(last) {
+	let id = *modules.by_name.get(prefix)?;
+	if modules.get(id).members.contains_key(last) {
 		return Some(Target::Member(id, *last));
 	}
 	None
@@ -621,19 +623,19 @@ fn check_import_cycles(
 	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
-	mods: &Modules,
+	modules: &Modules,
 ) -> Vec<Error> {
 	let mut errs = Vec::new();
-	let mut visits = vec![Visit::Unseen; mods.mods.len()];
+	let mut visits = vec![Visit::Unseen; modules.modules.len()];
 	// The modules entered and not yet left, in the order they were entered,
 	// which is what a cycle is rendered from.
 	let mut path = Vec::new();
-	for id in mods.ids() {
+	for id in modules.ids() {
 		walk_imports(
 			syms,
 			pkgs,
 			pkg_id,
-			mods,
+			modules,
 			id,
 			&mut visits,
 			&mut path,
@@ -650,7 +652,7 @@ fn walk_imports(
 	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
-	mods: &Modules,
+	modules: &Modules,
 	id: ModuleId,
 	visits: &mut Vec<Visit>,
 	path: &mut Vec<ModuleId>,
@@ -665,8 +667,8 @@ fn walk_imports(
 	visits[id.index()] = Visit::OnPath;
 	path.push(id);
 
-	for import in &mods.get(id).imports {
-		if import.pkg != mods.pkg {
+	for import in &modules.get(id).imports {
+		if import.pkg != modules.pkg {
 			continue;
 		}
 		let next = import.target.module();
@@ -674,12 +676,12 @@ fn walk_imports(
 		if visits[next.index()] == Visit::OnPath {
 			errs.push(Error::ImportCycle(
 				pkg.sources().loc(import.span),
-				render_cycle(syms, mods, path, next),
+				render_cycle(syms, modules, path, next),
 			));
 			continue;
 		}
 		// Otherwise, continue walking the graph through the imported module.
-		walk_imports(syms, pkgs, pkg_id, mods, next, visits, path, errs);
+		walk_imports(syms, pkgs, pkg_id, modules, next, visits, path, errs);
 	}
 
 	path.pop();
@@ -690,13 +692,13 @@ fn walk_imports(
 // imported back into through to the one importing it, then that first module
 // again, so that the cycle reads as a closed loop. The path can hold modules
 // walked through before the cycle began, and those are dropped.
-fn render_cycle(syms: &Interner, mods: &Modules, path: &[ModuleId], back: ModuleId) -> String {
+fn render_cycle(syms: &Interner, modules: &Modules, path: &[ModuleId], back: ModuleId) -> String {
 	let start = path.iter().position(|id| *id == back).unwrap();
 	let mut names: Vec<String> = path[start..]
 		.iter()
-		.map(|id| syms.resolve_path(&mods.get(*id).name))
+		.map(|id| syms.resolve_path(&modules.get(*id).name))
 		.collect();
-	names.push(syms.resolve_path(&mods.get(back).name));
+	names.push(syms.resolve_path(&modules.get(back).name));
 	names.join(" → ")
 }
 
@@ -704,31 +706,31 @@ fn render_cycle(syms: &Interner, mods: &Modules, path: &[ModuleId], back: Module
 // starts its own walk, in ModuleId order; the root module starts last, unless
 // an earlier walk already reached it as somebody's dependency, in which case it
 // is already in the order and dependencies still precede dependents.
-fn compute_order(mods: &Modules) -> Vec<ModuleId> {
-	let root = mods.by_file[Path::new(ROOT_FILE)];
-	let mut order = Vec::with_capacity(mods.mods.len());
-	let mut visited = vec![false; mods.mods.len()];
-	for id in mods.ids() {
+fn compute_order(modules: &Modules) -> Vec<ModuleId> {
+	let root = modules.by_file[Path::new(ROOT_FILE)];
+	let mut order = Vec::with_capacity(modules.modules.len());
+	let mut visited = vec![false; modules.modules.len()];
+	for id in modules.ids() {
 		if id != root {
-			walk_order(mods, id, &mut visited, &mut order);
+			walk_order(modules, id, &mut visited, &mut order);
 		}
 	}
-	walk_order(mods, root, &mut visited, &mut order);
+	walk_order(modules, root, &mut visited, &mut order);
 	order
 }
 
 // Post-order DFS over import edges, so a module's dependencies are always
 // evaluated before it.
-fn walk_order(mods: &Modules, id: ModuleId, visited: &mut [bool], order: &mut Vec<ModuleId>) {
+fn walk_order(modules: &Modules, id: ModuleId, visited: &mut [bool], order: &mut Vec<ModuleId>) {
 	if visited[id.index()] {
 		return;
 	}
 	visited[id.index()] = true;
-	for import in &mods.get(id).imports {
-		if import.pkg != mods.pkg {
+	for import in &modules.get(id).imports {
+		if import.pkg != modules.pkg {
 			continue;
 		}
-		walk_order(mods, import.target.module(), visited, order);
+		walk_order(modules, import.target.module(), visited, order);
 	}
 	order.push(id);
 }

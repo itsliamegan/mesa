@@ -112,18 +112,18 @@ fn continues_expr(tag: TokenTag) -> bool {
 	}
 }
 
-pub struct Parser<'src> {
-	src: &'src Source,
+pub struct Parser<'source> {
+	source: &'source Source,
 	cur: TokenId,
 	chunk: Chunk,
 }
 
-impl<'src> Parser<'src> {
-	pub fn new(src: &'src Source, toks: Tokens, trivias: Trivias) -> Self {
+impl<'source> Parser<'source> {
+	pub fn new(source: &'source Source, toks: Tokens, trivias: Trivias) -> Self {
 		Self {
-			src,
+			source,
 			cur: TokenId(0),
-			chunk: Chunk::new(src.id(), toks, trivias),
+			chunk: Chunk::new(source.id(), toks, trivias),
 		}
 	}
 
@@ -142,7 +142,7 @@ impl<'src> Parser<'src> {
 
 	fn unexpected(&self) -> Error {
 		Error::UnexpectedToken(
-			self.src.loc(self.chunk.tokens().start(self.cur)),
+			self.source.loc(self.chunk.tokens().start(self.cur)),
 			self.chunk.tokens().tag(self.cur),
 		)
 	}
@@ -272,7 +272,7 @@ impl<'src> Parser<'src> {
 				TypeItem::Case(..) => {
 					if seen_field || seen_method {
 						return Err(Error::UnexpectedToken(
-							self.src.loc(span.start),
+							self.source.loc(span.start),
 							TokenTag::Case,
 						));
 					}
@@ -280,7 +280,7 @@ impl<'src> Parser<'src> {
 				TypeItem::Field(..) => {
 					if seen_method {
 						return Err(Error::UnexpectedToken(
-							self.src.loc(span.start),
+							self.source.loc(span.start),
 							TokenTag::Ident,
 						));
 					}
@@ -441,11 +441,11 @@ impl<'src> Parser<'src> {
 
 	fn take_type_name(&mut self) -> Result<Sym, Error> {
 		let ident = self.take(TokenTag::Ident)?;
-		let last = self.src[ident.1.end - 1];
+		let last = self.source[ident.1.end - 1];
 		// Only locals, fields, and procs can have ! and ? in their names.
 		if last == b'!' || last == b'?' {
 			return Err(Error::UnexpectedChar(
-				self.src.loc(ident.1.end - 1),
+				self.source.loc(ident.1.end - 1),
 				last as char,
 			));
 		}
@@ -601,7 +601,7 @@ impl<'src> Parser<'src> {
 				seen_keyword = true;
 				Some(name)
 			} else if seen_keyword {
-				let loc = self.src.loc(self.chunk.tokens().start(self.cur));
+				let loc = self.source.loc(self.chunk.tokens().start(self.cur));
 				return Err(Error::PositionalAfterKeyword(loc));
 			} else {
 				None
@@ -632,7 +632,12 @@ impl<'src> Parser<'src> {
 			Expr::Name(name) => Place::Name(name.clone()),
 			Expr::Member(member) => Place::Member(member.clone()),
 			Expr::Access(access) => Place::Access(access.clone()),
-			_ => return Err(Error::UnexpectedToken(self.src.loc(tok.1.start), tok.1.tag)),
+			_ => {
+				return Err(Error::UnexpectedToken(
+					self.source.loc(tok.1.start),
+					tok.1.tag,
+				));
+			}
 		};
 		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
 		let expr = Expr::Assign(Assign {
@@ -945,7 +950,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_builtin_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Builtin)?;
-		let span = &self.src[tok.1.start..tok.1.end];
+		let span = &self.source[tok.1.start..tok.1.end];
 		match span {
 			"$print" => {
 				self.take(TokenTag::LParen)?;
@@ -964,7 +969,7 @@ impl<'src> Parser<'src> {
 				Ok(expr_id)
 			}
 			_ => Err(Error::UnknownBuiltin(
-				self.src.loc(tok.1.start),
+				self.source.loc(tok.1.start),
 				span.to_string(),
 			)),
 		}
@@ -984,7 +989,7 @@ impl<'src> Parser<'src> {
 		let mut chars = str.chars();
 		let char = match chars.next() {
 			Some(char) if chars.next().is_none() => char,
-			_ => return Err(Error::MultiCharLit(self.src.loc(tok.1.start))),
+			_ => return Err(Error::MultiCharLit(self.source.loc(tok.1.start))),
 		};
 		let expr = Expr::Lit(Lit::Char(char));
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
@@ -996,17 +1001,17 @@ impl<'src> Parser<'src> {
 		let mut str = String::with_capacity(tok.end - tok.start);
 		let mut chunk_pos = pos;
 		while pos < tok.end - 1 {
-			if self.src[pos] == b'\\' {
-				str.push_str(&self.src[chunk_pos..pos]);
-				let esc = self.src[pos + 1];
+			if self.source[pos] == b'\\' {
+				str.push_str(&self.source[chunk_pos..pos]);
+				let esc = self.source[pos + 1];
 				match esc {
 					b'n' => str.push('\n'),
 					b't' => str.push('\t'),
 					b'\\' => str.push('\\'),
 					esc if esc == quote => str.push(quote as char),
 					_ => {
-						let char = self.src[pos..self.src.len()].chars().next().unwrap();
-						return Err(Error::UnknownEsc(self.src.loc(pos), char));
+						let char = self.source[pos..self.source.len()].chars().next().unwrap();
+						return Err(Error::UnknownEsc(self.source.loc(pos), char));
 					}
 				}
 				pos += 2;
@@ -1015,13 +1020,13 @@ impl<'src> Parser<'src> {
 				pos += 1;
 			}
 		}
-		str.push_str(&self.src[chunk_pos..pos]);
+		str.push_str(&self.source[chunk_pos..pos]);
 		Ok(str)
 	}
 
 	fn parse_num_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Num)?;
-		let span = &self.src[tok.1.start..tok.1.end];
+		let span = &self.source[tok.1.start..tok.1.end];
 		let num = span.parse().unwrap();
 		let expr = Expr::Lit(Lit::Num(num));
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
@@ -1030,7 +1035,7 @@ impl<'src> Parser<'src> {
 
 	fn parse_bool_lit_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Bool)?;
-		let span = &self.src[tok.1.start..tok.1.end];
+		let span = &self.source[tok.1.start..tok.1.end];
 		let bool = span.parse().unwrap();
 		let expr = Expr::Lit(Lit::Bool(bool));
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);

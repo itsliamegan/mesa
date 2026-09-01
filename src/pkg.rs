@@ -120,10 +120,10 @@ impl Package {
 	}
 
 	pub fn loc(&self, span: Span) -> Location {
-		self.sources().get(span.src).loc(span.start)
+		self.sources().get(span.source).loc(span.start)
 	}
 
 	pub fn file(&self, id: ChunkId) -> &Path {
-		self.sources().get(self.chunks().get(id).src).file()
+		self.sources().get(self.chunks().get(id).source).file()
 	}
 }

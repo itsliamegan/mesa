@@ -230,8 +230,8 @@ pub fn check(
 	pkg_id: PackageId,
 	natives: &HashMap<Sym, types::NativeTypeShape>,
 ) -> Result<(), Vec<Error>> {
-	let mods = modules::check(syms, pkgs, pkg_id)?;
-	pkgs.publish_modules(pkg_id, mods);
+	let modules = modules::check(syms, pkgs, pkg_id)?;
+	pkgs.publish_modules(pkg_id, modules);
 
 	let (protos, mut errs) = protos::check(syms, pkgs, pkg_id);
 	pkgs.publish_protos(pkg_id, protos);

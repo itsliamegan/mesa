@@ -7,7 +7,7 @@ use super::types::{Natives, Types, add_extern_members};
 
 pub struct Package<'descs> {
 	pub types: Types<'descs>,
-	pub mods: Modules<'descs>,
+	pub modules: Modules<'descs>,
 }
 
 impl<'descs> Package<'descs> {
@@ -21,9 +21,9 @@ impl<'descs> Package<'descs> {
 		let scopes = Scopes::new(prelude.scope.clone(), desc.modules());
 		let types = Types::new(pkgs, id, desc, &scopes);
 		add_extern_members(pkgs, natives, id, desc, &scopes);
-		let mods = Modules::new(id, desc.modules(), scopes);
+		let modules = Modules::new(id, desc.modules(), scopes);
 
-		Self { types, mods }
+		Self { types, modules }
 	}
 }
 

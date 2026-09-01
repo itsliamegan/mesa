@@ -295,7 +295,7 @@ fn describe_type(
 	let mut static_spans: HashMap<Sym, Span> = HashMap::new();
 	let mut declared = HashMap::new();
 	// A ctor param, a body field and an instance method are recorded in three
-	// different maps but share one namespace: all three are what 'inst.x'
+	// different maps but share one namespace: all three are what 'instance.x'
 	// reaches, and two of them claiming one name leaves the earlier
 	// unreachable. Statics, cases and inner types share the other namespace,
 	// the one 'T.x' reaches, which 'static_spans' already collects.

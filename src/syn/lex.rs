@@ -286,28 +286,28 @@ impl Tokens {
 		self.trivia_starts[id.index()]
 	}
 
-	pub fn span(&self, src: SourceId, range: TokenRange) -> Span {
+	pub fn span(&self, source: SourceId, range: TokenRange) -> Span {
 		Span {
-			src,
+			source,
 			start: self.start(range.start),
 			end: self.end(range.end),
 		}
 	}
 }
 
-pub struct Lexer<'syms, 'src> {
+pub struct Lexer<'syms, 'source> {
 	syms: &'syms mut Interner,
-	src: &'src Source,
+	source: &'source Source,
 	pos: usize,
 	toks: Tokens,
 	trivias: Trivias,
 }
 
-impl<'syms, 'src> Lexer<'syms, 'src> {
-	pub fn new(syms: &'syms mut Interner, src: &'src Source) -> Self {
+impl<'syms, 'source> Lexer<'syms, 'source> {
+	pub fn new(syms: &'syms mut Interner, source: &'source Source) -> Self {
 		Self {
 			syms,
-			src,
+			source,
 			pos: 0,
 			toks: Tokens::new(),
 			trivias: Trivias::new(),
@@ -330,19 +330,19 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 
 	fn skip_trivia(&mut self) {
 		let mut newlines = 0;
-		while self.pos < self.src.len() {
-			if self.src[self.pos] == b'\n' {
+		while self.pos < self.source.len() {
+			if self.source[self.pos] == b'\n' {
 				newlines += 1;
 				self.pos += 1;
-			} else if self.src[self.pos].is_ascii_whitespace() {
+			} else if self.source[self.pos].is_ascii_whitespace() {
 				self.pos += 1;
-			} else if self.src[self.pos] == b'#' {
+			} else if self.source[self.pos] == b'#' {
 				if newlines > 0 {
 					self.trivias.add(Trivia::Newlines(newlines));
 					newlines = 0;
 				}
 				let start = self.pos;
-				while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
+				while self.pos < self.source.len() && self.source[self.pos] != b'\n' {
 					self.pos += 1;
 				}
 				self.trivias.add(Trivia::Comment(start, self.pos));
@@ -356,7 +356,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	}
 
 	fn lex_next(&mut self) -> Result<Token, Error> {
-		if self.pos == self.src.len() {
+		if self.pos == self.source.len() {
 			return Ok(Token {
 				tag: TokenTag::Eof,
 				sym: None,
@@ -365,9 +365,9 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 			});
 		}
 
-		match self.src[self.pos] {
+		match self.source[self.pos] {
 			b':' => {
-				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+				if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
 						tag: TokenTag::Eq,
@@ -386,7 +386,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				}
 			}
 			b'=' => {
-				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+				if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
 						tag: TokenTag::EqEq,
@@ -395,11 +395,11 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 						end: self.pos,
 					})
 				} else {
-					Err(Error::UnexpectedChar(self.src.loc(self.pos), '='))
+					Err(Error::UnexpectedChar(self.source.loc(self.pos), '='))
 				}
 			}
 			b'!' => {
-				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+				if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
 						tag: TokenTag::NotEq,
@@ -408,11 +408,11 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 						end: self.pos,
 					})
 				} else {
-					Err(Error::UnexpectedChar(self.src.loc(self.pos), '!'))
+					Err(Error::UnexpectedChar(self.source.loc(self.pos), '!'))
 				}
 			}
 			b'<' => {
-				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+				if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
 						tag: TokenTag::LtEq,
@@ -420,7 +420,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 						start: self.pos - 2,
 						end: self.pos,
 					})
-				} else if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'<' {
+				} else if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == b'<' {
 					self.pos += 2;
 					Ok(Token {
 						tag: TokenTag::LtLt,
@@ -439,7 +439,7 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				}
 			}
 			b'>' => {
-				if self.pos + 1 < self.src.len() && self.src[self.pos + 1] == b'=' {
+				if self.pos + 1 < self.source.len() && self.source[self.pos + 1] == b'=' {
 					self.pos += 2;
 					Ok(Token {
 						tag: TokenTag::GtEq,
@@ -583,8 +583,11 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 				} else if char.is_ascii_digit() {
 					self.lex_num()
 				} else {
-					let char = self.src[self.pos..self.src.len()].chars().next().unwrap();
-					Err(Error::UnexpectedChar(self.src.loc(self.pos), char))
+					let char = self.source[self.pos..self.source.len()]
+						.chars()
+						.next()
+						.unwrap();
+					Err(Error::UnexpectedChar(self.source.loc(self.pos), char))
 				}
 			}
 		}
@@ -592,25 +595,25 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 
 	fn lex_ident(&mut self) -> Result<Token, Error> {
 		let start = self.pos;
-		while self.pos < self.src.len()
-			&& (self.src[self.pos].is_ascii_alphabetic()
-				|| self.src[self.pos].is_ascii_digit()
-				|| self.src[self.pos] == b'_')
+		while self.pos < self.source.len()
+			&& (self.source[self.pos].is_ascii_alphabetic()
+				|| self.source[self.pos].is_ascii_digit()
+				|| self.source[self.pos] == b'_')
 		{
 			self.pos += 1;
 		}
-		if self.pos < self.src.len() {
-			if self.src[self.pos] == b'!'
-				&& !(self.pos + 1 < self.src.len()
-					&& self.src[self.pos + 1] == b'='
-					&& !(self.pos + 2 < self.src.len() && self.src[self.pos + 2] == b'='))
+		if self.pos < self.source.len() {
+			if self.source[self.pos] == b'!'
+				&& !(self.pos + 1 < self.source.len()
+					&& self.source[self.pos + 1] == b'='
+					&& !(self.pos + 2 < self.source.len() && self.source[self.pos + 2] == b'='))
 			{
 				self.pos += 1;
-			} else if self.src[self.pos] == b'?' {
+			} else if self.source[self.pos] == b'?' {
 				self.pos += 1;
 			}
 		}
-		let span = &self.src[start..self.pos];
+		let span = &self.source[start..self.pos];
 		let sym = self.syms.intern(span);
 		let tag = match sym {
 			Sym::MODULE => TokenTag::Module,
@@ -665,15 +668,15 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_str(&mut self) -> Result<Token, Error> {
 		let start = self.pos;
 		self.pos += 1;
-		while self.pos < self.src.len() && self.src[self.pos] != b'"' {
-			if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
+		while self.pos < self.source.len() && self.source[self.pos] != b'"' {
+			if self.source[self.pos] == b'\\' && self.pos + 1 < self.source.len() {
 				self.pos += 2;
 			} else {
 				self.pos += 1;
 			}
 		}
-		if self.pos == self.src.len() {
-			return Err(Error::UnterminatedStrLit(self.src.loc(start)));
+		if self.pos == self.source.len() {
+			return Err(Error::UnterminatedStrLit(self.source.loc(start)));
 		}
 		self.pos += 1;
 		Ok(Token {
@@ -687,15 +690,15 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 	fn lex_char(&mut self) -> Result<Token, Error> {
 		let start = self.pos;
 		self.pos += 1;
-		while self.pos < self.src.len() && self.src[self.pos] != b'\'' {
-			if self.src[self.pos] == b'\\' && self.pos + 1 < self.src.len() {
+		while self.pos < self.source.len() && self.source[self.pos] != b'\'' {
+			if self.source[self.pos] == b'\\' && self.pos + 1 < self.source.len() {
 				self.pos += 2;
 			} else {
 				self.pos += 1;
 			}
 		}
-		if self.pos == self.src.len() {
-			return Err(Error::UnterminatedCharLit(self.src.loc(start)));
+		if self.pos == self.source.len() {
+			return Err(Error::UnterminatedCharLit(self.source.loc(start)));
 		}
 		self.pos += 1;
 		Ok(Token {
@@ -708,12 +711,12 @@ impl<'syms, 'src> Lexer<'syms, 'src> {
 
 	fn lex_num(&mut self) -> Result<Token, Error> {
 		let start = self.pos;
-		while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
+		while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
 			self.pos += 1;
 		}
-		if self.pos < self.src.len() && self.src[self.pos] == b'.' {
+		if self.pos < self.source.len() && self.source[self.pos] == b'.' {
 			self.pos += 1;
-			while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
+			while self.pos < self.source.len() && self.source[self.pos].is_ascii_digit() {
 				self.pos += 1;
 			}
 		}

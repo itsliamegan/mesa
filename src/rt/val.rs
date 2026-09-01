@@ -131,14 +131,14 @@ impl Val {
 			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
 			Val::Char(_) => TypeId::Native(NativeTypeId::CHAR),
 			Val::Str(_) => TypeId::Native(NativeTypeId::STR),
-			Val::Obj(rf) => rf.borrow().type_id(),
+			Val::Obj(obj) => obj.borrow().type_id(),
 			Self::Nil(_) => TypeId::Native(NativeTypeId::NIL),
 		}
 	}
 
 	pub fn namespace_type_id(&self) -> TypeId {
 		match self {
-			Val::Obj(rf) => match &*rf.borrow() {
+			Val::Obj(obj) => match &*obj.borrow() {
 				Obj::Type(id) => *id,
 				obj => obj.type_id(),
 			},
@@ -162,7 +162,7 @@ impl PartialEq for Val {
 			(Self::Bool(bool), Self::Bool(other_bool)) => bool.0 == other_bool.0,
 			(Self::Char(char), Self::Char(other_char)) => char.0 == other_char.0,
 			(Self::Str(str), Self::Str(other_str)) => str.text == other_str.text,
-			(Self::Obj(rf), Self::Obj(other_rf)) => rf.as_ptr() == other_rf.as_ptr(),
+			(Self::Obj(obj), Self::Obj(other)) => obj.as_ptr() == other.as_ptr(),
 			(Self::Nil(_), Self::Nil(_)) => true,
 			_ => false,
 		}
@@ -178,7 +178,7 @@ impl Hash for Val {
 			Self::Bool(bool) => bool.0.hash(state),
 			Self::Char(char) => char.0.hash(state),
 			Self::Str(str) => str.text.hash(state),
-			Self::Obj(rf) => rf.as_ptr().hash(state),
+			Self::Obj(obj) => obj.as_ptr().hash(state),
 			Self::Nil(_) => 0_u8.hash(state),
 		}
 	}
@@ -214,7 +214,7 @@ impl Obj {
 			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
 			Self::Type(_) => TypeId::Native(NativeTypeId::TYPE),
 			Self::Proto(_, _) => TypeId::Native(NativeTypeId::PROTO),
-			Self::Instance(inst) => TypeId::User(inst.pkg, inst.type_),
+			Self::Instance(instance) => TypeId::User(instance.pkg, instance.type_),
 			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
 			Self::Native(id, _) => TypeId::Native(*id),
 		}
@@ -232,8 +232,8 @@ impl List {
 	}
 
 	pub fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Obj(rf) = val else { panic!() };
-		let Obj::List(list) = &*rf.borrow() else {
+		let Val::Obj(obj) = val else { panic!() };
+		let Obj::List(list) = &*obj.borrow() else {
 			panic!()
 		};
 		Ok(Val::Num(Num(list.items.len() as f64)))
@@ -253,8 +253,8 @@ impl Dict {
 	}
 
 	pub fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Obj(rf) = val else { panic!() };
-		let Obj::Dict(dict) = &*rf.borrow() else {
+		let Val::Obj(obj) = val else { panic!() };
+		let Obj::Dict(dict) = &*obj.borrow() else {
 			panic!()
 		};
 		Ok(Val::Num(Num(dict.pairs.len() as f64)))
@@ -315,11 +315,11 @@ pub fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
 // Name the namespace a member lookup was made in. For a module, the name of the
 // module; otherwise, the name of the type.
 pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
-	if let Val::Obj(rf) = val
-		&& let Obj::Module(pkg, id) = &*rf.borrow()
+	if let Val::Obj(obj) = val
+		&& let Obj::Module(pkg, id) = &*obj.borrow()
 	{
-		let pkg_mods = &rt.pkgs.get(*pkg).mods;
-		return format!("module {}", pkg_mods.name(syms, *id));
+		let pkg_modules = &rt.pkgs.get(*pkg).modules;
+		return format!("module {}", pkg_modules.name(syms, *id));
 	}
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
 }
@@ -330,14 +330,14 @@ pub fn rt_print_val(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 		Val::Bool(bool) => format!("{}", bool.0),
 		Val::Char(char) => format!("{}", char.0),
 		Val::Str(str) => format!("{}", str.text),
-		Val::Obj(rf) => rt_print_obj(syms, rt, &rf.borrow()),
+		Val::Obj(obj) => rt_print_obj(syms, rt, &obj.borrow()),
 		Val::Nil(_) => String::from("nil"),
 	}
 }
 
 pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 	match obj {
-		Obj::Module(pkg, id) => format!("module {}", rt.pkgs.get(*pkg).mods.name(syms, *id)),
+		Obj::Module(pkg, id) => format!("module {}", rt.pkgs.get(*pkg).modules.name(syms, *id)),
 		Obj::List(list) => {
 			let mut res = String::new();
 			res.push('[');
@@ -393,15 +393,21 @@ pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 			let proto = rt.pkgs.desc(*pkg).protos().get_proto(*proto_id);
 			format!("proto {}", syms.resolve(proto.name))
 		}
-		Obj::Instance(inst) => {
-			let Type::User(desc) = rt.pkgs.get(inst.pkg).types.descs.get_type(inst.type_) else {
+		Obj::Instance(instance) => {
+			let Type::User(desc) = rt
+				.pkgs
+				.get(instance.pkg)
+				.types
+				.descs
+				.get_type(instance.type_)
+			else {
 				panic!()
 			};
-			let name = rt.type_name(syms, TypeId::User(inst.pkg, inst.type_));
+			let name = rt.type_name(syms, TypeId::User(instance.pkg, instance.type_));
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
 			for (i, field) in desc.ctor_fields.iter().enumerate() {
-				let val = inst.fields.get(&field.name).unwrap();
+				let val = instance.fields.get(&field.name).unwrap();
 				res.push_str(&rt_debug_val(syms, rt, val));
 				if i + 1 != desc.ctor_fields.len() {
 					res.push_str(", ");
@@ -410,7 +416,7 @@ pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 			res.push(')');
 			res
 		}
-		Obj::Method(meth) => match meth {
+		Obj::Method(method) => match method {
 			Method::User(_, proc) => rt_print_proc(syms, &proc.borrow()),
 			Method::Native(_, name, _) => {
 				format!("def {}", syms.resolve(*name))
@@ -424,7 +430,7 @@ pub fn rt_debug_val(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 	match val {
 		Val::Char(char) => format!("'{}'", char.0),
 		Val::Str(str) => format!("\"{}\"", str.text),
-		Val::Obj(rf) => rt_print_obj(syms, rt, &rf.borrow()),
+		Val::Obj(obj) => rt_print_obj(syms, rt, &obj.borrow()),
 		val => rt_print_val(syms, rt, val),
 	}
 }

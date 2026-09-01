@@ -48,7 +48,7 @@ impl Sources {
 	}
 
 	pub fn loc(&self, span: Span) -> Location {
-		self.get(span.src).loc(span.start)
+		self.get(span.source).loc(span.start)
 	}
 }
 
@@ -108,16 +108,16 @@ impl Source {
 impl Index<usize> for Source {
 	type Output = u8;
 
-	fn index(&self, idx: usize) -> &Self::Output {
-		&self.text.as_bytes()[idx]
+	fn index(&self, index: usize) -> &Self::Output {
+		&self.text.as_bytes()[index]
 	}
 }
 
 impl Index<Range<usize>> for Source {
 	type Output = str;
 
-	fn index(&self, idx: Range<usize>) -> &Self::Output {
-		&self.text[idx]
+	fn index(&self, index: Range<usize>) -> &Self::Output {
+		&self.text[index]
 	}
 }
 
@@ -144,7 +144,7 @@ impl Display for Location {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Span {
-	pub src: SourceId,
+	pub source: SourceId,
 	pub start: usize,
 	pub end: usize,
 }

@@ -75,22 +75,22 @@ impl Place {
 	pub fn get(&self, rt: &Runtime) -> Result<Val, Error> {
 		match self {
 			Place::Local(local) => Ok(local.get()),
-			Place::Module(pkg, id) => Ok(Val::Obj(rt.pkgs.get(*pkg).mods.obj(*id))),
+			Place::Module(pkg, id) => Ok(Val::Obj(rt.pkgs.get(*pkg).modules.obj(*id))),
 			Place::Member(Member::Module(pkg, id, name)) => {
-				let pkg_mods = &rt.pkgs.get(*pkg).mods;
-				match pkg_mods.descs.member(*id, *name).unwrap() {
-					sem::modules::Member::Child(child) => Ok(Val::Obj(pkg_mods.obj(child))),
+				let pkg_modules = &rt.pkgs.get(*pkg).modules;
+				match pkg_modules.descs.member(*id, *name).unwrap() {
+					sem::modules::Member::Child(child) => Ok(Val::Obj(pkg_modules.obj(child))),
 					sem::modules::Member::Type(_)
 					| sem::modules::Member::Proto(_)
 					| sem::modules::Member::Proc(_)
 					| sem::modules::Member::Var(_) => {
-						let scope = pkg_mods.scope(pkg_mods.descs.chunk(*id));
+						let scope = pkg_modules.scope(pkg_modules.descs.chunk(*id));
 						Ok(scope.borrow().locals.get(name).cloned().unwrap())
 					}
 				}
 			}
-			Place::Member(Member::Static(type_rf, name)) => {
-				let Obj::Type(type_id) = *type_rf.borrow() else {
+			Place::Member(Member::Static(receiver, name)) => {
+				let Obj::Type(type_id) = *receiver.borrow() else {
 					panic!();
 				};
 				match type_id {
@@ -99,48 +99,54 @@ impl Place {
 						// both live in the same package.
 						let types = &rt.pkgs.get(type_pkg).types;
 						match types.static_(type_id, *name).unwrap() {
-							Static::Proc(proc_rf) => Ok(Val::Obj(Rc::new(RefCell::new(
-								Obj::Method(Method::User(Val::Obj(type_rf.clone()), proc_rf)),
-							)))),
+							Static::Proc(proc) => Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(
+								Method::User(Val::Obj(receiver.clone()), proc),
+							))))),
 							Static::Type(id) => Ok(Val::Obj(types.user(id).val.clone())),
 						}
 					}
 					TypeId::Native(type_id) => {
 						let method = match rt.natives.get(type_id).statics.get(name).unwrap() {
-							NativeMember::Native(meth) => {
-								Method::Native(Val::Obj(type_rf.clone()), *name, *meth)
+							NativeMember::Native(method) => {
+								Method::Native(Val::Obj(receiver.clone()), *name, *method)
 							}
-							NativeMember::User(proc_rf) => {
-								Method::User(Val::Obj(type_rf.clone()), proc_rf.clone())
+							NativeMember::User(proc) => {
+								Method::User(Val::Obj(receiver.clone()), proc.clone())
 							}
 						};
 						Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 					}
 				}
 			}
-			Place::Member(Member::User(inst_rf, name)) => {
-				let Obj::Instance(inst) = &*inst_rf.borrow() else {
+			Place::Member(Member::User(receiver, name)) => {
+				let Obj::Instance(instance) = &*receiver.borrow() else {
 					panic!()
 				};
-				if let Some(val) = inst.fields.get(name) {
+				if let Some(val) = instance.fields.get(name) {
 					Ok(val.clone())
-				} else if let Some(proc_rf) = rt.pkgs.get(inst.pkg).types.method(inst.type_, *name)
+				} else if let Some(proc) = rt
+					.pkgs
+					.get(instance.pkg)
+					.types
+					.method(instance.type_, *name)
 				{
 					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
-						Val::Obj(inst_rf.clone()),
-						proc_rf,
+						Val::Obj(receiver.clone()),
+						proc,
 					))))))
 				} else {
 					panic!();
 				}
 			}
-			Place::Member(Member::Native(recv, name)) => {
-				let TypeId::Native(type_id) = recv.type_id() else {
+			Place::Member(Member::Native(receiver, name)) => {
+				let TypeId::Native(type_id) = receiver.type_id() else {
 					panic!();
 				};
 				let method = match rt.natives.get(type_id).members.get(name).unwrap() {
-					NativeMember::Native(meth) => Method::Native(recv.clone(), *name, *meth),
-					NativeMember::User(proc_rf) => Method::User(recv.clone(), proc_rf.clone()),
+					NativeMember::Native(method) => {
+						Method::Native(receiver.clone(), *name, *method)
+					}
+					NativeMember::User(proc) => Method::User(receiver.clone(), proc.clone()),
 				};
 				Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 			}
@@ -159,17 +165,21 @@ impl Place {
 			// Statics cannot be reassigned.
 			Place::Member(Member::Static(_, _)) => Err(()),
 			// Setting a member consults the member's type.
-			Place::Member(Member::User(inst_rf, name)) => {
-				let Obj::Instance(inst) = &mut *inst_rf.borrow_mut() else {
+			Place::Member(Member::User(receiver, name)) => {
+				let Obj::Instance(instance) = &mut *receiver.borrow_mut() else {
 					panic!()
 				};
 				// A method cannot be replaced by a field of the same name.
-				if !inst.fields.contains_key(name)
-					&& pkgs.get(inst.pkg).types.method(inst.type_, *name).is_some()
+				if !instance.fields.contains_key(name)
+					&& pkgs
+						.get(instance.pkg)
+						.types
+						.method(instance.type_, *name)
+						.is_some()
 				{
 					return Err(());
 				}
-				inst.fields.insert(*name, val);
+				instance.fields.insert(*name, val);
 				Ok(())
 			}
 			// Native members cannot be reassigned.
@@ -210,29 +220,26 @@ impl Scope {
 	}
 }
 
-// The scope for every module, keyed by the module's ChunkId.
 pub struct Scopes {
-	modules: Vec<Rc<RefCell<Scope>>>,
+	by_module: Vec<Rc<RefCell<Scope>>>,
 }
 
 impl Scopes {
-	// One scope per module, indexed by the ChunkId its declaring file was
-	// parsed into and stamped with the ModuleId that owns it.
-	pub fn new(prelude: Rc<RefCell<Scope>>, mods: &sem::modules::Modules) -> Self {
-		let mut modules: Vec<Option<Rc<RefCell<Scope>>>> = mods.ids().map(|_| None).collect();
-		for id in mods.ids() {
+	pub fn new(prelude: Rc<RefCell<Scope>>, modules: &sem::modules::Modules) -> Self {
+		let mut by_module = vec![None; modules.ids().count()];
+		for id in modules.ids() {
 			let scope = Rc::new(RefCell::new(Scope {
 				locals: FxHashMap::default(),
 				outer: Some(prelude.clone()),
 				tier: Tier::Module(id),
 			}));
-			modules[mods.chunk(id).index()] = Some(scope);
+			by_module[modules.chunk(id).index()] = Some(scope);
 		}
-		let modules = modules.into_iter().map(Option::unwrap).collect();
-		Self { modules }
+		let by_module = by_module.into_iter().map(Option::unwrap).collect();
+		Self { by_module }
 	}
 
 	pub fn module(&self, chunk: ChunkId) -> Rc<RefCell<Scope>> {
-		self.modules[chunk.index()].clone()
+		self.by_module[chunk.index()].clone()
 	}
 }

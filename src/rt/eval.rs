@@ -129,7 +129,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 	pub fn new(syms: &'syms mut Interner, rt: &'rt Runtime<'descs>, pkg_id: PackageId) -> Self {
 		let desc = rt.pkgs.desc(pkg_id);
 		let first_chunk = desc.modules().chunk(desc.modules().ids().next().unwrap());
-		let scope = rt.pkgs.get(pkg_id).mods.scope(first_chunk);
+		let scope = rt.pkgs.get(pkg_id).modules.scope(first_chunk);
 
 		Self {
 			syms,
@@ -144,16 +144,16 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		&self.rt.pkgs.get(self.pkg_id).types
 	}
 
-	fn mods(&self) -> &'rt Modules<'descs> {
-		&self.rt.pkgs.get(self.pkg_id).mods
+	fn modules(&self) -> &'rt Modules<'descs> {
+		&self.rt.pkgs.get(self.pkg_id).modules
 	}
 
 	pub fn eval(mut self) -> Result<(), (Raised, Vec<(String, Location)>)> {
 		// Declarations are order-independent, so every module's items enter its
 		// scope before anything is evaluated.
-		for id in self.mods().descs.ids() {
-			let chunk_id = self.mods().descs.chunk(id);
-			self.scope = self.mods().scope(chunk_id);
+		for id in self.modules().descs.ids() {
+			let chunk_id = self.modules().descs.chunk(id);
+			self.scope = self.modules().scope(chunk_id);
 			let chunk = self.rt.pkgs.desc(self.pkg_id).chunks().get(chunk_id);
 			for item_id in &chunk.top {
 				self.bind_module_item(chunk, chunk_id, *item_id);
@@ -163,9 +163,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		// Only evaluated bindings are sequenced, in import order, so a
 		// dependency's top-level assignment always runs before a dependent
 		// reads it.
-		for id in self.mods().descs.order() {
-			let chunk_id = self.mods().descs.chunk(*id);
-			self.scope = self.mods().scope(chunk_id);
+		for id in self.modules().descs.order() {
+			let chunk_id = self.modules().descs.chunk(*id);
+			self.scope = self.modules().scope(chunk_id);
 			let chunk = self.rt.pkgs.desc(self.pkg_id).chunks().get(chunk_id);
 			for item_id in &chunk.top {
 				match self.eval_module_expr(chunk, *item_id) {
@@ -265,7 +265,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					}
 					Ok(Val::Nil(Nil))
 				}
-				Val::Obj(rf) => match &*rf.borrow() {
+				Val::Obj(obj) => match &*obj.borrow() {
 					Obj::List(list) => {
 						for item in &list.items {
 							let scope = Rc::new(RefCell::new(Scope {
@@ -456,7 +456,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				}
 				let callee = self.eval_expr_raw(chunk, call.callee)?;
 				match callee {
-					Val::Obj(rf) => match &*rf.borrow() {
+					Val::Obj(obj) => match &*obj.borrow() {
 						Obj::Proc(proc) => self.eval_proc_call(span, proc, None, args),
 						Obj::Type(type_id) => match type_id {
 							TypeId::User(type_pkg, type_id) => {
@@ -487,7 +487,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								let body_fields = &desc.body_fields;
 								let type_chunk_id = desc.chunk;
 								let type_scope =
-									self.rt.pkgs.get(type_pkg).mods.scope(type_chunk_id);
+									self.rt.pkgs.get(type_pkg).modules.scope(type_chunk_id);
 
 								let slots = self.slot_args(span, ctor_fields, args)?;
 								let scope = Rc::new(RefCell::new(Scope {
@@ -515,7 +515,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 
 								let type_chunk =
 									self.rt.pkgs.desc(type_pkg).chunks().get(type_chunk_id);
-								let inst_rf = Rc::new(RefCell::new(Obj::Instance(Instance {
+								let receiver = Rc::new(RefCell::new(Obj::Instance(Instance {
 									pkg: type_pkg,
 									type_: type_id,
 									fields,
@@ -523,7 +523,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 
 								let saved_scope = self.scope.clone();
 								let saved_receiver = self.receiver.clone();
-								self.receiver = Some(Val::Obj(inst_rf.clone()));
+								self.receiver = Some(Val::Obj(receiver.clone()));
 								for (name, field) in body_fields {
 									self.scope = Rc::new(RefCell::new(Scope {
 										locals: FxHashMap::default(),
@@ -539,7 +539,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 											return Err(signal);
 										}
 									};
-									Place::Member(Member::User(inst_rf.clone(), *name))
+									Place::Member(Member::User(receiver.clone(), *name))
 										.set(&self.rt.pkgs, val)
 										.unwrap();
 								}
@@ -547,7 +547,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								self.receiver = saved_receiver;
 								self.pkg_id = saved_pkg_id;
 
-								Ok(Val::Obj(inst_rf))
+								Ok(Val::Obj(receiver))
 							}
 							TypeId::Native(type_id) => {
 								let type_ = self.rt.natives.get(*type_id);
@@ -573,13 +573,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								}
 							}
 						},
-						Obj::Method(meth) => match meth {
-							Method::User(recv, proc) => {
+						Obj::Method(method) => match method {
+							Method::User(receiver, proc) => {
 								let name = proc.borrow().name;
-								self.call_member(span, recv.clone(), name, args)
+								self.call_member(span, receiver.clone(), name, args)
 							}
-							Method::Native(recv, name, _) => {
-								self.call_member(span, recv.clone(), *name, args)
+							Method::Native(receiver, name, _) => {
+								self.call_member(span, receiver.clone(), *name, args)
 							}
 						},
 						obj => {
@@ -606,10 +606,11 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				self.invoke_or_return(chunk, expr_id, val)
 			}
 			Expr::Access(access) => match self.eval_expr(chunk, access.receiver)? {
-				Val::Obj(rf) => match &*rf.borrow() {
+				Val::Obj(obj) => match &*obj.borrow() {
 					Obj::List(list) => {
-						let idx = self.eval_index(chunk, expr_id, access.key, list.items.len())?;
-						Ok(list.items[idx].clone())
+						let index =
+							self.eval_index(chunk, expr_id, access.key, list.items.len())?;
+						Ok(list.items[index].clone())
 					}
 					Obj::Dict(dict) => {
 						let key = self.eval_expr(chunk, access.key)?;
@@ -678,12 +679,12 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						if let Err(()) = place.set(&self.rt.pkgs, val.clone()) {
 							let namespace = match &place {
 								Place::Member(Member::Module(pkg, id, name)) => {
-									let pkg_mods = &self.rt.pkgs.get(*pkg).mods;
-									let module = match pkg_mods.descs.member(*id, *name) {
+									let pkg_modules = &self.rt.pkgs.get(*pkg).modules;
+									let module = match pkg_modules.descs.member(*id, *name) {
 										Some(modules::Member::Child(child)) => child,
 										_ => *id,
 									};
-									Val::Obj(pkg_mods.obj(module))
+									Val::Obj(pkg_modules.obj(module))
 								}
 								_ => self.receiver.as_ref().unwrap().clone(),
 							};
@@ -737,15 +738,15 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					syn::nodes::Place::Access(access) => {
 						let receiver = self.eval_expr(chunk, access.receiver)?;
 						match &receiver {
-							Val::Obj(rf) => match &mut *rf.borrow_mut() {
+							Val::Obj(obj) => match &mut *obj.borrow_mut() {
 								Obj::List(list) => {
-									let idx = self.eval_index(
+									let index = self.eval_index(
 										chunk,
 										expr_id,
 										access.key,
 										list.items.len(),
 									)?;
-									list.items[idx] = val.clone();
+									list.items[index] = val.clone();
 									Ok(val)
 								}
 								Obj::Dict(dict) => {
@@ -894,7 +895,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							}
 						}
 						BinaryOp::Append => {
-							let Val::Obj(rf) = lhs.clone() else {
+							let Val::Obj(obj) = lhs.clone() else {
 								let loc = self
 									.rt
 									.pkgs
@@ -907,7 +908,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									vec![(String::new(), loc)],
 								));
 							};
-							let Obj::List(list) = &mut *rf.borrow_mut() else {
+							let Obj::List(list) = &mut *obj.borrow_mut() else {
 								let loc = self
 									.rt
 									.pkgs
@@ -915,7 +916,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.loc(chunk.get_expr_span(expr_id));
 								return Err(Signal::Error(
 									Raised::Native(Error::ProtocolError(
-										ProtocolError::NotAppendable(rf.borrow().type_id()),
+										ProtocolError::NotAppendable(obj.borrow().type_id()),
 									)),
 									vec![(String::new(), loc)],
 								));
@@ -1071,7 +1072,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 	fn resolve_case_arm(&mut self, chunk: &Chunk, arm: &Arm) -> Result<TypeId, Signal> {
 		let path_val = self.eval_expr(chunk, arm.path)?;
 		let arm_type_id = match &path_val {
-			Val::Obj(rf) => match &*rf.borrow() {
+			Val::Obj(obj) => match &*obj.borrow() {
 				Obj::Type(id) => Some(*id),
 				_ => None,
 			},
@@ -1102,11 +1103,11 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 	}
 
 	fn member(&self, val: &Val, name: Sym) -> Option<Member> {
-		if let Val::Obj(rf) = val
-			&& let Obj::Module(pkg, id) = &*rf.borrow()
+		if let Val::Obj(obj) = val
+			&& let Obj::Module(pkg, id) = &*obj.borrow()
 		{
-			let pkg_mods = &self.rt.pkgs.get(*pkg).mods;
-			if pkg_mods.descs.member(*id, name).is_some() {
+			let pkg_modules = &self.rt.pkgs.get(*pkg).modules;
+			if pkg_modules.descs.member(*id, name).is_some() {
 				return Some(Member::Module(*pkg, *id, name));
 			}
 		}
@@ -1118,11 +1119,11 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 	fn call_member(
 		&mut self,
 		span: Span,
-		recv: Val,
+		receiver: Val,
 		name: Sym,
 		args: Vec<(Option<Sym>, Val)>,
 	) -> Result<Val, Signal> {
-		let member = self.rt.member(&recv, name).unwrap();
+		let member = self.rt.member(&receiver, name).unwrap();
 		let val = match Place::Member(member).get(self.rt) {
 			Ok(val) => val,
 			Err(err) => {
@@ -1133,14 +1134,14 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				));
 			}
 		};
-		let Val::Obj(rf) = val else { panic!() };
-		match &*rf.borrow() {
-			Obj::Method(Method::User(recv, proc)) => {
-				self.eval_proc_call(span, &proc.borrow(), Some(recv.clone()), args)
+		let Val::Obj(obj) = val else { panic!() };
+		match &*obj.borrow() {
+			Obj::Method(Method::User(receiver, proc)) => {
+				self.eval_proc_call(span, &proc.borrow(), Some(receiver.clone()), args)
 			}
-			Obj::Method(Method::Native(recv, _name, meth)) => {
-				let args = self.bind_native_args(span, meth.params, args)?;
-				match (meth.call)(recv, args) {
+			Obj::Method(Method::Native(receiver, _name, method)) => {
+				let args = self.bind_native_args(span, method.params, args)?;
+				match (method.call)(receiver, args) {
 					Ok(val) => Ok(val),
 					Err(err) => {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
@@ -1168,7 +1169,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		} else {
 			let module_id = Scope::module(&self.scope);
 			match self
-				.mods()
+				.modules()
 				.descs
 				.binding(self.rt.pkgs.descs(), module_id, name)
 			{
@@ -1303,8 +1304,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		expr_id: ExprId,
 		val: Val,
 	) -> Result<Val, Signal> {
-		if let Val::Obj(rf) = &val {
-			match &*rf.borrow() {
+		if let Val::Obj(obj) = &val {
+			match &*obj.borrow() {
 				Obj::Proc(_) | Obj::Method(_) => return Ok(val.clone()),
 				_ => {}
 			}
@@ -1327,13 +1328,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		expr_id: ExprId,
 		val: Val,
 	) -> Result<Val, Signal> {
-		let Val::Obj(rf) = &val else { return Ok(val) };
-		let rf = rf.clone();
+		let Val::Obj(obj) = &val else { return Ok(val) };
+		let obj = obj.clone();
 		let span = chunk.get_expr_span(expr_id);
 
 		// Required params precede defaulted ones, so the first param alone says
 		// whether this needs any arguments.
-		let missing = match &*rf.borrow() {
+		let missing = match &*obj.borrow() {
 			Obj::Proc(proc) => proc
 				.params
 				.first()
@@ -1348,7 +1349,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			// Native types are defined in Rust, skipping the
 			// required-before-default ordering check. Use find instead of
 			// filter to ensure we find any required params.
-			Obj::Method(Method::Native(_, _, meth)) => meth
+			Obj::Method(Method::Native(_, _, method)) => method
 				.params
 				.iter()
 				.find(|param| param.default.is_none())
@@ -1365,13 +1366,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			));
 		}
 
-		match &*rf.borrow() {
+		match &*obj.borrow() {
 			Obj::Proc(proc) => self.eval_proc_call(span, proc, None, Vec::new()),
-			Obj::Method(Method::User(recv, proc)) => {
-				self.eval_proc_call(span, &proc.borrow(), Some(recv.clone()), Vec::new())
+			Obj::Method(Method::User(receiver, proc)) => {
+				self.eval_proc_call(span, &proc.borrow(), Some(receiver.clone()), Vec::new())
 			}
-			Obj::Method(Method::Native(recv, _name, meth)) => {
-				match (meth.call)(recv, meth.defaults().unwrap()) {
+			Obj::Method(Method::Native(receiver, _name, method)) => {
+				match (method.call)(receiver, method.defaults().unwrap()) {
 					Ok(val) => Ok(val),
 					Err(err) => {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);

@@ -416,19 +416,19 @@ pub fn add_extern_members<'descs>(
 
 		let mut members = FxHashMap::default();
 		for (name, site) in &desc.members {
-			let proc_rf = match site {
+			let proc = match site {
 				types::MemberSite::Declared(..) | types::MemberSite::Provided(..) => {
 					build_member_proc(pkgs, pkg_id, pkg, scopes, *site)
 				}
 				// Already in the native type's map.
 				types::MemberSite::Native => continue,
 			};
-			members.insert(*name, NativeMember::User(proc_rf));
+			members.insert(*name, NativeMember::User(proc));
 		}
 
 		let mut statics = FxHashMap::default();
 		for (name, static_) in &desc.statics {
-			let proc_rf = match static_ {
+			let proc = match static_ {
 				// An extern body admits no case or inner type declarations.
 				types::Static::Type(_) => panic!(),
 				types::Static::Native => continue,
@@ -436,7 +436,7 @@ pub fn add_extern_members<'descs>(
 					build_static_proc(pkg_id, pkg, scopes, *chunk_id, *def_id)
 				}
 			};
-			statics.insert(*name, NativeMember::User(proc_rf));
+			statics.insert(*name, NativeMember::User(proc));
 		}
 
 		let native = natives.get_mut(desc.provider);
@@ -470,7 +470,7 @@ fn build_member_proc<'descs>(
 		true => (pkg.chunks(), scopes.module(chunk_id)),
 		false => (
 			pkgs.desc(site_pkg).chunks(),
-			pkgs.get(site_pkg).mods.scope(chunk_id),
+			pkgs.get(site_pkg).modules.scope(chunk_id),
 		),
 	};
 	let def = chunks.get(chunk_id).get_def(def_id);

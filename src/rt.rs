@@ -86,7 +86,7 @@ impl<'descs> Runtime<'descs> {
 		if type_id != namespace_type_id {
 			// type_id and namespace_type_id only ever differ when the Val is
 			// itself a Type.
-			let Val::Obj(rf) = val else {
+			let Val::Obj(obj) = val else {
 				panic!();
 			};
 			let has_static = match namespace_type_id {
@@ -94,7 +94,7 @@ impl<'descs> Runtime<'descs> {
 				TypeId::Native(id) => self.natives.get(id).has_static(name),
 			};
 			if has_static {
-				Some(Member::Static(rf.clone(), name))
+				Some(Member::Static(obj.clone(), name))
 			} else {
 				let TypeId::Native(id) = type_id else {
 					panic!();
@@ -108,12 +108,12 @@ impl<'descs> Runtime<'descs> {
 		} else {
 			match namespace_type_id {
 				TypeId::User(pkg, id) => {
-					let Val::Obj(rf) = val else {
+					let Val::Obj(obj) = val else {
 						panic!();
 					};
 					let types = &self.pkgs.get(pkg).types;
 					if types.field(id, name) || types.method(id, name).is_some() {
-						Some(Member::User(rf.clone(), name))
+						Some(Member::User(obj.clone(), name))
 					} else {
 						None
 					}
@@ -296,8 +296,8 @@ impl MemberError {
 impl IndexError {
 	fn message(&self) -> String {
 		match self {
-			Self::OutOfRange(idx) => format!("index {} is out of bounds", idx),
-			Self::NonIntegral(idx) => format!("index {} is not a whole number", idx),
+			Self::OutOfRange(index) => format!("index {} is out of bounds", index),
+			Self::NonIntegral(index) => format!("index {} is not a whole number", index),
 		}
 	}
 }
