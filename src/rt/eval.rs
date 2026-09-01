@@ -184,10 +184,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			ModuleItem::Module(_) => {}
 			ModuleItem::Import(_) => {}
 			ModuleItem::Export(_) => {}
-			ModuleItem::Type(typ) => {
+			ModuleItem::Type(type_) => {
 				let id = self.types().descs.get_type_by_item(chunk_id, item_id);
 				let val = Val::Obj(self.types().user(id).val.clone());
-				self.scope.borrow_mut().locals.insert(typ.name, val);
+				self.scope.borrow_mut().locals.insert(type_.name, val);
 			}
 			// An extern type's canonical value is the native type's, and its
 			// members were merged into that type rather than described here, so
@@ -517,7 +517,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									self.rt.pkgs.desc(type_pkg).chunks().get(type_chunk_id);
 								let inst_rf = Rc::new(RefCell::new(Obj::Instance(Instance {
 									pkg: type_pkg,
-									typ: type_id,
+									type_: type_id,
 									fields,
 								})));
 
@@ -550,8 +550,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								Ok(Val::Obj(inst_rf))
 							}
 							TypeId::Native(type_id) => {
-								let typ = self.rt.natives.get(*type_id);
-								match typ.new {
+								let type_ = self.rt.natives.get(*type_id);
+								match type_.new {
 									Some(new) => {
 										// A native constructor defines no
 										// params by definition, so route

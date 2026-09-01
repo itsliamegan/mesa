@@ -124,7 +124,8 @@ impl Place {
 				};
 				if let Some(val) = inst.fields.get(name) {
 					Ok(val.clone())
-				} else if let Some(proc_rf) = rt.pkgs.get(inst.pkg).types.method(inst.typ, *name) {
+				} else if let Some(proc_rf) = rt.pkgs.get(inst.pkg).types.method(inst.type_, *name)
+				{
 					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
 						Val::Obj(inst_rf.clone()),
 						proc_rf,
@@ -164,7 +165,7 @@ impl Place {
 				};
 				// A method cannot be replaced by a field of the same name.
 				if !inst.fields.contains_key(name)
-					&& pkgs.get(inst.pkg).types.method(inst.typ, *name).is_some()
+					&& pkgs.get(inst.pkg).types.method(inst.type_, *name).is_some()
 				{
 					return Err(());
 				}

@@ -54,29 +54,29 @@ pub enum Type {
 impl Type {
 	pub fn name(&self) -> Sym {
 		match self {
-			Type::User(typ) => typ.name,
-			Type::Native(typ) => typ.name,
+			Type::User(type_) => type_.name,
+			Type::Native(type_) => type_.name,
 		}
 	}
 
 	pub fn members(&self) -> &HashMap<Sym, MemberSite> {
 		match self {
-			Type::User(typ) => &typ.members,
-			Type::Native(typ) => &typ.members,
+			Type::User(type_) => &type_.members,
+			Type::Native(type_) => &type_.members,
 		}
 	}
 
 	pub fn statics(&self) -> &HashMap<Sym, Static> {
 		match self {
-			Type::User(typ) => &typ.statics,
-			Type::Native(typ) => &typ.statics,
+			Type::User(type_) => &type_.statics,
+			Type::Native(type_) => &type_.statics,
 		}
 	}
 
 	pub fn impls(&self) -> &[(PackageId, ProtoId)] {
 		match self {
-			Type::User(typ) => &typ.impls,
-			Type::Native(typ) => &typ.impls,
+			Type::User(type_) => &type_.impls,
+			Type::Native(type_) => &type_.impls,
 		}
 	}
 }
@@ -821,17 +821,22 @@ fn acquire_members(
 fn signatures_agree(
 	proto_chunk: &Chunk,
 	type_chunk: &Chunk,
-	proto: &[Param],
-	typ: &[Param],
+	proto_params: &[Param],
+	type_params: &[Param],
 ) -> bool {
-	if proto.len() != typ.len() {
+	if proto_params.len() != type_params.len() {
 		return false;
 	}
-	for (proto_param, param) in proto.iter().zip(typ) {
-		if proto_param.name != param.name {
+	for (proto_param, type_param) in proto_params.iter().zip(type_params) {
+		if proto_param.name != type_param.name {
 			return false;
 		}
-		if !defaults_agree(proto_chunk, type_chunk, proto_param.default, param.default) {
+		if !defaults_agree(
+			proto_chunk,
+			type_chunk,
+			proto_param.default,
+			type_param.default,
+		) {
 			return false;
 		}
 	}
@@ -888,28 +893,31 @@ fn native_signature_agrees(declared: &[Param], native: &[NativeParam]) -> bool {
 fn defaults_agree(
 	proto_chunk: &Chunk,
 	type_chunk: &Chunk,
-	proto: Option<ExprId>,
-	typ: Option<ExprId>,
+	proto_default: Option<ExprId>,
+	type_default: Option<ExprId>,
 ) -> bool {
-	let (proto, typ) = match (proto, typ) {
-		(Some(proto), Some(typ)) => (proto, typ),
+	let (proto_default, type_default) = match (proto_default, type_default) {
+		(Some(proto_default), Some(type_default)) => (proto_default, type_default),
 		(None, None) => return true,
 		_ => return false,
 	};
 	// Only literals are compared; anything else is taken to agree until there
 	// is a structural comparison over the arena.
-	match (proto_chunk.get_expr(proto), type_chunk.get_expr(typ)) {
-		(Expr::Lit(proto), Expr::Lit(typ)) => lits_agree(proto, typ),
+	match (
+		proto_chunk.get_expr(proto_default),
+		type_chunk.get_expr(type_default),
+	) {
+		(Expr::Lit(proto_lit), Expr::Lit(type_lit)) => lits_agree(proto_lit, type_lit),
 		_ => true,
 	}
 }
 
-fn lits_agree(proto: &Lit, typ: &Lit) -> bool {
-	match (proto, typ) {
-		(Lit::Str(proto), Lit::Str(typ)) => proto == typ,
-		(Lit::Char(proto), Lit::Char(typ)) => proto == typ,
-		(Lit::Num(proto), Lit::Num(typ)) => proto == typ,
-		(Lit::Bool(proto), Lit::Bool(typ)) => proto == typ,
+fn lits_agree(proto_lit: &Lit, type_lit: &Lit) -> bool {
+	match (proto_lit, type_lit) {
+		(Lit::Str(proto_lit), Lit::Str(type_lit)) => proto_lit == type_lit,
+		(Lit::Char(proto_lit), Lit::Char(type_lit)) => proto_lit == type_lit,
+		(Lit::Num(proto_lit), Lit::Num(type_lit)) => proto_lit == type_lit,
+		(Lit::Bool(proto_lit), Lit::Bool(type_lit)) => proto_lit == type_lit,
 		(Lit::List(..), _) | (_, Lit::List(..)) => true,
 		(Lit::Dict(..), _) | (_, Lit::Dict(..)) => true,
 		(Lit::Nil, Lit::Nil) => true,

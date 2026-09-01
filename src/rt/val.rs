@@ -214,7 +214,7 @@ impl Obj {
 			Self::Proc(_) => TypeId::Native(NativeTypeId::PROC),
 			Self::Type(_) => TypeId::Native(NativeTypeId::TYPE),
 			Self::Proto(_, _) => TypeId::Native(NativeTypeId::PROTO),
-			Self::Instance(inst) => TypeId::User(inst.pkg, inst.typ),
+			Self::Instance(inst) => TypeId::User(inst.pkg, inst.type_),
 			Self::Method(_) => TypeId::Native(NativeTypeId::PROC),
 			Self::Native(id, _) => TypeId::Native(*id),
 		}
@@ -274,7 +274,7 @@ pub struct Proc {
 #[derive(Debug)]
 pub struct Instance {
 	pub pkg: PackageId,
-	pub typ: types::TypeId,
+	pub type_: types::TypeId,
 	pub fields: FxHashMap<Sym, Val>,
 }
 
@@ -384,8 +384,8 @@ pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 				res
 			}
 			TypeId::Native(type_id) => {
-				let typ = rt.natives.get(*type_id);
-				let name = syms.resolve(typ.name);
+				let type_ = rt.natives.get(*type_id);
+				let name = syms.resolve(type_.name);
 				format!("type {}", name)
 			}
 		},
@@ -394,10 +394,10 @@ pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 			format!("proto {}", syms.resolve(proto.name))
 		}
 		Obj::Instance(inst) => {
-			let Type::User(desc) = rt.pkgs.get(inst.pkg).types.descs.get_type(inst.typ) else {
+			let Type::User(desc) = rt.pkgs.get(inst.pkg).types.descs.get_type(inst.type_) else {
 				panic!()
 			};
-			let name = rt.type_name(syms, TypeId::User(inst.pkg, inst.typ));
+			let name = rt.type_name(syms, TypeId::User(inst.pkg, inst.type_));
 			let mut res = String::new();
 			res.push_str(&format!("{}(", name));
 			for (i, field) in desc.ctor_fields.iter().enumerate() {

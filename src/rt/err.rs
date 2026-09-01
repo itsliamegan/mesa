@@ -221,7 +221,7 @@ impl Errors {
 		fields.insert(desc.ctor_fields[0].name, val);
 		Val::Obj(Rc::new(RefCell::new(Obj::Instance(Instance {
 			pkg: self.pkg,
-			typ: type_id,
+			type_: type_id,
 			fields,
 		}))))
 	}
