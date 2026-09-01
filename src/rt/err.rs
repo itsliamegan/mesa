@@ -24,7 +24,7 @@ pub struct Errors {
 pub fn build_errors(descs: &pkg::Packages, syms: &mut Interner, stdlib: PackageId) -> Errors {
 	let stdlib_pkg = descs.get(stdlib);
 	let path = [syms.intern("Core"), syms.intern("Errors")];
-	let Some(module) = stdlib_pkg.modules.by_path(&path) else {
+	let Some(module) = stdlib_pkg.modules().by_path(&path) else {
 		panic!("stdlib does not declare a 'Core.Errors' module");
 	};
 
@@ -78,16 +78,16 @@ fn module_type(
 	module: modules::ModuleId,
 	name: Sym,
 ) -> types::TypeId {
-	let Some(modules::Member::Type(item_id)) = pkg.modules.member(module, name) else {
+	let Some(modules::Member::Type(item_id)) = pkg.modules().member(module, name) else {
 		panic!("'Core.Errors' does not declare '{}'", syms.resolve(name));
 	};
-	pkg.types
-		.get_type_by_item(pkg.modules.chunk(module), item_id)
+	pkg.types()
+		.get_type_by_item(pkg.modules().chunk(module), item_id)
 }
 
 // A case variant of a type.
 fn case_type(pkg: &pkg::Package, syms: &Interner, base: types::TypeId, name: Sym) -> types::TypeId {
-	let Type::User(desc) = pkg.types.get_type(base) else {
+	let Type::User(desc) = pkg.types().get_type(base) else {
 		panic!()
 	};
 	let Some(types::Static::Type(id)) = desc.statics.get(&name) else {
@@ -121,7 +121,7 @@ fn validate_taxonomy(pkg: &pkg::Package, syms: &mut Interner, errors: &Errors) {
 }
 
 fn check_ctor_field(pkg: &pkg::Package, id: types::TypeId) {
-	let Type::User(desc) = pkg.types.get_type(id) else {
+	let Type::User(desc) = pkg.types().get_type(id) else {
 		panic!()
 	};
 	if desc.ctor_fields.len() != 1 {

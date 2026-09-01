@@ -1,4 +1,5 @@
 pub mod modules;
+pub mod protos;
 pub mod types;
 
 use std::collections::{HashMap, HashSet};
@@ -6,13 +7,12 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::{PackageId, Packages};
-use crate::sem::modules::{ModuleId, Modules};
-use crate::sem::types::Types;
+use crate::sem::modules::ModuleId;
 use crate::src::{Location, Sources, Span};
+use crate::syn::Chunk;
 use crate::syn::nodes::{
 	BlockId, Builtin, DefId, Expr, ExprId, Lit, Member, ModuleItem, Param, Place,
 };
-use crate::syn::{Chunk, Chunks};
 
 #[derive(Debug)]
 pub enum Error {
@@ -226,24 +226,30 @@ pub enum Visit {
 
 pub fn check(
 	syms: &Interner,
-	pkgs: &Packages,
+	pkgs: &mut Packages,
 	pkg_id: PackageId,
-	sources: &Sources,
-	chunks: &Chunks,
 	natives: &HashMap<Sym, types::NativeTypeShape>,
-) -> Result<(Modules, Types), Vec<Error>> {
-	let mods = modules::check(syms, pkgs, pkg_id, sources, chunks)?;
+) -> Result<(), Vec<Error>> {
+	let pkg = pkgs.get(pkg_id);
+	let mods = modules::check(syms, pkgs, pkg_id, pkg.sources(), pkg.chunks())?;
+	pkgs.publish_modules(pkg_id, mods);
+
+	let (protos, mut errs) = protos::check(syms, pkgs, pkg_id);
+	pkgs.publish_protos(pkg_id, protos);
 
 	// Describing resolves 'impl' names and decides conformance itself, so it
 	// tolerates the package not yet being known valid; it runs before the
 	// chunk walk rather than after, and its errors precede that walk's in the
 	// bundle, mirroring how module errors already precede every chunk error.
-	let (types, mut errs) = types::check(syms, sources, chunks, pkgs, &mods, natives);
+	let (types, mut type_errs) = types::check(syms, pkgs, pkg_id, natives);
+	errs.append(&mut type_errs);
+	pkgs.publish_types(pkg_id, types);
 
 	// Every chunk is a module by now, module checking having failed otherwise,
 	// and the modules are held in chunk order, so this reports in file order.
-	for id in mods.ids() {
-		if let Err(mut chunk_errs) = check_chunk(syms, sources, chunks, &mods, &types, id) {
+	let pkg = pkgs.get(pkg_id);
+	for id in pkg.modules().ids() {
+		if let Err(mut chunk_errs) = check_chunk(syms, pkgs, pkg_id, id) {
 			errs.append(&mut chunk_errs);
 		}
 	}
@@ -252,19 +258,20 @@ pub fn check(
 		return Err(errs);
 	}
 
-	Ok((mods, types))
+	Ok(())
 }
 
 fn check_chunk(
 	syms: &Interner,
-	sources: &Sources,
-	chunks: &Chunks,
-	mods: &Modules,
-	types: &Types,
+	pkgs: &Packages,
+	pkg_id: PackageId,
 	module: ModuleId,
 ) -> Result<(), Vec<Error>> {
-	let chunk_id = mods.chunk(module);
-	let chunk = chunks.get(chunk_id);
+	let pkg = pkgs.get(pkg_id);
+	let sources = pkg.sources();
+	let protos = pkg.protos();
+	let chunk_id = pkg.modules().chunk(module);
+	let chunk = pkg.chunks().get(chunk_id);
 	let mut errs = Vec::new();
 
 	// Every def in the chunk, module-level, method, or protocol item, in one
@@ -276,9 +283,9 @@ fn check_chunk(
 			errs.push(err);
 			continue;
 		}
-		if let Some(proto_id) = types.try_get_proto_by_proto_item(chunk_id, def_id) {
+		if let Some(proto_id) = protos.try_get_proto_by_proto_item(chunk_id, def_id) {
 			let def = chunk.get_def(def_id);
-			let desc = types.get_proto(proto_id);
+			let desc = protos.get_proto(proto_id);
 			if desc.provided.contains_key(&def.name)
 				&& let Err(err) = check_reach_block(syms, sources, chunk, def.body, desc.name, desc)
 			{
@@ -310,7 +317,7 @@ fn check_reach_block(
 	chunk: &Chunk,
 	block_id: BlockId,
 	proto: Sym,
-	desc: &types::Proto,
+	desc: &protos::Proto,
 ) -> Result<(), Error> {
 	let block = chunk.get_block(block_id);
 	for expr_id in &block.exprs {
@@ -325,7 +332,7 @@ fn check_reach_expr(
 	chunk: &Chunk,
 	expr_id: ExprId,
 	proto: Sym,
-	desc: &types::Proto,
+	desc: &protos::Proto,
 ) -> Result<(), Error> {
 	match chunk.get_expr(expr_id) {
 		Expr::Each(each) => {
@@ -438,7 +445,7 @@ fn check_reaches_member(
 	chunk: &Chunk,
 	expr_id: ExprId,
 	proto: Sym,
-	desc: &types::Proto,
+	desc: &protos::Proto,
 	member: &Member,
 ) -> Result<(), Error> {
 	if let Expr::Self_ = chunk.get_expr(member.receiver) {

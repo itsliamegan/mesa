@@ -12,6 +12,7 @@ use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMethod, NativeTypeId, TypeId};
 use crate::rt::{Error, Runtime};
 use crate::sem::modules::ModuleId;
+use crate::sem::protos::ProtoId;
 use crate::sem::types::{self, Type};
 use crate::syn::ChunkId;
 use crate::syn::nodes::{BlockId, Param};
@@ -190,7 +191,7 @@ pub enum Obj {
 	Dict(Dict),
 	Proc(Proc),
 	Type(TypeId),
-	Proto(PackageId, types::ProtoId),
+	Proto(PackageId, ProtoId),
 	Instance(Instance),
 	Method(Method),
 	Native(NativeTypeId, NativeData),
@@ -389,7 +390,7 @@ pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
 			}
 		},
 		Obj::Proto(pkg, proto_id) => {
-			let proto = rt.pkgs.get(*pkg).types.descs.get_proto(*proto_id);
+			let proto = rt.pkgs.desc(*pkg).protos().get_proto(*proto_id);
 			format!("proto {}", syms.resolve(proto.name))
 		}
 		Obj::Instance(inst) => {

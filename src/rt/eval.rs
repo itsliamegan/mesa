@@ -15,7 +15,8 @@ use crate::rt::val::{
 };
 use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError};
 use crate::sem::modules;
-use crate::sem::types::{self as types, Type};
+use crate::sem::protos::ProtoId;
+use crate::sem::types::Type;
 use crate::src::{Location, Span};
 use crate::syn::nodes::{
 	Arm, BinaryOp, BlockId, Builtin, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, UnaryOp,
@@ -36,19 +37,19 @@ pub fn build_prelude(
 ) -> Result<Prelude, String> {
 	let stdlib_pkg = descs.get(stdlib);
 	let path = [syms.intern("Core"), syms.intern("Prelude")];
-	let Some(prelude_mod) = stdlib_pkg.modules.by_path(&path) else {
+	let Some(prelude_mod) = stdlib_pkg.modules().by_path(&path) else {
 		return Err("stdlib does not declare a 'Core.Prelude' module".to_string());
 	};
-	let chunk_id = stdlib_pkg.modules.chunk(prelude_mod);
-	let chunk = stdlib_pkg.chunks.get(chunk_id);
+	let chunk_id = stdlib_pkg.modules().chunk(prelude_mod);
+	let chunk = stdlib_pkg.chunks().get(chunk_id);
 
 	let mut locals = HashMap::with_capacity_and_hasher(chunk.top.len(), FxBuildHasher);
 	for item_id in &chunk.top {
 		// 'Core.Prelude' declares nothing but extern types, so this is the
 		// only module item that matters here.
 		if let ModuleItem::Extern(extern_) = chunk.get_module_item(*item_id) {
-			let type_id = stdlib_pkg.types.get_type_by_item(chunk_id, *item_id);
-			let Type::Native(desc) = stdlib_pkg.types.get_type(type_id) else {
+			let type_id = stdlib_pkg.types().get_type_by_item(chunk_id, *item_id);
+			let Type::Native(desc) = stdlib_pkg.types().get_type(type_id) else {
 				panic!()
 			};
 			locals.insert(extern_.name, Val::Obj(natives.val(desc.provider)));
@@ -70,7 +71,7 @@ pub struct Protos {
 }
 
 pub struct Proto {
-	pub id: (PackageId, types::ProtoId),
+	pub id: (PackageId, ProtoId),
 	pub verb: Sym,
 }
 
@@ -79,18 +80,18 @@ pub struct Proto {
 pub fn build_protos(descs: &pkg::Packages, syms: &mut Interner, stdlib: PackageId) -> Protos {
 	let stdlib_pkg = descs.get(stdlib);
 	let path = [syms.intern("Core")];
-	let Some(core_mod) = stdlib_pkg.modules.by_path(&path) else {
+	let Some(core_mod) = stdlib_pkg.modules().by_path(&path) else {
 		panic!("stdlib does not declare a 'Core' module");
 	};
-	let chunk_id = stdlib_pkg.modules.chunk(core_mod);
-	let chunk = stdlib_pkg.chunks.get(chunk_id);
+	let chunk_id = stdlib_pkg.modules().chunk(core_mod);
+	let chunk = stdlib_pkg.chunks().get(chunk_id);
 
 	let order_name = syms.intern("Order");
 	let mut order = None;
 	for item_id in &chunk.top {
 		if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
 			if proto.name == order_name {
-				let proto_id = stdlib_pkg.types.get_proto_by_item(chunk_id, *item_id);
+				let proto_id = stdlib_pkg.protos().get_proto_by_item(chunk_id, *item_id);
 				order = Some(Proto {
 					id: (stdlib, proto_id),
 					verb: syms.intern("order"),
@@ -127,7 +128,7 @@ enum Signal {
 impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 	pub fn new(syms: &'syms mut Interner, rt: &'rt Runtime<'descs>, pkg_id: PackageId) -> Self {
 		let desc = rt.pkgs.desc(pkg_id);
-		let first_chunk = desc.modules.chunk(desc.modules.ids().next().unwrap());
+		let first_chunk = desc.modules().chunk(desc.modules().ids().next().unwrap());
 		let scope = rt.pkgs.get(pkg_id).mods.scope(first_chunk);
 
 		Self {
@@ -153,7 +154,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		for id in self.mods().descs.ids() {
 			let chunk_id = self.mods().descs.chunk(id);
 			self.scope = self.mods().scope(chunk_id);
-			let chunk = self.rt.pkgs.desc(self.pkg_id).chunks.get(chunk_id);
+			let chunk = self.rt.pkgs.desc(self.pkg_id).chunks().get(chunk_id);
 			for item_id in &chunk.top {
 				self.bind_module_item(chunk, chunk_id, *item_id);
 			}
@@ -165,7 +166,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		for id in self.mods().descs.order() {
 			let chunk_id = self.mods().descs.chunk(*id);
 			self.scope = self.mods().scope(chunk_id);
-			let chunk = self.rt.pkgs.desc(self.pkg_id).chunks.get(chunk_id);
+			let chunk = self.rt.pkgs.desc(self.pkg_id).chunks().get(chunk_id);
 			for item_id in &chunk.top {
 				match self.eval_module_expr(chunk, *item_id) {
 					Ok(()) => {}
@@ -200,7 +201,12 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				self.scope.borrow_mut().locals.insert(extern_.name, val);
 			}
 			ModuleItem::Proto(proto) => {
-				let id = self.types().descs.get_proto_by_item(chunk_id, item_id);
+				let id = self
+					.rt
+					.pkgs
+					.desc(self.pkg_id)
+					.protos()
+					.get_proto_by_item(chunk_id, item_id);
 				let val = Val::Obj(Rc::new(RefCell::new(Obj::Proto(self.pkg_id, id))));
 				self.scope.borrow_mut().locals.insert(proto.name, val);
 			}
@@ -508,7 +514,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								let fields = Rc::try_unwrap(scope).unwrap().into_inner().locals;
 
 								let type_chunk =
-									self.rt.pkgs.desc(type_pkg).chunks.get(type_chunk_id);
+									self.rt.pkgs.desc(type_pkg).chunks().get(type_chunk_id);
 								let inst_rf = Rc::new(RefCell::new(Obj::Instance(Instance {
 									pkg: type_pkg,
 									typ: type_id,
@@ -1539,7 +1545,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			let val = match slot {
 				Some(val) => val,
 				None => {
-					let chunk = self.rt.pkgs.desc(self.pkg_id).chunks.get(chunk_id);
+					let chunk = self.rt.pkgs.desc(self.pkg_id).chunks().get(chunk_id);
 					match self.eval_expr(chunk, param.default.unwrap()) {
 						Ok(val) => val,
 						Err(signal) => {
@@ -1575,7 +1581,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		// against that package's sources, not the caller's.
 		let saved_pkg_id = self.pkg_id;
 		self.pkg_id = proc.pkg;
-		let body_chunk = self.rt.pkgs.desc(proc.pkg).chunks.get(proc.chunk);
+		let body_chunk = self.rt.pkgs.desc(proc.pkg).chunks().get(proc.chunk);
 		let result = match self.bind_args(proc.chunk, &proc.params, slots, &scope) {
 			Ok(()) => self.eval_block(body_chunk, scope, proc.body),
 			Err(signal) => Err(signal),

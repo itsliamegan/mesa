@@ -10,6 +10,7 @@ use crate::rt::Error;
 use crate::rt::pkg::Packages;
 use crate::rt::scope::Scopes;
 use crate::rt::val::{Bool, Char, Dict, List, Nil, Num, Obj, Proc, Str, Val};
+use crate::sem::protos::ProtoId;
 use crate::sem::types::{self, MemberSite};
 use crate::syn::ChunkId;
 use crate::syn::nodes::DefId;
@@ -87,7 +88,7 @@ pub struct NativeType {
 	pub members: FxHashMap<Sym, NativeMember>,
 	pub statics: FxHashMap<Sym, NativeMember>,
 	// Protocols this type conforms to, per its 'extern' declaration.
-	pub impls: Vec<(PackageId, types::ProtoId)>,
+	pub impls: Vec<(PackageId, ProtoId)>,
 }
 
 impl NativeType {
@@ -344,7 +345,7 @@ impl<'descs> Types<'descs> {
 		pkg: &'descs Package,
 		scopes: &Scopes,
 	) -> Self {
-		let descs = &pkg.types;
+		let descs = pkg.types();
 		let mut user = Vec::with_capacity(descs.ids().len());
 		for id in descs.ids() {
 			let types::Type::User(desc) = descs.get_type(id) else {
@@ -408,8 +409,8 @@ pub fn add_extern_members<'descs>(
 	pkg: &'descs Package,
 	scopes: &Scopes,
 ) {
-	for id in pkg.types.ids() {
-		let types::Type::Native(desc) = pkg.types.get_type(id) else {
+	for id in pkg.types().ids() {
+		let types::Type::Native(desc) = pkg.types().get_type(id) else {
 			continue;
 		};
 
@@ -466,9 +467,9 @@ fn build_member_proc<'descs>(
 	// protocol's file and may reference names bound there, so it closes over
 	// that module's scope, not the implementing type's.
 	let (chunks, scope) = match site_pkg == pkg_id {
-		true => (&pkg.chunks, scopes.module(chunk_id)),
+		true => (pkg.chunks(), scopes.module(chunk_id)),
 		false => (
-			&pkgs.desc(site_pkg).chunks,
+			pkgs.desc(site_pkg).chunks(),
 			pkgs.get(site_pkg).mods.scope(chunk_id),
 		),
 	};
@@ -490,7 +491,7 @@ fn build_static_proc(
 	chunk_id: ChunkId,
 	def_id: DefId,
 ) -> Rc<RefCell<Proc>> {
-	let def = pkg.chunks.get(chunk_id).get_def(def_id);
+	let def = pkg.chunks().get(chunk_id).get_def(def_id);
 	Rc::new(RefCell::new(Proc {
 		name: def.name,
 		params: def.params.to_vec(),

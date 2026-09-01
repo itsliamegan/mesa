@@ -7,7 +7,7 @@ use std::process;
 
 use mesa::intern::Interner;
 use mesa::load;
-use mesa::pkg::{Package, PackageId, Packages};
+use mesa::pkg::{PackageId, Packages};
 use mesa::rt::{
 	self, CORE_TYPES, NativeTypeSpec, Natives, Raised, build_errors, build_prelude, build_protos,
 	rt_debug_val,
@@ -35,26 +35,16 @@ fn main() {
 			}
 		}
 	};
-	let stdlib_pkg_id = pkgs.reserve();
-	load_package(
+	let stdlib_pkg_id = load_package(
 		&mut syms,
 		&mut pkgs,
 		&mut natives,
-		stdlib_pkg_id,
 		&stdlib_dir,
 		&[CORE_TYPES, STDLIB_NATIVE_TYPES],
 	);
 
 	let current_dir = env::current_dir().unwrap();
-	let current_pkg_id = pkgs.reserve();
-	load_package(
-		&mut syms,
-		&mut pkgs,
-		&mut natives,
-		current_pkg_id,
-		&current_dir,
-		&[],
-	);
+	let current_pkg_id = load_package(&mut syms, &mut pkgs, &mut natives, &current_dir, &[]);
 
 	let prelude = match build_prelude(&pkgs, &mut syms, stdlib_pkg_id, &natives) {
 		Ok(prelude) => prelude,
@@ -94,10 +84,9 @@ fn load_package(
 	syms: &mut Interner,
 	pkgs: &mut Packages,
 	natives: &mut Natives,
-	pkg_id: PackageId,
 	start_dir: &Path,
 	native_type_lists: &[&[NativeTypeSpec]],
-) {
+) -> PackageId {
 	let (root_dir, manifest) = match load::find(start_dir) {
 		Ok(found) => found,
 		Err(err) => {
@@ -124,13 +113,15 @@ fn load_package(
 		}
 	};
 
+	let pkg_id = pkgs.open(manifest, sources, chunks);
+
 	let mut native_shapes = HashMap::new();
 	for specs in native_type_lists {
 		native_shapes.extend(natives.register(syms, specs));
 	}
 
-	let (modules, types) = match sem::check(syms, pkgs, pkg_id, &sources, &chunks, &native_shapes) {
-		Ok(checked) => checked,
+	match sem::check(syms, pkgs, pkg_id, &native_shapes) {
+		Ok(()) => {}
 		Err(errs) => {
 			for err in errs {
 				eprintln!("{}", err);
@@ -139,14 +130,5 @@ fn load_package(
 		}
 	};
 
-	pkgs.insert(
-		pkg_id,
-		Package {
-			manifest,
-			sources,
-			chunks,
-			modules,
-			types,
-		},
-	);
+	pkg_id
 }

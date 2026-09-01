@@ -175,11 +175,7 @@ impl Modules {
 				// A module-form import binds the module itself, under the leaf
 				// of its declared name.
 				Target::Module(owner) => {
-					let owner_mods = if import.pkg == self.pkg {
-						self
-					} else {
-						&pkgs.get(import.pkg).modules
-					};
+					let owner_mods = pkgs.get(import.pkg).modules();
 					if *owner_mods.get(owner).name.last().unwrap() == name {
 						return Some(Binding::Module(import.pkg, owner));
 					}
@@ -188,11 +184,7 @@ impl Modules {
 				// of the module holding it.
 				Target::Member(owner, bound) => {
 					if bound == name {
-						let owner_mods = if import.pkg == self.pkg {
-							self
-						} else {
-							&pkgs.get(import.pkg).modules
-						};
+						let owner_mods = pkgs.get(import.pkg).modules();
 						return Some(Binding::Imported(
 							import.pkg,
 							owner,
@@ -232,11 +224,7 @@ impl Modules {
 			// than being handed to a caller.
 			Binding::Module(pkg, id) => (pkg, id, Member::Child(id)),
 		};
-		let mods = if pkg == self.pkg {
-			self
-		} else {
-			&pkgs.get(pkg).modules
-		};
+		let mods = pkgs.get(pkg).modules();
 		// For the remaining parts, look them up relative to each resolved part
 		// in turn.
 		for (i, part) in path[1..].iter().enumerate() {
@@ -355,11 +343,11 @@ fn build(
 			if other_id == pkg_id {
 				continue;
 			}
-			if other_pkg.modules.by_name.contains_key(&name) {
+			if other_pkg.modules().by_name.contains_key(&name) {
 				errs.push(Error::ConflictingModuleName(
 					sources.loc(name_span),
 					syms.resolve_path(&name),
-					other_pkg.manifest.name.clone(),
+					other_pkg.manifest().name.clone(),
 				));
 			}
 		}
@@ -607,7 +595,7 @@ fn resolve_import_path(
 		if other_id == pkg_id {
 			continue;
 		}
-		if let Some(found) = resolve_import_path_in(&other_pkg.modules, path) {
+		if let Some(found) = resolve_import_path_in(other_pkg.modules(), path) {
 			return Some((other_id, found));
 		}
 	}

@@ -18,10 +18,10 @@ impl<'descs> Package<'descs> {
 		desc: &'descs pkg::Package,
 		id: PackageId,
 	) -> Self {
-		let scopes = Scopes::new(prelude.scope.clone(), &desc.modules);
+		let scopes = Scopes::new(prelude.scope.clone(), desc.modules());
 		let types = Types::new(pkgs, id, desc, &scopes);
 		add_extern_members(pkgs, natives, id, desc, &scopes);
-		let mods = Modules::new(id, &desc.modules, scopes);
+		let mods = Modules::new(id, desc.modules(), scopes);
 
 		Self { types, mods }
 	}

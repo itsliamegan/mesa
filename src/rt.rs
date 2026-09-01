@@ -9,7 +9,8 @@ mod val;
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
-use crate::sem::types::{ProtoId, Type};
+use crate::sem::protos::ProtoId;
+use crate::sem::types::Type;
 use crate::src::Location;
 
 pub use err::{Errors, build_errors};
