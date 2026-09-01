@@ -497,7 +497,7 @@ IO.print("hello")
 
 #---
 
-import Core.Order
+import Core.Protos.Order
 
 type Task(priority)
 	impl Order

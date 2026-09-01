@@ -1,16 +1,6 @@
 module Core
 
-proto Order
-	def order(other) end
-
-	def min(other)
-		when order(other) <= 0 then self else other end
-	end
-
-	def max(other)
-		when order(other) < 0 then other else self end
-	end
-end
+import Core.Protos.Order
 
 extern type Counter impl Order
 	extern def count end

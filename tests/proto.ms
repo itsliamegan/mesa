@@ -189,7 +189,7 @@ $print('a'.max('z'))
 
 #---
 
-import Core.Order
+import Core.Protos.Order
 
 type Task(priority)
 	impl Order
@@ -591,7 +591,7 @@ $print(Task(1) < Task(2))
 
 #! runtime error: type Task is not orderable
 
-import Core.Order
+import Core.Protos.Order
 
 type Task(priority)
 	impl Order

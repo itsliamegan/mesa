@@ -75,15 +75,15 @@ pub struct Proto {
 	pub verb: Sym,
 }
 
-// Resolve 'Core's well-known protocols by name. A missing or misnamed protocol
-// is a broken build.
+// Resolve the well-known protocols of 'Core.Protos' by name. A missing or
+// misnamed protocol is a broken build.
 pub fn build_protos(descs: &pkg::Packages, syms: &mut Interner, stdlib: PackageId) -> Protos {
 	let stdlib_pkg = descs.get(stdlib);
-	let path = [syms.intern("Core")];
-	let Some(core_mod) = stdlib_pkg.modules().by_path(&path) else {
-		panic!("stdlib does not declare a 'Core' module");
+	let path = [syms.intern("Core"), syms.intern("Protos")];
+	let Some(protos_mod) = stdlib_pkg.modules().by_path(&path) else {
+		panic!("stdlib does not declare a 'Core.Protos' module");
 	};
-	let chunk_id = stdlib_pkg.modules().chunk(core_mod);
+	let chunk_id = stdlib_pkg.modules().chunk(protos_mod);
 	let chunk = stdlib_pkg.chunks().get(chunk_id);
 
 	let order_name = syms.intern("Order");
@@ -100,7 +100,7 @@ pub fn build_protos(descs: &pkg::Packages, syms: &mut Interner, stdlib: PackageI
 		}
 	}
 	let Some(order) = order else {
-		panic!("stdlib does not declare a 'Core.Order' protocol");
+		panic!("stdlib does not declare a 'Core.Protos.Order' protocol");
 	};
 
 	Protos { order }

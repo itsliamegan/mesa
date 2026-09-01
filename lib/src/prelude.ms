@@ -1,6 +1,6 @@
 module Core.Prelude
 
-import Core.Order
+import Core.Protos.Order
 
 extern type Nil
 end
