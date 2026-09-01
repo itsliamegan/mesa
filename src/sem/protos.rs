@@ -319,13 +319,13 @@ fn render_proto_cycle(syms: &Interner, protos: &Protos, path: &[ProtoId], back: 
 // not published its protocols yet, so a reference to it reads the arena being built.
 fn owner_protos<'protos>(
 	pkgs: &'protos Packages,
-	pkg_id: PackageId,
+	checked: PackageId,
 	protos: &'protos Protos,
-	pkg: PackageId,
+	owner: PackageId,
 ) -> &'protos Protos {
-	match pkg == pkg_id {
+	match owner == checked {
 		true => protos,
-		false => pkgs.get(pkg).protos(),
+		false => pkgs.get(owner).protos(),
 	}
 }
 

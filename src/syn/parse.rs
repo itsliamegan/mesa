@@ -562,33 +562,30 @@ impl<'source> Parser<'source> {
 		Ok(expr_id)
 	}
 
-	fn parse_member_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
-		let start = self.chunk.get_expr_token_range(val_id).start;
+	fn parse_member_expr(&mut self, receiver: ExprId) -> Result<ExprId, Error> {
+		let start = self.chunk.get_expr_token_range(receiver).start;
 		self.take(TokenTag::Dot)?;
 		let field = self.take(TokenTag::Ident)?.1.sym.unwrap();
 		let expr = Expr::Member(Member {
-			receiver: val_id,
+			receiver,
 			name: field,
 		});
 		let expr_id = self.chunk.add_expr(self.range_from(start), expr);
 		Ok(expr_id)
 	}
 
-	fn parse_access_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
-		let start = self.chunk.get_expr_token_range(val_id).start;
+	fn parse_access_expr(&mut self, receiver: ExprId) -> Result<ExprId, Error> {
+		let start = self.chunk.get_expr_token_range(receiver).start;
 		self.take(TokenTag::LBrack)?;
-		let key_id = self.parse_expr()?;
+		let key = self.parse_expr()?;
 		self.take(TokenTag::RBrack)?;
-		let expr = Expr::Access(Access {
-			receiver: val_id,
-			key: key_id,
-		});
+		let expr = Expr::Access(Access { receiver, key });
 		let expr_id = self.chunk.add_expr(self.range_from(start), expr);
 		Ok(expr_id)
 	}
 
-	fn parse_call_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
-		let start = self.chunk.get_expr_token_range(val_id).start;
+	fn parse_call_expr(&mut self, callee: ExprId) -> Result<ExprId, Error> {
+		let start = self.chunk.get_expr_token_range(callee).start;
 		self.take(TokenTag::LParen)?;
 		let mut args = Vec::new();
 		let mut seen_keyword = false;
@@ -617,18 +614,15 @@ impl<'source> Parser<'source> {
 			}
 		}
 		self.take(TokenTag::RParen)?;
-		let expr = Expr::Call(Call {
-			callee: val_id,
-			args,
-		});
+		let expr = Expr::Call(Call { callee, args });
 		let expr_id = self.chunk.add_expr(self.range_from(start), expr);
 		Ok(expr_id)
 	}
 
-	fn parse_assign_expr(&mut self, val_id: ExprId) -> Result<ExprId, Error> {
-		let start = self.chunk.get_expr_token_range(val_id).start;
+	fn parse_assign_expr(&mut self, place_expr: ExprId) -> Result<ExprId, Error> {
+		let start = self.chunk.get_expr_token_range(place_expr).start;
 		let tok = self.take(TokenTag::Eq)?;
-		let place = match self.chunk.get_expr(val_id) {
+		let place = match self.chunk.get_expr(place_expr) {
 			Expr::Name(name) => Place::Name(name.clone()),
 			Expr::Member(member) => Place::Member(member.clone()),
 			Expr::Access(access) => Place::Access(access.clone()),
@@ -639,31 +633,24 @@ impl<'source> Parser<'source> {
 				));
 			}
 		};
-		let val_expr_id = self.parse_expr_prec(Precedence::NONE)?;
-		let expr = Expr::Assign(Assign {
-			place,
-			val: val_expr_id,
-		});
+		let val = self.parse_expr_prec(Precedence::NONE)?;
+		let expr = Expr::Assign(Assign { place, val });
 		let expr_id = self.chunk.add_expr(self.range_from(start), expr);
 		Ok(expr_id)
 	}
 
 	fn parse_binary_expr(
 		&mut self,
-		val_id: ExprId,
+		lhs: ExprId,
 		op: BinaryOp,
 		prec: Precedence,
 	) -> Result<ExprId, Error> {
 		self.cur = self.cur.next();
 		let rhs = self.parse_expr_prec(prec)?;
-		let expr = Expr::Binary(Binary {
-			op,
-			lhs: val_id,
-			rhs,
-		});
+		let expr = Expr::Binary(Binary { op, lhs, rhs });
 		let expr_id = self.chunk.add_expr(
 			TokenRange {
-				start: self.chunk.get_expr_token_range(val_id).start,
+				start: self.chunk.get_expr_token_range(lhs).start,
 				end: self.chunk.get_expr_token_range(rhs).end,
 			},
 			expr,
@@ -678,16 +665,16 @@ impl<'source> Parser<'source> {
 		prec: Precedence,
 	) -> Result<ExprId, Error> {
 		let tok = self.take(tag)?;
-		let val_id = self.parse_expr_prec(prec)?;
-		let expr = Expr::Unary(Unary { op, val: val_id });
+		let val = self.parse_expr_prec(prec)?;
+		let expr = Expr::Unary(Unary { op, val });
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
 		Ok(expr_id)
 	}
 
 	fn parse_mention_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Amp)?;
-		let val_id = self.parse_expr_prec(Precedence::MENTION)?;
-		let expr = Expr::Mention(Mention { val: val_id });
+		let val = self.parse_expr_prec(Precedence::MENTION)?;
+		let expr = Expr::Mention(Mention { val });
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
 		Ok(expr_id)
 	}
@@ -769,24 +756,24 @@ impl<'source> Parser<'source> {
 
 	fn parse_return_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Return)?;
-		let val_expr_id = if self.chunk.has_newline_before(self.cur) || !starts_expr(self.tag()) {
+		let val = if self.chunk.has_newline_before(self.cur) || !starts_expr(self.tag()) {
 			None
 		} else {
 			Some(self.parse_expr()?)
 		};
-		let expr = Expr::Return(Return { val: val_expr_id });
+		let expr = Expr::Return(Return { val });
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
 		Ok(expr_id)
 	}
 
 	fn parse_break_expr(&mut self) -> Result<ExprId, Error> {
 		let tok = self.take(TokenTag::Break)?;
-		let val_expr_id = if self.chunk.has_newline_before(self.cur) || !starts_expr(self.tag()) {
+		let val = if self.chunk.has_newline_before(self.cur) || !starts_expr(self.tag()) {
 			None
 		} else {
 			Some(self.parse_expr()?)
 		};
-		let expr = Expr::Break(Break { val: val_expr_id });
+		let expr = Expr::Break(Break { val });
 		let expr_id = self.chunk.add_expr(self.range_from(tok.0), expr);
 		Ok(expr_id)
 	}
