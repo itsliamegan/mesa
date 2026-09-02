@@ -1,5 +1,6 @@
 module Core.Prelude
 
+import Core.Protos.Append
 import Core.Protos.Display
 import Core.Protos.Order
 
@@ -35,9 +36,10 @@ extern type Str impl Order, Display
 	end
 end
 
-extern type List
+extern type List impl Append
 	extern def size end
 	extern def inspect end
+	extern def append(item) end
 
 	def first
 		self[0]

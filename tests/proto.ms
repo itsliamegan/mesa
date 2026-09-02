@@ -210,6 +210,33 @@ $print(Task(1) >= Task(5))
 
 #---
 
+import Core.Protos.Append
+
+type Collection(items: [])
+	impl Append
+
+	def append(item)
+		items << item
+		self
+	end
+end
+
+#> Collection(items: ["Item"])
+$print(Collection() << "Item")
+#> Collection(items: ["a", "b"])
+$print(Collection() << "a" << "b")
+
+#---
+
+#! runtime error: type Task is not appendable
+
+type Task(priority)
+end
+
+Task(1) << 1
+
+#---
+
 import Core.Protos.Display
 
 type Task(priority)

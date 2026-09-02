@@ -296,6 +296,15 @@ impl List {
 		}
 		Ok(Str::of(&print::print_list(&printed)))
 	}
+
+	pub fn append(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = val else { panic!() };
+		let Obj::List(list) = &mut *obj.borrow_mut() else {
+			panic!()
+		};
+		list.items.push(args[0].clone());
+		Ok(val.clone())
+	}
 }
 
 #[derive(Debug)]

@@ -62,6 +62,7 @@ pub struct Behaviors {
 	pub order: Behavior,
 	pub display: Behavior,
 	pub inspect: Behavior,
+	pub append: Behavior,
 }
 
 impl Behaviors {
@@ -72,6 +73,7 @@ impl Behaviors {
 	// Automatic: every type has this method without opting in, so the type pass
 	// seeds it long before the protocols can be resolved.
 	pub const INSPECT: (&str, &str) = ("Inspect", "inspect");
+	pub const APPEND: (&str, &str) = ("Append", "append");
 }
 
 // Resolve the protocols of 'Core.Protos' governing built-in behavior, and the
@@ -86,6 +88,7 @@ pub fn build_behaviors(syms: &mut Interner, pkgs: &Packages, stdlib: PackageId) 
 		order: build_behavior(syms, pkgs, stdlib, module, Behaviors::ORDER),
 		display: build_behavior(syms, pkgs, stdlib, module, Behaviors::DISPLAY),
 		inspect: build_behavior(syms, pkgs, stdlib, module, Behaviors::INSPECT),
+		append: build_behavior(syms, pkgs, stdlib, module, Behaviors::APPEND),
 	}
 }
 

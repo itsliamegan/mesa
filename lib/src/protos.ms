@@ -21,3 +21,7 @@ proto Order
 		when order(other) < 0 then other else self end
 	end
 end
+
+proto Append
+	def append(item) end
+end

@@ -179,7 +179,18 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "List",
 		new: Some(List::new),
-		methods: &[("size", &[], List::size), ("inspect", &[], List::inspect)],
+		methods: &[
+			("size", &[], List::size),
+			("inspect", &[], List::inspect),
+			(
+				"append",
+				&[NativeParam {
+					name: "item",
+					default: None,
+				}],
+				List::append,
+			),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {

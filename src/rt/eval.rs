@@ -901,34 +901,26 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							}
 						}
 						BinaryOp::Append => {
-							let Val::Obj(obj) = lhs.clone() else {
+							if self
+								.rt
+								.conforms(lhs.type_id(), self.rt.behaviors.append.proto)
+							{
+								let span = chunk.get_expr_span(expr_id);
+								let member = self.rt.behaviors.append.method;
+								self.call_member(span, lhs.clone(), member, vec![(None, rhs)])
+							} else {
 								let loc = self
 									.rt
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								return Err(Signal::raise(
+								Err(Signal::raise(
 									Raised::Native(Error::ProtocolError(
 										ProtocolError::NotAppendable(lhs.type_id()),
 									)),
 									vec![(String::new(), loc)],
-								));
-							};
-							let Obj::List(list) = &mut *obj.borrow_mut() else {
-								let loc = self
-									.rt
-									.pkgs
-									.desc(self.pkg_id)
-									.loc(chunk.get_expr_span(expr_id));
-								return Err(Signal::raise(
-									Raised::Native(Error::ProtocolError(
-										ProtocolError::NotAppendable(obj.borrow().type_id()),
-									)),
-									vec![(String::new(), loc)],
-								));
-							};
-							list.items.push(rhs);
-							Ok(lhs)
+								))
+							}
 						}
 						BinaryOp::Add => match (lhs, rhs) {
 							(Val::Num(lhs), Val::Num(rhs)) => Ok(Val::Num(Num(lhs.0 + rhs.0))),
