@@ -23,21 +23,23 @@ use crate::syn::nodes::{BlockId, Param};
 pub struct Num(pub f64);
 
 impl Num {
-	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Num(num) = val else { panic!() };
-		Ok(Str::of(&print::print_num(num.0)))
-	}
-
 	pub fn new() -> Val {
 		Val::Num(Num(0.0))
 	}
 
-	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Num(Num(this)) = val else { panic!() };
+	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(Num(self_)) = self_ else {
+			panic!()
+		};
 		let Val::Num(Num(other)) = &args[0] else {
 			panic!()
 		};
-		Ok(Val::Num(Num(this - other)))
+		Ok(Val::Num(Num(self_ - other)))
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(num) = self_ else { panic!() };
+		Ok(Str::of(&print::print_num(num.0)))
 	}
 }
 
@@ -45,13 +47,13 @@ impl Num {
 pub struct Bool(pub bool);
 
 impl Bool {
-	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Bool(bool) = val else { panic!() };
-		Ok(Str::of(&print::print_bool(bool.0)))
-	}
-
 	pub fn new() -> Val {
 		Val::Bool(Bool(false))
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Bool(self_) = self_ else { panic!() };
+		Ok(Str::of(&print::print_bool(self_.0)))
 	}
 }
 
@@ -59,22 +61,24 @@ impl Bool {
 pub struct Char(pub char);
 
 impl Char {
-	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Char(char) = val else { panic!() };
-		Ok(Str::of(&print::print_char(char.0)))
-	}
-
-	pub fn display(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Char(char) = val else { panic!() };
-		Ok(Str::of(&char.0.to_string()))
-	}
-
-	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Char(Char(this)) = val else { panic!() };
+	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(Char(self_)) = self_ else {
+			panic!()
+		};
 		let Val::Char(Char(other)) = &args[0] else {
 			panic!()
 		};
-		Ok(Val::Num(Num(*this as u32 as f64 - *other as u32 as f64)))
+		Ok(Val::Num(Num(*self_ as u32 as f64 - *other as u32 as f64)))
+	}
+
+	pub fn display(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = self_ else { panic!() };
+		Ok(Str::of(&char.0.to_string()))
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = self_ else { panic!() };
+		Ok(Str::of(&print::print_char(char.0)))
 	}
 }
 
@@ -99,18 +103,8 @@ impl Str {
 		}))
 	}
 
-	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Str(str) = val else { panic!() };
-		Ok(Str::of(&print::print_str(&str.text)))
-	}
-
-	pub fn display(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Str(str) = val else { panic!() };
-		Ok(Str::of(&str.text))
-	}
-
-	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Str(str) = val else { panic!() };
+	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(str) = self_ else { panic!() };
 		let size = match str.size.get() {
 			Some(size) => size,
 			None => {
@@ -122,25 +116,35 @@ impl Str {
 		Ok(Val::Num(Num(size)))
 	}
 
-	pub fn empty(_interp: &mut Interpreter, _val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	pub fn empty(_interp: &mut Interpreter, _self: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		Ok(Str::new())
 	}
 
-	pub fn chars(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Str(str) = val else { panic!() };
+	pub fn chars(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(str) = self_ else { panic!() };
 		let items = str.text.chars().map(|c| Val::Char(Char(c))).collect();
 		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
 	}
 
-	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Str(this) = val else { panic!() };
+	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(self_) = self_ else { panic!() };
 		let Val::Str(other) = &args[0] else { panic!() };
-		let order = match this.text.cmp(&other.text) {
+		let order = match self_.text.cmp(&other.text) {
 			std::cmp::Ordering::Less => -1.0,
 			std::cmp::Ordering::Equal => 0.0,
 			std::cmp::Ordering::Greater => 1.0,
 		};
 		Ok(Val::Num(Num(order)))
+	}
+
+	pub fn display(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(self_) = self_ else { panic!() };
+		Ok(Str::of(&self_.text))
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(self_) = self_ else { panic!() };
+		Ok(Str::of(&print::print_str(&self_.text)))
 	}
 }
 
@@ -148,12 +152,12 @@ impl Str {
 pub struct Nil;
 
 impl Nil {
-	pub fn inspect(_interp: &mut Interpreter, _val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		Ok(Str::of(&print::print_nil()))
-	}
-
 	pub fn new() -> Val {
 		Val::Nil(Nil)
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, _self: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		Ok(Str::of(&print::print_nil()))
 	}
 }
 
@@ -274,16 +278,25 @@ impl List {
 		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
 	}
 
-	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = val else { panic!() };
+	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
 		let Obj::List(list) = &*obj.borrow() else {
 			panic!()
 		};
 		Ok(Val::Num(Num(list.items.len() as f64)))
 	}
 
-	pub fn inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = val else { panic!() };
+	pub fn append(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Obj::List(list) = &mut *obj.borrow_mut() else {
+			panic!()
+		};
+		list.items.push(args[0].clone());
+		Ok(self_.clone())
+	}
+
+	pub fn inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
 		let items = {
 			let Obj::List(list) = &*obj.borrow() else {
 				panic!()
@@ -295,15 +308,6 @@ impl List {
 			printed.push(interp.inspect(item)?);
 		}
 		Ok(Str::of(&print::print_list(&printed)))
-	}
-
-	pub fn append(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = val else { panic!() };
-		let Obj::List(list) = &mut *obj.borrow_mut() else {
-			panic!()
-		};
-		list.items.push(args[0].clone());
-		Ok(val.clone())
 	}
 }
 
@@ -319,16 +323,16 @@ impl Dict {
 		}))))
 	}
 
-	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = val else { panic!() };
+	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
 		let Obj::Dict(dict) = &*obj.borrow() else {
 			panic!()
 		};
 		Ok(Val::Num(Num(dict.pairs.len() as f64)))
 	}
 
-	pub fn inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = val else { panic!() };
+	pub fn inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
 		let pairs = {
 			let Obj::Dict(dict) = &*obj.borrow() else {
 				panic!()
@@ -389,8 +393,12 @@ pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
 }
 
-pub fn derived_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-	let instance = match val {
+pub fn derived_inspect(
+	interp: &mut Interpreter,
+	self_: &Val,
+	_args: Vec<Val>,
+) -> Result<Val, Raise> {
+	let instance = match self_ {
 		Val::Obj(obj) => match &*obj.borrow() {
 			Obj::Instance(instance) => {
 				Some(print::instance_fields(interp.syms(), interp.rt(), instance))
@@ -403,7 +411,7 @@ pub fn derived_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> 
 		return Ok(Str::of(&print::inspect_val(
 			interp.syms(),
 			interp.rt(),
-			val,
+			self_,
 		)));
 	};
 	let mut printed = Vec::new();
@@ -413,8 +421,8 @@ pub fn derived_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> 
 	Ok(Str::of(&print::print_instance(&name, &printed)))
 }
 
-pub fn proc_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-	let Val::Obj(obj) = val else { panic!() };
+pub fn proc_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
 	let text = match &*obj.borrow() {
 		Obj::Proc(proc) => print::print_proc(interp.syms(), proc),
 		Obj::Method(method) => print::print_method(interp.syms(), method),
@@ -423,8 +431,8 @@ pub fn proc_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Res
 	Ok(Str::of(&text))
 }
 
-pub fn type_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-	let Val::Obj(obj) = val else { panic!() };
+pub fn type_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
 	let Obj::Type(type_id) = &*obj.borrow() else {
 		panic!()
 	};
@@ -435,8 +443,8 @@ pub fn type_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Res
 	)))
 }
 
-pub fn proto_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-	let Val::Obj(obj) = val else { panic!() };
+pub fn proto_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
 	let Obj::Proto(pkg, proto_id) = &*obj.borrow() else {
 		panic!()
 	};
@@ -448,8 +456,12 @@ pub fn proto_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Re
 	)))
 }
 
-pub fn module_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-	let Val::Obj(obj) = val else { panic!() };
+pub fn module_inspect(
+	interp: &mut Interpreter,
+	self_: &Val,
+	_args: Vec<Val>,
+) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
 	let Obj::Module(pkg, id) = &*obj.borrow() else {
 		panic!()
 	};
