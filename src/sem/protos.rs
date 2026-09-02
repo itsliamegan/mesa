@@ -56,6 +56,14 @@ pub struct Behavior {
 	pub method: Sym,
 }
 
+// Access is one behavior with separate read and write methods.
+#[derive(Debug)]
+pub struct AccessBehavior {
+	pub proto: (PackageId, ProtoId),
+	pub access: Sym,
+	pub store: Sym,
+}
+
 // Every built-in behavior the interpreter dispatches through.
 #[derive(Debug)]
 pub struct Behaviors {
@@ -63,6 +71,7 @@ pub struct Behaviors {
 	pub display: Behavior,
 	pub inspect: Behavior,
 	pub append: Behavior,
+	pub access: AccessBehavior,
 }
 
 impl Behaviors {
@@ -74,6 +83,7 @@ impl Behaviors {
 	// seeds it long before the protocols can be resolved.
 	pub const INSPECT: (&str, &str) = ("Inspect", "inspect");
 	pub const APPEND: (&str, &str) = ("Append", "append");
+	pub const ACCESS: (&str, &str, &str) = ("Access", "access", "store");
 }
 
 // Resolve the protocols of 'Core.Protos' governing built-in behavior, and the
@@ -89,6 +99,7 @@ pub fn build_behaviors(syms: &mut Interner, pkgs: &Packages, stdlib: PackageId) 
 		display: build_behavior(syms, pkgs, stdlib, module, Behaviors::DISPLAY),
 		inspect: build_behavior(syms, pkgs, stdlib, module, Behaviors::INSPECT),
 		append: build_behavior(syms, pkgs, stdlib, module, Behaviors::APPEND),
+		access: build_access_behavior(syms, pkgs, stdlib, module, Behaviors::ACCESS),
 	}
 }
 
@@ -108,6 +119,26 @@ fn build_behavior(
 	Behavior {
 		proto: (stdlib, pkg.protos().get_proto_by_item(chunk_id, item_id)),
 		method: syms.intern(method),
+	}
+}
+
+fn build_access_behavior(
+	syms: &mut Interner,
+	pkgs: &Packages,
+	stdlib: PackageId,
+	module: ModuleId,
+	names: (&str, &str, &str),
+) -> AccessBehavior {
+	let (proto, access, store) = names;
+	let pkg = pkgs.get(stdlib);
+	let Some(Member::Proto(item_id)) = pkg.modules().member(module, syms.intern(proto)) else {
+		panic!("stdlib does not declare a 'Core.Protos.{}' protocol", proto);
+	};
+	let chunk_id = pkg.modules().chunk(module);
+	AccessBehavior {
+		proto: (stdlib, pkg.protos().get_proto_by_item(chunk_id, item_id)),
+		access: syms.intern(access),
+		store: syms.intern(store),
 	}
 }
 

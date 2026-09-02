@@ -1,4 +1,5 @@
 import Core.Errors.Error
+import Core.Protos.Access
 
 def unused
 	raise Error.KeyError("boom")
@@ -73,6 +74,14 @@ type Task(priority)
 	end
 end
 
+type Collection(items: [])
+	impl Access
+
+	def access(key)
+		items[key]
+	end
+end
+
 do
 	raise Task(1)
 rescue e case Task then
@@ -92,6 +101,13 @@ do
 	5[0]
 rescue e case Error.ProtocolError then
 	#> Error.ProtocolError(cause: ProtocolError.NotAccessible(message: "type Num is not accessible"))
+	$print(e)
+end
+
+do
+	Collection()[0] := "Item"
+rescue e case Error.ProtocolError then
+	#> Error.ProtocolError(cause: ProtocolError.NotImplemented(message: "type Collection does not implement 'store'"))
 	$print(e)
 end
 

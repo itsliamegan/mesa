@@ -228,6 +228,72 @@ $print(Collection() << "a" << "b")
 
 #---
 
+import Core.Protos.Access
+
+type Collection(items: [])
+	impl Access
+
+	def access(key)
+		items[key]
+	end
+end
+
+#> Item
+$print(Collection(["Item"]).access(0))
+#> Item
+$print(Collection(["Item"])[0])
+
+#---
+
+#! runtime error: type Collection does not implement 'store'
+
+import Core.Protos.Access
+
+type Collection(items: [])
+	impl Access
+
+	def access(key)
+		items[key]
+	end
+end
+
+Collection()[0] := "Item"
+
+#---
+
+import Core.Protos.Access
+
+type Collection(items: [])
+	impl Access
+
+	def access(key)
+		items[key]
+	end
+
+	def store(key, item)
+		items[key] := item
+	end
+end
+
+collection := Collection(["old"])
+assigned := collection[0] := "new"
+#> new
+$print(assigned)
+#> new
+$print(collection[0])
+
+#---
+
+#! semantic error: type 'Collection' does not implement 'access', required by protocol 'Access'
+
+import Core.Protos.Access
+
+type Collection(items: [])
+	impl Access
+end
+
+#---
+
 #! runtime error: type Task is not appendable
 
 type Task(priority)

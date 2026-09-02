@@ -10,6 +10,13 @@ $print(list[0])
 #> 3
 $print(list[2])
 
+list := [1, 0, 3]
+list.store(1, 2)
+#> 2
+$print(list.access(1))
+#> [1, 2, 3]
+$print(list)
+
 #> 1
 #> 2
 #> 3

@@ -125,6 +125,12 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		self.rt
 	}
 
+	pub(crate) fn native_error(&self, err: Error) -> Raise {
+		let span = self.call_span.unwrap();
+		let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+		Raise(Raised::Native(err), vec![(String::new(), loc)])
+	}
+
 	#[allow(dead_code)]
 	pub(crate) fn call(
 		&mut self,
@@ -606,60 +612,26 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				let val = self.eval_member_raw(chunk, expr_id, member.receiver, member.name)?;
 				self.invoke_or_return(chunk, expr_id, val)
 			}
-			Expr::Access(access) => match self.eval_expr(chunk, access.receiver)? {
-				Val::Obj(obj) => match &*obj.borrow() {
-					Obj::List(list) => {
-						let index =
-							self.eval_index(chunk, expr_id, access.key, list.items.len())?;
-						Ok(list.items[index].clone())
-					}
-					Obj::Dict(dict) => {
-						let key = self.eval_expr(chunk, access.key)?;
-						match dict.pairs.get(&key) {
-							Some(val) => Ok(val.clone()),
-							None => {
-								let loc = self
-									.rt
-									.pkgs
-									.desc(self.pkg_id)
-									.loc(chunk.get_expr_span(expr_id));
-								Err(Signal::raise(
-									Raised::Native(Error::KeyError(inspect_val(
-										self.syms, self.rt, &key,
-									))),
-									vec![(String::new(), loc)],
-								))
-							}
-						}
-					}
-					obj => {
-						let loc = self
-							.rt
-							.pkgs
-							.desc(self.pkg_id)
-							.loc(chunk.get_expr_span(expr_id));
-						Err(Signal::raise(
-							Raised::Native(Error::ProtocolError(ProtocolError::NotAccessible(
-								obj.type_id(),
-							))),
-							vec![(String::new(), loc)],
-						))
-					}
-				},
-				val => {
-					let loc = self
-						.rt
-						.pkgs
-						.desc(self.pkg_id)
-						.loc(chunk.get_expr_span(expr_id));
+			Expr::Access(access) => {
+				let receiver = self.eval_expr(chunk, access.receiver)?;
+				let key = self.eval_expr(chunk, access.key)?;
+				let span = chunk.get_expr_span(expr_id);
+				if self
+					.rt
+					.conforms(receiver.type_id(), self.rt.behaviors.access.proto)
+				{
+					let member = self.rt.behaviors.access.access;
+					self.call_member(span, receiver, member, vec![(None, key)])
+				} else {
+					let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
 					Err(Signal::raise(
 						Raised::Native(Error::ProtocolError(ProtocolError::NotAccessible(
-							val.type_id(),
+							receiver.type_id(),
 						))),
 						vec![(String::new(), loc)],
 					))
 				}
-			},
+			}
 			Expr::Mention(mention) => {
 				let val = self.eval_expr_raw(chunk, mention.val)?;
 				self.expect_invocable(chunk, expr_id, val)
@@ -741,50 +713,28 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					}
 					syn::nodes::Place::Access(access) => {
 						let receiver = self.eval_expr(chunk, access.receiver)?;
-						match &receiver {
-							Val::Obj(obj) => match &mut *obj.borrow_mut() {
-								Obj::List(list) => {
-									let index = self.eval_index(
-										chunk,
-										expr_id,
-										access.key,
-										list.items.len(),
-									)?;
-									list.items[index] = val.clone();
-									Ok(val)
-								}
-								Obj::Dict(dict) => {
-									let key = self.eval_expr(chunk, access.key)?;
-									dict.pairs.insert(key, val.clone());
-									Ok(val)
-								}
-								obj => {
-									let loc = self
-										.rt
-										.pkgs
-										.desc(self.pkg_id)
-										.loc(chunk.get_expr_span(expr_id));
-									Err(Signal::raise(
-										Raised::Native(Error::ProtocolError(
-											ProtocolError::NotAccessible(obj.type_id()),
-										)),
-										vec![(String::new(), loc)],
-									))
-								}
-							},
-							val => {
-								let loc = self
-									.rt
-									.pkgs
-									.desc(self.pkg_id)
-									.loc(chunk.get_expr_span(expr_id));
-								Err(Signal::raise(
-									Raised::Native(Error::ProtocolError(
-										ProtocolError::NotAccessible(val.type_id()),
-									)),
-									vec![(String::new(), loc)],
-								))
-							}
+						let key = self.eval_expr(chunk, access.key)?;
+						let span = chunk.get_expr_span(expr_id);
+						if self
+							.rt
+							.conforms(receiver.type_id(), self.rt.behaviors.access.proto)
+						{
+							let member = self.rt.behaviors.access.store;
+							self.call_member(
+								span,
+								receiver,
+								member,
+								vec![(None, key), (None, val.clone())],
+							)?;
+							Ok(val)
+						} else {
+							let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+							Err(Signal::raise(
+								Raised::Native(Error::ProtocolError(ProtocolError::NotAccessible(
+									receiver.type_id(),
+								))),
+								vec![(String::new(), loc)],
+							))
 						}
 					}
 				}
@@ -1314,54 +1264,19 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		}
 	}
 
-	fn eval_index(
-		&mut self,
-		chunk: &Chunk,
-		expr_id: ExprId,
-		key_id: ExprId,
-		len: usize,
-	) -> Result<usize, Signal> {
-		let num = match self.eval_expr(chunk, key_id)? {
-			Val::Num(num) => num.0,
-			val => {
-				let loc = self
-					.rt
-					.pkgs
-					.desc(self.pkg_id)
-					.loc(chunk.get_expr_span(expr_id));
-				return Err(Signal::raise(
-					Raised::Native(Error::TypeError(TypeError::IndexNonNum(inspect_val(
-						self.syms, self.rt, &val,
-					)))),
-					vec![(String::new(), loc)],
-				));
-			}
+	pub(crate) fn index_of(&self, key: &Val, len: usize) -> Result<usize, Error> {
+		let Val::Num(num) = key else {
+			return Err(Error::TypeError(TypeError::IndexNonNum(inspect_val(
+				self.syms, self.rt, key,
+			))));
 		};
-
+		let num = num.0;
 		if num != num.trunc() {
-			let loc = self
-				.rt
-				.pkgs
-				.desc(self.pkg_id)
-				.loc(chunk.get_expr_span(expr_id));
-			return Err(Signal::raise(
-				Raised::Native(Error::IndexError(IndexError::NonIntegral(num))),
-				vec![(String::new(), loc)],
-			));
+			return Err(Error::IndexError(IndexError::NonIntegral(num)));
 		}
-
 		if num < 0.0 || num >= len as f64 {
-			let loc = self
-				.rt
-				.pkgs
-				.desc(self.pkg_id)
-				.loc(chunk.get_expr_span(expr_id));
-			return Err(Signal::raise(
-				Raised::Native(Error::IndexError(IndexError::OutOfRange(num))),
-				vec![(String::new(), loc)],
-			));
+			return Err(Error::IndexError(IndexError::OutOfRange(num)));
 		}
-
 		Ok(num as usize)
 	}
 

@@ -13,6 +13,7 @@ use crate::rt::eval::{Interpreter, Raise};
 use crate::rt::print;
 use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMethod, NativeTypeId, TypeId};
+use crate::rt::{Error, ProtocolError};
 use crate::sem::modules::ModuleId;
 use crate::sem::protos::ProtoId;
 use crate::sem::types;
@@ -295,6 +296,41 @@ impl List {
 		Ok(self_.clone())
 	}
 
+	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let len = {
+			let Obj::List(list) = &*obj.borrow() else {
+				panic!()
+			};
+			list.items.len()
+		};
+		let index = interp
+			.index_of(&args[0], len)
+			.map_err(|err| interp.native_error(err))?;
+		let Obj::List(list) = &*obj.borrow() else {
+			panic!()
+		};
+		Ok(list.items[index].clone())
+	}
+
+	pub fn store(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let len = {
+			let Obj::List(list) = &*obj.borrow() else {
+				panic!()
+			};
+			list.items.len()
+		};
+		let index = interp
+			.index_of(&args[0], len)
+			.map_err(|err| interp.native_error(err))?;
+		let Obj::List(list) = &mut *obj.borrow_mut() else {
+			panic!()
+		};
+		list.items[index] = args[1].clone();
+		Ok(args[1].clone())
+	}
+
 	pub fn inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Obj(obj) = self_ else { panic!() };
 		let items = {
@@ -329,6 +365,30 @@ impl Dict {
 			panic!()
 		};
 		Ok(Val::Num(Num(dict.pairs.len() as f64)))
+	}
+
+	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Obj::Dict(dict) = &*obj.borrow() else {
+			panic!()
+		};
+		match dict.pairs.get(&args[0]) {
+			Some(val) => Ok(val.clone()),
+			None => Err(interp.native_error(Error::KeyError(print::inspect_val(
+				interp.syms(),
+				interp.rt(),
+				&args[0],
+			)))),
+		}
+	}
+
+	pub fn store(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Obj::Dict(dict) = &mut *obj.borrow_mut() else {
+			panic!()
+		};
+		dict.pairs.insert(args[0].clone(), args[1].clone());
+		Ok(args[1].clone())
 	}
 
 	pub fn inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -419,6 +479,16 @@ pub fn derived_inspect(
 		printed.push((field.clone(), interp.inspect(val)?));
 	}
 	Ok(Str::of(&print::print_instance(&name, &printed)))
+}
+
+pub fn derived_store(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let member = interp.rt().behaviors.access.store;
+	Err(
+		interp.native_error(Error::ProtocolError(ProtocolError::NotImplemented(
+			self_.type_id(),
+			member,
+		))),
+	)
 }
 
 pub fn proc_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {

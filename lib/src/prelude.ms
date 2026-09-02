@@ -1,5 +1,6 @@
 module Core.Prelude
 
+import Core.Protos.Access
 import Core.Protos.Append
 import Core.Protos.Display
 import Core.Protos.Order
@@ -36,19 +37,23 @@ extern type Str impl Order, Display
 	end
 end
 
-extern type List impl Append
+extern type List impl Access, Append
 	extern def size end
 	extern def inspect end
 	extern def append(item) end
+	extern def access(key) end
+	extern def store(key, item) end
 
 	def first
 		self[0]
 	end
 end
 
-extern type Dict
+extern type Dict impl Access
 	extern def size end
 	extern def inspect end
+	extern def access(key) end
+	extern def store(key, item) end
 end
 
 extern type Proc

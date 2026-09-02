@@ -190,13 +190,60 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				List::append,
 			),
+			(
+				"access",
+				&[NativeParam {
+					name: "key",
+					default: None,
+				}],
+				List::access,
+			),
+			(
+				"store",
+				&[
+					NativeParam {
+						name: "key",
+						default: None,
+					},
+					NativeParam {
+						name: "item",
+						default: None,
+					},
+				],
+				List::store,
+			),
 		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Dict",
 		new: Some(Dict::new),
-		methods: &[("size", &[], Dict::size), ("inspect", &[], Dict::inspect)],
+		methods: &[
+			("size", &[], Dict::size),
+			("inspect", &[], Dict::inspect),
+			(
+				"access",
+				&[NativeParam {
+					name: "key",
+					default: None,
+				}],
+				Dict::access,
+			),
+			(
+				"store",
+				&[
+					NativeParam {
+						name: "key",
+						default: None,
+					},
+					NativeParam {
+						name: "item",
+						default: None,
+					},
+				],
+				Dict::store,
+			),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
@@ -261,11 +308,27 @@ const INSPECT: NativeMethod = NativeMethod {
 	call: val::derived_inspect,
 };
 
+const STORE: NativeMethod = NativeMethod {
+	params: &[
+		NativeParam {
+			name: "key",
+			default: None,
+		},
+		NativeParam {
+			name: "item",
+			default: None,
+		},
+	],
+	call: val::derived_store,
+};
+
 // The implementation of a method the language derives. A name the semantic
 // layer records as derived and no behavior here names is a broken build.
 fn derived_method(behaviors: &Behaviors, name: Sym) -> MethodImpl {
 	if name == behaviors.inspect.method {
 		MethodImpl::Native(INSPECT)
+	} else if name == behaviors.access.store {
+		MethodImpl::Native(STORE)
 	} else {
 		panic!()
 	}

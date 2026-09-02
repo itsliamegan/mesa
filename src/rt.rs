@@ -167,6 +167,7 @@ pub enum ProtocolError {
 	NotOrderable(TypeId),
 	NotInspectable(TypeId),
 	NotDisplayable(TypeId),
+	NotImplemented(TypeId, Sym),
 }
 
 #[derive(Debug)]
@@ -231,6 +232,11 @@ impl ProtocolError {
 			Self::NotDisplayable(id) => {
 				format!("type {} is not displayable", rt.type_name(syms, *id))
 			}
+			Self::NotImplemented(id, member) => format!(
+				"type {} does not implement '{}'",
+				rt.type_name(syms, *id),
+				syms.resolve(*member)
+			),
 		}
 	}
 }

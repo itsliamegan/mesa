@@ -25,3 +25,8 @@ end
 proto Append
 	def append(item) end
 end
+
+proto Access
+	def access(key) end
+	extern def store(key, item) end
+end

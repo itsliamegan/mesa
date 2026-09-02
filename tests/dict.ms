@@ -9,10 +9,16 @@ $print(dict["name"])
 #> 2
 $print(dict.size)
 
+#> Alice
+$print(dict.access("name"))
+dict.store("status", "active")
+#> active
+$print(dict.access("status"))
+
 dict["note"] := nil
 #> nil
 $print(dict["note"])
-#> 3
+#> 4
 $print(dict.size)
 
 #> 105
