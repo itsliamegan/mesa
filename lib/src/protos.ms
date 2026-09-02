@@ -1,5 +1,15 @@
 module Core.Protos
 
+proto Inspect
+	extern def inspect end
+end
+
+proto Display
+	impl Inspect
+
+	def display end
+end
+
 proto Order
 	def order(other) end
 

@@ -24,6 +24,15 @@ list << 2 << 3
 #> [1, 2, 3]
 $print(list)
 
+list := []
+list << list
+#> [...]
+$print(list)
+
+item := []
+#> [[], []]
+$print([item, item])
+
 #---
 
 #! runtime error: index -1 is out of bounds

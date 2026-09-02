@@ -6,7 +6,7 @@ use rustc_hash::FxHashMap;
 use crate::intern::Sym;
 use crate::pkg::PackageId;
 use crate::rt::pkg::Packages;
-use crate::rt::types::{NativeMember, Static, TypeId};
+use crate::rt::types::{MethodImpl, Static, TypeId};
 use crate::rt::val::{Member, Method, Obj, Val};
 use crate::rt::{Error, Runtime};
 use crate::sem;
@@ -107,10 +107,10 @@ impl Place {
 					}
 					TypeId::Native(type_id) => {
 						let method = match rt.natives.get(type_id).statics.get(name).unwrap() {
-							NativeMember::Native(method) => {
+							MethodImpl::Native(method) => {
 								Method::Native(Val::Obj(receiver.clone()), *name, *method)
 							}
-							NativeMember::User(proc) => {
+							MethodImpl::User(proc) => {
 								Method::User(Val::Obj(receiver.clone()), proc.clone())
 							}
 						};
@@ -124,16 +124,19 @@ impl Place {
 				};
 				if let Some(val) = instance.fields.get(name) {
 					Ok(val.clone())
-				} else if let Some(proc) = rt
+				} else if let Some(member) = rt
 					.pkgs
 					.get(instance.pkg)
 					.types
 					.method(instance.type_, *name)
 				{
-					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(Method::User(
-						Val::Obj(receiver.clone()),
-						proc,
-					))))))
+					let method = match member {
+						MethodImpl::Native(method) => {
+							Method::Native(Val::Obj(receiver.clone()), *name, method)
+						}
+						MethodImpl::User(proc) => Method::User(Val::Obj(receiver.clone()), proc),
+					};
+					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 				} else {
 					panic!();
 				}
@@ -142,11 +145,9 @@ impl Place {
 				let TypeId::Native(type_id) = receiver.type_id() else {
 					panic!();
 				};
-				let method = match rt.natives.get(type_id).members.get(name).unwrap() {
-					NativeMember::Native(method) => {
-						Method::Native(receiver.clone(), *name, *method)
-					}
-					NativeMember::User(proc) => Method::User(receiver.clone(), proc.clone()),
+				let method = match rt.natives.get(type_id).methods.get(name).unwrap() {
+					MethodImpl::Native(method) => Method::Native(receiver.clone(), *name, *method),
+					MethodImpl::User(proc) => Method::User(receiver.clone(), proc.clone()),
 				};
 				Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 			}

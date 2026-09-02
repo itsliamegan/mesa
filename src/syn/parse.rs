@@ -401,8 +401,11 @@ impl<'source> Parser<'source> {
 		let impls = self.parse_impl_line()?;
 		let mut items = Vec::new();
 		while self.cur.index() < self.chunk.tokens().len() && self.tag() != TokenTag::End {
-			let item_id = self.parse_proto_item()?;
-			items.push(item_id);
+			items.push(match self.tag() {
+				TokenTag::Extern => self.parse_derived_proto_item()?,
+				TokenTag::Def => self.parse_proto_item()?,
+				_ => return Err(self.unexpected()),
+			});
 		}
 		self.take(TokenTag::End)?;
 		let item = ModuleItem::Proto(Proto { name, impls, items });
@@ -410,7 +413,7 @@ impl<'source> Parser<'source> {
 		Ok(item_id)
 	}
 
-	fn parse_proto_item(&mut self) -> Result<DefId, Error> {
+	fn parse_proto_item(&mut self) -> Result<ProtoItem, Error> {
 		let tok = self.take(TokenTag::Def)?;
 		let name = self.take(TokenTag::Ident)?.1.sym.unwrap();
 		let params = self.parse_params()?;
@@ -420,7 +423,23 @@ impl<'source> Parser<'source> {
 			params,
 			body: block,
 		};
-		Ok(self.chunk.add_def(self.range_from(tok.0), def))
+		let def_id = self.chunk.add_def(self.range_from(tok.0), def);
+		Ok(ProtoItem::Declared(def_id))
+	}
+
+	// A derived member declaration. Like a native member declaration it takes
+	// no body block, and synthesizes an empty one so the member is an ordinary
+	// 'Def'; the variant is what keeps it apart from a required member.
+	fn parse_derived_proto_item(&mut self) -> Result<ProtoItem, Error> {
+		let tok = self.take(TokenTag::Extern)?;
+		self.take(TokenTag::Def)?;
+		let name = self.take(TokenTag::Ident)?.1.sym.unwrap();
+		let params = self.parse_params()?;
+		self.take(TokenTag::End)?;
+		let body = self.chunk.add_block(Block { exprs: Vec::new() });
+		let def = Def { name, params, body };
+		let def_id = self.chunk.add_def(self.range_from(tok.0), def);
+		Ok(ProtoItem::Derived(def_id))
 	}
 
 	fn parse_def_decl(&mut self) -> Result<ModuleItemId, Error> {

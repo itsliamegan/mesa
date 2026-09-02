@@ -6,12 +6,13 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::{Package, PackageId};
-use crate::rt::Error;
+use crate::rt::eval::{Interpreter, Raise};
 use crate::rt::pkg::Packages;
+use crate::rt::render;
 use crate::rt::scope::Scopes;
 use crate::rt::val::{Bool, Char, Dict, List, Nil, Num, Obj, Proc, Str, Val};
-use crate::sem::protos::ProtoId;
-use crate::sem::types::{self, MemberSite};
+use crate::sem::protos::{Behaviors, ProtoId};
+use crate::sem::types::{self, MethodSite};
 use crate::syn::ChunkId;
 use crate::syn::nodes::DefId;
 
@@ -31,7 +32,7 @@ pub struct UserType {
 	pub val: Rc<RefCell<Obj>>,
 	// Every member reachable on an instance, method precedence already
 	// accounted for by the descriptor's method table.
-	methods: FxHashMap<Sym, Rc<RefCell<Proc>>>,
+	methods: FxHashMap<Sym, MethodImpl>,
 	statics: FxHashMap<Sym, Static>,
 }
 
@@ -49,8 +50,9 @@ pub struct NativeParam {
 	pub default: Option<fn() -> Val>,
 }
 
+// What a member dispatches to: a Rust function, or a proc written in mesa.
 #[derive(Debug, Clone)]
-pub enum NativeMember {
+pub enum MethodImpl {
 	Native(NativeMethod),
 	User(Rc<RefCell<Proc>>),
 }
@@ -58,7 +60,7 @@ pub enum NativeMember {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMethod {
 	pub params: &'static [NativeParam],
-	pub call: fn(&Val, Vec<Val>) -> Result<Val, Error>,
+	pub call: fn(&mut Interpreter, &Val, Vec<Val>) -> Result<Val, Raise>,
 }
 
 impl NativeMethod {
@@ -75,8 +77,8 @@ impl NativeMethod {
 pub struct NativeTypeSpec {
 	pub name: &'static str,
 	pub new: Option<fn() -> Val>,
-	pub members: &'static [NativeMemberSpec],
-	pub statics: &'static [NativeMemberSpec],
+	pub methods: &'static [NativeMethodSpec],
+	pub statics: &'static [NativeMethodSpec],
 }
 
 #[derive(Debug)]
@@ -85,15 +87,15 @@ pub struct NativeType {
 	pub new: Option<fn() -> Val>,
 	// The type's canonical value.
 	pub val: Rc<RefCell<Obj>>,
-	pub members: FxHashMap<Sym, NativeMember>,
-	pub statics: FxHashMap<Sym, NativeMember>,
+	pub methods: FxHashMap<Sym, MethodImpl>,
+	pub statics: FxHashMap<Sym, MethodImpl>,
 	// Protocols this type conforms to, per its 'extern' declaration.
 	pub impls: Vec<(PackageId, ProtoId)>,
 }
 
 impl NativeType {
-	pub(crate) fn has_member(&self, name: Sym) -> bool {
-		self.members.contains_key(&name)
+	pub(crate) fn has_method(&self, name: Sym) -> bool {
+		self.methods.contains_key(&name)
 	}
 
 	pub(crate) fn has_static(&self, name: Sym) -> bool {
@@ -102,10 +104,10 @@ impl NativeType {
 }
 
 // An entry of a native type's member or static table, as written in Rust.
-type NativeMemberSpec = (
+type NativeMethodSpec = (
 	&'static str,
 	&'static [NativeParam],
-	fn(&Val, Vec<Val>) -> Result<Val, Error>,
+	fn(&mut Interpreter, &Val, Vec<Val>) -> Result<Val, Raise>,
 );
 
 // Every core type, in id order. Each claims its reserved id.
@@ -113,13 +115,13 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Nil",
 		new: Some(Nil::new),
-		members: &[],
+		methods: &[],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Num",
 		new: Some(Num::new),
-		members: &[(
+		methods: &[(
 			"order",
 			&[NativeParam {
 				name: "other",
@@ -132,13 +134,13 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Bool",
 		new: Some(Bool::new),
-		members: &[],
+		methods: &[],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Char",
 		new: None,
-		members: &[(
+		methods: &[(
 			"order",
 			&[NativeParam {
 				name: "other",
@@ -151,7 +153,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Str",
 		new: Some(Str::new),
-		members: &[
+		methods: &[
 			("size", &[], Str::size),
 			("chars", &[], Str::chars),
 			(
@@ -168,37 +170,37 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "List",
 		new: Some(List::new),
-		members: &[("size", &[], List::size)],
+		methods: &[("size", &[], List::size)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Dict",
 		new: Some(Dict::new),
-		members: &[("size", &[], Dict::size)],
+		methods: &[("size", &[], Dict::size)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Proc",
 		new: None,
-		members: &[],
+		methods: &[],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Type",
 		new: None,
-		members: &[],
+		methods: &[],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Proto",
 		new: None,
-		members: &[],
+		methods: &[],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Module",
 		new: None,
-		members: &[],
+		methods: &[],
 		statics: &[],
 	},
 ];
@@ -234,6 +236,21 @@ mod core_types_tests {
 	}
 }
 
+const INSPECT: NativeMethod = NativeMethod {
+	params: &[],
+	call: render::inspect_member,
+};
+
+// The implementation of a method the language derives. A name the semantic
+// layer records as derived and no behavior here names is a broken build.
+fn derived_method(behaviors: &Behaviors, name: Sym) -> MethodImpl {
+	if name == behaviors.inspect.method {
+		MethodImpl::Native(INSPECT)
+	} else {
+		panic!()
+	}
+}
+
 // Every native type in the program. There is exactly one per runtime; native
 // type identity is global, so every package reads the same table.
 pub struct Natives {
@@ -261,15 +278,15 @@ impl Natives {
 				name,
 				new: spec.new,
 				val: Rc::new(RefCell::new(Obj::Type(TypeId::Native(id)))),
-				members: build_native_members(syms, spec.members),
-				statics: build_native_members(syms, spec.statics),
+				methods: build_native_methods(syms, spec.methods),
+				statics: build_native_methods(syms, spec.statics),
 				impls: Vec::new(),
 			});
 			shapes.insert(
 				name,
 				types::NativeTypeShape {
 					provider: id,
-					members: build_native_params(syms, spec.members),
+					methods: build_native_params(syms, spec.methods),
 					statics: build_native_params(syms, spec.statics),
 				},
 			);
@@ -292,9 +309,9 @@ impl Natives {
 
 fn build_native_params(
 	syms: &mut Interner,
-	specs: &[NativeMemberSpec],
+	specs: &[NativeMethodSpec],
 ) -> HashMap<Sym, Vec<types::NativeParam>> {
-	let mut members = HashMap::with_capacity(specs.len());
+	let mut methods = HashMap::with_capacity(specs.len());
 	for (name, params, _) in specs {
 		let params = params
 			.iter()
@@ -303,26 +320,26 @@ fn build_native_params(
 				has_default: param.default.is_some(),
 			})
 			.collect();
-		members.insert(syms.intern(name), params);
+		methods.insert(syms.intern(name), params);
 	}
-	members
+	methods
 }
 
-fn build_native_members(
+fn build_native_methods(
 	syms: &mut Interner,
-	specs: &[NativeMemberSpec],
-) -> FxHashMap<Sym, NativeMember> {
-	let mut members = HashMap::with_capacity_and_hasher(specs.len(), FxBuildHasher);
+	specs: &[NativeMethodSpec],
+) -> FxHashMap<Sym, MethodImpl> {
+	let mut methods = HashMap::with_capacity_and_hasher(specs.len(), FxBuildHasher);
 	for (name, params, call) in specs {
-		members.insert(
+		methods.insert(
 			syms.intern(name),
-			NativeMember::Native(NativeMethod {
+			MethodImpl::Native(NativeMethod {
 				params,
 				call: *call,
 			}),
 		);
 	}
-	members
+	methods
 }
 
 // The runtime image of one package's user types. Native types are not here:
@@ -344,6 +361,7 @@ impl<'descs> Types<'descs> {
 		pkg_id: PackageId,
 		pkg: &'descs Package,
 		scopes: &Scopes,
+		behaviors: &Behaviors,
 	) -> Self {
 		let descs = pkg.types();
 		let mut user = Vec::with_capacity(descs.ids().len());
@@ -353,8 +371,16 @@ impl<'descs> Types<'descs> {
 				continue;
 			};
 			let mut methods = FxHashMap::default();
-			for (name, site) in &desc.members {
-				methods.insert(*name, build_member_proc(pkgs, pkg_id, pkg, scopes, *site));
+			for (name, site) in &desc.methods {
+				let method = match site {
+					MethodSite::Declared(..) | MethodSite::Provided(..) => {
+						MethodImpl::User(build_method_proc(pkgs, pkg_id, pkg, scopes, *site))
+					}
+					// A user type declares no native members.
+					MethodSite::Native => panic!(),
+					MethodSite::Derived => derived_method(behaviors, *name),
+				};
+				methods.insert(*name, method);
 			}
 			let mut statics = FxHashMap::default();
 			for (name, static_) in &desc.statics {
@@ -381,7 +407,7 @@ impl<'descs> Types<'descs> {
 		self.user[id.index()].as_ref().unwrap()
 	}
 
-	pub fn method(&self, id: types::TypeId, name: Sym) -> Option<Rc<RefCell<Proc>>> {
+	pub fn method(&self, id: types::TypeId, name: Sym) -> Option<MethodImpl> {
 		self.user(id).methods.get(&name).cloned()
 	}
 
@@ -408,22 +434,24 @@ pub fn add_extern_members<'descs>(
 	pkg_id: PackageId,
 	pkg: &'descs Package,
 	scopes: &Scopes,
+	behaviors: &Behaviors,
 ) {
 	for id in pkg.types().ids() {
 		let types::Type::Native(desc) = pkg.types().get_type(id) else {
 			continue;
 		};
 
-		let mut members = FxHashMap::default();
-		for (name, site) in &desc.members {
-			let proc = match site {
-				types::MemberSite::Declared(..) | types::MemberSite::Provided(..) => {
-					build_member_proc(pkgs, pkg_id, pkg, scopes, *site)
+		let mut methods = FxHashMap::default();
+		for (name, site) in &desc.methods {
+			let method = match site {
+				types::MethodSite::Declared(..) | types::MethodSite::Provided(..) => {
+					MethodImpl::User(build_method_proc(pkgs, pkg_id, pkg, scopes, *site))
 				}
 				// Already in the native type's map.
-				types::MemberSite::Native => continue,
+				types::MethodSite::Native => continue,
+				types::MethodSite::Derived => derived_method(behaviors, *name),
 			};
-			members.insert(*name, NativeMember::User(proc));
+			methods.insert(*name, method);
 		}
 
 		let mut statics = FxHashMap::default();
@@ -436,11 +464,11 @@ pub fn add_extern_members<'descs>(
 					build_static_proc(pkg_id, pkg, scopes, *chunk_id, *def_id)
 				}
 			};
-			statics.insert(*name, NativeMember::User(proc));
+			statics.insert(*name, MethodImpl::User(proc));
 		}
 
 		let native = natives.get_mut(desc.provider);
-		native.members.extend(members);
+		native.methods.extend(methods);
 		native.statics.extend(statics);
 		native.impls.extend(desc.impls.iter().copied());
 	}
@@ -449,17 +477,17 @@ pub fn add_extern_members<'descs>(
 // Build the proc a member resolves to. A member declared by the type reads
 // off its own chunk; one acquired from a protocol reads off the protocol's,
 // in whichever chunk and package that protocol was written.
-fn build_member_proc<'descs>(
+fn build_method_proc<'descs>(
 	pkgs: &Packages<'descs>,
 	pkg_id: PackageId,
 	pkg: &'descs Package,
 	scopes: &Scopes,
-	site: MemberSite,
+	site: MethodSite,
 ) -> Rc<RefCell<Proc>> {
 	let (site_pkg, chunk_id, def_id) = match site {
-		MemberSite::Declared(chunk_id, def_id) => (pkg_id, chunk_id, def_id),
-		MemberSite::Provided(site_pkg, chunk_id, def_id) => (site_pkg, chunk_id, def_id),
-		MemberSite::Native => panic!(),
+		MethodSite::Declared(chunk_id, def_id) => (pkg_id, chunk_id, def_id),
+		MethodSite::Provided(site_pkg, chunk_id, def_id) => (site_pkg, chunk_id, def_id),
+		MethodSite::Native | MethodSite::Derived => panic!(),
 	};
 	// The protocol may belong to another package, whose arenas are the only
 	// place its body can be read from; the package being built is not in

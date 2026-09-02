@@ -210,6 +210,62 @@ $print(Task(1) >= Task(5))
 
 #---
 
+import Core.Protos.Display
+
+type Task(priority)
+	impl Display
+
+	def inspect
+		return "inspected"
+	end
+
+	def display
+		return self.inspect
+	end
+end
+
+#> inspected
+$print(Task(1).inspect)
+#> inspected
+$print(Task(1).display)
+
+#---
+
+import Core.Protos.Display
+
+type Task(priority)
+	impl Display
+
+	def display
+		return self.inspect
+	end
+end
+
+#> Task(priority: 1)
+$print(Task(1).inspect)
+#> Task(priority: 1)
+$print(Task(1).display)
+
+#---
+
+#! semantic error: 'inspect' on type 'Task' does not match the signature declared by protocol 'Inspect'
+
+import Core.Protos.Display
+
+type Task(priority)
+	impl Display
+
+	def inspect(other)
+		return "inspected"
+	end
+
+	def display
+		return "task"
+	end
+end
+
+#---
+
 proto Equal
 	def equal(other) end
 
@@ -339,7 +395,7 @@ end
 
 #---
 
-#! semantic error: protocol 'Mixin' provides members but requires none
+#! semantic error: protocol 'Mixin' provides methods but requires none
 
 proto Mixin
 	def helper
@@ -433,7 +489,7 @@ end
 
 #---
 
-#! semantic error: member 'label' provided by protocol 'Order' collides with a member of type 'Task'
+#! semantic error: method 'label' provided by protocol 'Order' collides with a member of type 'Task'
 
 proto Order
 	def compare(other) end

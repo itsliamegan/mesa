@@ -4,15 +4,15 @@ type Task(name, priority)
 	end
 end
 
-#> Task("laundry", 2)
+#> Task(name: "laundry", priority: 2)
 $print(Task("laundry", 2))
 #> laundry
 $print(Task("laundry", 2).name)
-#> Task("laundry", 2)
+#> Task(name: "laundry", priority: 2)
 $print(Task("laundry", 2).copy)
 
 copy := &Task("laundry", 2).copy
-#> Task("laundry", 2)
+#> Task(name: "laundry", priority: 2)
 $print(copy())
 
 type Amount(cents)
@@ -29,9 +29,9 @@ type Amount(cents)
 	end
 end
 
-#> Amount(500)
+#> Amount(cents: 500)
 $print(Amount.of_dollars(5))
-#> Amount(0)
+#> Amount(cents: 0)
 $print(Amount.zero)
 #> 0
 $print(Amount.zero.display)
@@ -42,6 +42,8 @@ type Rect(w, h)
 end
 
 r := Rect(4, 6)
+#> Rect(w: 4, h: 6)
+$print(r)
 #> 24
 $print(r.area)
 #> 12
@@ -87,10 +89,21 @@ tag := Group.Task.Tag("x")
 #> x
 $print(tag.label)
 
-#> LinkedList.Node(0, nil)
+#> LinkedList.Node(data: 0, next: nil)
 $print(LinkedList.Node(0, nil))
-#> Group.Task.Tag("x")
+#> Group.Task.Tag(label: "x")
 $print(tag)
+
+#---
+
+#! runtime error: key Stack(top: 3, items: [1, 2], count: 0) not found
+
+type Stack(top)
+	items := [1, 2]
+	count := 0
+end
+
+{}[Stack(3)]
 
 #---
 
@@ -270,3 +283,22 @@ end
 
 $print(Task().priority)
 $print(Task.priority)
+
+#---
+
+#> Task(name: "laundry", priority: 2)
+#> Group(items: [1, 2])
+#> a group
+
+type Task(name, priority)
+end
+
+type Group(items)
+	def inspect
+		"a group"
+	end
+end
+
+$print(Task("laundry", 2).inspect)
+$print(Group([1, 2]))
+$print(Group([1, 2]).inspect)

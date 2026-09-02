@@ -5,7 +5,7 @@ use ordermap::OrderMap;
 use crate::intern::{Interner, Sym};
 use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::ModuleId;
-use crate::sem::protos::{self, ProtoId};
+use crate::sem::protos::{self, Behaviors, ProtoId};
 use crate::sem::{Error, check_params};
 use crate::src::{Sources, Span};
 use crate::syn::nodes::{Def, DefId, Expr, ExprId, Lit, ModuleItem, ModuleItemId, Param, TypeItem};
@@ -59,10 +59,10 @@ impl Type {
 		}
 	}
 
-	pub fn members(&self) -> &HashMap<Sym, MemberSite> {
+	pub fn methods(&self) -> &HashMap<Sym, MethodSite> {
 		match self {
-			Type::User(type_) => &type_.members,
-			Type::Native(type_) => &type_.members,
+			Type::User(type_) => &type_.methods,
+			Type::Native(type_) => &type_.methods,
 		}
 	}
 
@@ -91,7 +91,7 @@ pub struct UserType {
 	// Every member reachable on an instance, flattened. Includes what this type
 	// declares, what it inherits as a case variant, and what it acquires from
 	// the protocols it implements.
-	pub members: HashMap<Sym, MemberSite>,
+	pub methods: HashMap<Sym, MethodSite>,
 	pub statics: HashMap<Sym, Static>,
 	pub impls: Vec<(PackageId, ProtoId)>,
 	// Type this type was declared in; None at the module level.
@@ -112,11 +112,11 @@ pub struct NativeType {
 	pub provider: NativeTypeId,
 	// What Rust provides. Kept apart from the merged sets below because
 	// conformance is decided by comparing against it.
-	pub native_members: HashMap<Sym, Vec<NativeParam>>,
+	pub native_methods: HashMap<Sym, Vec<NativeParam>>,
 	pub native_statics: HashMap<Sym, Vec<NativeParam>>,
 	// Every member reachable on a value of this type, flattened: Rust's, the
 	// declaration's, and what it acquires from the protocols it implements.
-	pub members: HashMap<Sym, MemberSite>,
+	pub methods: HashMap<Sym, MethodSite>,
 	pub statics: HashMap<Sym, Static>,
 	pub impls: Vec<(PackageId, ProtoId)>,
 }
@@ -136,7 +136,7 @@ pub struct NativeParam {
 // for conformance.
 pub struct NativeTypeShape {
 	pub provider: NativeTypeId,
-	pub members: HashMap<Sym, Vec<NativeParam>>,
+	pub methods: HashMap<Sym, Vec<NativeParam>>,
 	pub statics: HashMap<Sym, Vec<NativeParam>>,
 }
 
@@ -149,18 +149,18 @@ pub struct Field {
 
 // The declaration implementing a member. Includes a reference to the
 // implementer's chunk, which may differ for e.g. an acquired protocol method.
-// Differentiates between a declared method and a provided method because a
-// provided method lives in a different arena.
 #[derive(Debug, Clone, Copy)]
-pub enum MemberSite {
-	// A type only ever declares a member in its own file, so a declared site
-	// needs no package; a provided one is read from the protocol's.
+pub enum MethodSite {
+	// A member declared explicitly by an implementing type.
 	Declared(ChunkId, DefId),
+	// A member provided by a protocol declaration, possibly in another package.
 	Provided(PackageId, ChunkId, DefId),
 	// An 'extern type' member implemented in Rust. It has no chunk or item to
-	// point at: the implementation is in the native type's member map, and the
-	// declaration only names it.
+	// point at; the declaration names the implementation in the native type's
+	// member map.
 	Native,
+	// A member no declaration names and no protocol body provides.
+	Derived,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -179,8 +179,8 @@ pub enum Static {
 // method overrides a member the variant acquires from a protocol it implements.
 #[derive(Debug)]
 struct Inherited {
-	declared: HashMap<Sym, MemberSite>,
-	acquired: HashMap<Sym, MemberSite>,
+	declared: HashMap<Sym, MethodSite>,
+	acquired: HashMap<Sym, MethodSite>,
 }
 
 impl Types {
@@ -211,7 +211,7 @@ impl Types {
 // conformance as it goes. Unresolved names and conformance failures are
 // reported here rather than assumed impossible.
 pub fn check(
-	syms: &Interner,
+	syms: &mut Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	natives: &HashMap<Sym, NativeTypeShape>,
@@ -255,7 +255,7 @@ pub fn check(
 // member resolution to a single table lookup. Resolve the type's 'impl' names
 // and decide conformance against each.
 fn describe_type(
-	syms: &Interner,
+	syms: &mut Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	types: &mut Types,
@@ -279,7 +279,7 @@ fn describe_type(
 		span,
 		ctor_fields: type_.params.to_vec(),
 		body_fields: OrderMap::new(),
-		members: HashMap::new(),
+		methods: HashMap::new(),
 		statics: HashMap::new(),
 		impls: Vec::new(),
 		enclosing,
@@ -306,8 +306,8 @@ fn describe_type(
 		let (name, duplicate) = match chunk.get_type_item(*item_id) {
 			// Ignore cases and inner types here because they are described below.
 			//
-			// A variant's members *must* be resolved after their parent's
-			// members because they inherit some members from their parent.
+			// A variant's methods *must* be resolved after their parent's
+			// methods because they inherit some of them from their parent.
 			//
 			// An inner type inherits nothing but describing here would
 			// interleave unrelated work.
@@ -331,7 +331,7 @@ fn describe_type(
 			}
 			TypeItem::Method(syn::nodes::Method::Instance(def_id)) => {
 				let name = chunk.get_def(*def_id).name;
-				declared.insert(name, MemberSite::Declared(chunk_id, *def_id));
+				declared.insert(name, MethodSite::Declared(chunk_id, *def_id));
 				(name, !instance_names.insert(name))
 			}
 			TypeItem::Method(syn::nodes::Method::Static(def_id)) => {
@@ -361,7 +361,7 @@ fn describe_type(
 		errs,
 	);
 	let impls = protos::expand_impls(pkgs, pkg_id, pkg.protos(), &direct);
-	let acquired = acquire_members(
+	let acquired = acquire_methods(
 		syms,
 		pkgs,
 		pkg_id,
@@ -385,17 +385,20 @@ fn describe_type(
 	//
 	// The four merges below account for these, but they also do redundant work:
 	// declared overriddes the acquisitions even though that is already
-	// accounted for by acquire_members. They stay as-is so that 'members' reads
+	// accounted for by acquire_methods. They stay as-is so that 'methods' reads
 	// clearly as "these four tiers, most specific wins".
-	let mut members = HashMap::new();
+	// Every type has the built-in behaviors that are automatic rather than
+	// opted into, below all four tiers.
+	let mut methods = HashMap::new();
+	methods.insert(syms.intern(Behaviors::INSPECT.1), MethodSite::Derived);
 	if let Some(inherited) = inherited {
-		members.extend(&inherited.acquired);
+		methods.extend(&inherited.acquired);
 	}
-	members.extend(&acquired);
+	methods.extend(&acquired);
 	if let Some(inherited) = inherited {
-		members.extend(&inherited.declared);
+		methods.extend(&inherited.declared);
 	}
-	members.extend(&declared);
+	methods.extend(&declared);
 
 	let own = Inherited {
 		declared: declared.clone(),
@@ -451,7 +454,7 @@ fn describe_type(
 		panic!()
 	};
 	described.body_fields = body_fields;
-	described.members = members;
+	described.methods = methods;
 	described.statics = statics;
 	described.impls = impls;
 	described.variants = match is_case {
@@ -467,7 +470,7 @@ fn describe_type(
 // returns 'None' when the declaration names no registered implementation,
 // leaving nothing to describe.
 fn describe_extern(
-	syms: &Interner,
+	syms: &mut Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	types: &mut Types,
@@ -522,7 +525,7 @@ fn describe_extern(
 			syn::nodes::ExternItem::User(syn::nodes::Method::Instance(def_id)) => {
 				let name = chunk.get_def(*def_id).name;
 				let claimed = declared
-					.insert(name, MemberSite::Declared(chunk_id, *def_id))
+					.insert(name, MethodSite::Declared(chunk_id, *def_id))
 					.is_some();
 				(name, claimed)
 			}
@@ -539,13 +542,13 @@ fn describe_extern(
 				check_native_signature(
 					syms,
 					pkg.sources(),
-					&native.members,
+					&native.methods,
 					extern_.name,
 					def,
 					item_span,
 					errs,
 				);
-				let claimed = declared.insert(def.name, MemberSite::Native).is_some();
+				let claimed = declared.insert(def.name, MethodSite::Native).is_some();
 				(def.name, claimed)
 			}
 			syn::nodes::ExternItem::Native(syn::nodes::Method::Static(def_id)) => {
@@ -578,8 +581,8 @@ fn describe_extern(
 	// declaration for whether it exists; an implementation the body does not
 	// name is reachable from no mesa source. Reported at the type, which is
 	// the only span there is — the registration has none.
-	for name in native.members.keys() {
-		if let Some(MemberSite::Native) = declared.get(name) {
+	for name in native.methods.keys() {
+		if let Some(MethodSite::Native) = declared.get(name) {
 			continue;
 		}
 		if collided.contains(name) {
@@ -605,22 +608,24 @@ fn describe_extern(
 		));
 	}
 
-	let acquired = acquire_members(
+	let acquired = acquire_methods(
 		syms,
 		pkgs,
 		pkg_id,
 		extern_.name,
 		span,
 		&declared,
-		&native.members,
+		&native.methods,
 		None,
 		&static_spans,
 		&impls,
 		errs,
 	);
 
-	let mut members = acquired;
-	members.extend(&declared);
+	let mut methods = HashMap::new();
+	methods.insert(syms.intern(Behaviors::INSPECT.1), MethodSite::Derived);
+	methods.extend(&acquired);
+	methods.extend(&declared);
 
 	let id = TypeId(types.types.len() as u32);
 	types.types.push(Type::Native(NativeType {
@@ -628,9 +633,9 @@ fn describe_extern(
 		chunk: chunk_id,
 		span,
 		provider: native.provider,
-		native_members: native.members.clone(),
+		native_methods: native.methods.clone(),
 		native_statics: native.statics.clone(),
-		members,
+		methods,
 		statics,
 		impls,
 	}));
@@ -687,44 +692,46 @@ fn check_structure(
 }
 
 // Determine every member that a type acquires from the protocols it implements,
-// deciding conformance against each protocol's members as it goes. Flattened to
+// deciding conformance against each protocol's methods as it goes. Flattened to
 // just the *actual* protocol provisions, because every conformance error is a
 // statement about what the flattening would otherwise produce.
-fn acquire_members(
+fn acquire_methods(
 	syms: &Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	type_name: Sym,
 	type_span: Span,
-	declared: &HashMap<Sym, MemberSite>,
-	native_members: &HashMap<Sym, Vec<NativeParam>>,
+	declared: &HashMap<Sym, MethodSite>,
+	native_methods: &HashMap<Sym, Vec<NativeParam>>,
 	inherited: Option<&Inherited>,
 	static_spans: &HashMap<Sym, Span>,
 	impls: &[(PackageId, ProtoId)],
 	errs: &mut Vec<Error>,
-) -> HashMap<Sym, MemberSite> {
+) -> HashMap<Sym, MethodSite> {
 	let pkg = pkgs.get(pkg_id);
-	let mut acquired: HashMap<Sym, MemberSite> = HashMap::new();
+	let mut acquired: HashMap<Sym, MethodSite> = HashMap::new();
 	// The protocol each acquired member came from, kept so the next provider
 	// of the same name can ask whether it is related to this one.
 	let mut from: HashMap<Sym, (PackageId, ProtoId)> = HashMap::new();
 	for (proto_pkg, proto_id) in impls {
-		// The protocol may belong to another package, whose arenas are the only
-		// place its declaration and body can be read from.
 		let proto = pkgs.get(*proto_pkg).protos().get_proto(*proto_id);
 		let proto_chunk = pkgs.get(*proto_pkg).chunks().get(proto.chunk);
-		// Which map a member came from already answers whether it is provided,
-		// so nothing here re-asks the body the way a lookup against
-		// 'Proto.members' used to.
+		// Which map a member came from already answers where its implementation
+		// would come from. A required member has no site of its own; the type
+		// must supply one.
 		let required = proto
 			.required
 			.iter()
-			.map(|(member, item)| (member, item, false));
-		let provided = proto
-			.provided
+			.map(|(member, item)| (member, item, None));
+		let provided = proto.provided.iter().map(|(member, item)| {
+			let site = MethodSite::Provided(*proto_pkg, proto.chunk, *item);
+			(member, item, Some(site))
+		});
+		let derived = proto
+			.derived
 			.iter()
-			.map(|(member, item)| (member, item, true));
-		for (member, item_id, provided) in required.chain(provided) {
+			.map(|(member, item)| (member, item, Some(MethodSite::Derived)));
+		for (member, item_id, site) in required.chain(provided).chain(derived) {
 			let def = proto_chunk.get_def(*item_id);
 
 			// A required member is satisfied, or a provided one overridden, by
@@ -741,7 +748,7 @@ fn acquire_members(
 				None
 			};
 			match own {
-				Some(MemberSite::Declared(site_chunk, site_def)) => {
+				Some(MethodSite::Declared(site_chunk, site_def)) => {
 					let site_chunk = pkg.chunks().get(*site_chunk);
 					let method_def = site_chunk.get_def(*site_def);
 					if !signatures_agree(proto_chunk, site_chunk, &def.params, &method_def.params) {
@@ -754,9 +761,9 @@ fn acquire_members(
 					}
 					continue;
 				}
-				Some(MemberSite::Provided(..)) => panic!(),
-				Some(MemberSite::Native) => {
-					let params = &native_members[member];
+				Some(MethodSite::Provided(..)) => panic!(),
+				Some(MethodSite::Native) => {
+					let params = &native_methods[member];
 					if !native_signature_agrees(&def.params, params) {
 						errs.push(Error::SignatureMismatch(
 							pkg.sources().loc(type_span),
@@ -767,21 +774,24 @@ fn acquire_members(
 					}
 					continue;
 				}
+				// The implementation is provided by the language, and thus
+				// always has the correct signature.
+				Some(MethodSite::Derived) => continue,
 				None => {}
 			}
 
-			if !provided {
-				errs.push(Error::MissingMember(
+			let Some(site) = site else {
+				errs.push(Error::MissingMethod(
 					pkg.sources().loc(type_span),
 					syms.resolve(type_name).to_string(),
 					syms.resolve(proto.name).to_string(),
 					syms.resolve(*member).to_string(),
 				));
 				continue;
-			}
+			};
 
 			if let Some(static_span) = static_spans.get(member) {
-				errs.push(Error::MemberCollision(
+				errs.push(Error::MethodCollision(
 					pkg.sources().loc(*static_span),
 					syms.resolve(type_name).to_string(),
 					syms.resolve(proto.name).to_string(),
@@ -809,10 +819,7 @@ fn acquire_members(
 				}
 			}
 
-			acquired.insert(
-				*member,
-				MemberSite::Provided(*proto_pkg, proto.chunk, *item_id),
-			);
+			acquired.insert(*member, site);
 		}
 	}
 	acquired

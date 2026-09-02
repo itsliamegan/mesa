@@ -1,4 +1,5 @@
 use crate::pkg::{self, PackageId};
+use crate::sem::protos::Behaviors;
 
 use super::eval::Prelude;
 use super::modules::Modules;
@@ -15,12 +16,13 @@ impl<'descs> Package<'descs> {
 		prelude: &Prelude,
 		pkgs: &Packages<'descs>,
 		natives: &mut Natives,
+		behaviors: &Behaviors,
 		desc: &'descs pkg::Package,
 		id: PackageId,
 	) -> Self {
 		let scopes = Scopes::new(prelude.scope.clone(), desc.modules());
-		let types = Types::new(pkgs, id, desc, &scopes);
-		add_extern_members(pkgs, natives, id, desc, &scopes);
+		let types = Types::new(pkgs, id, desc, &scopes, behaviors);
+		add_extern_members(pkgs, natives, id, desc, &scopes, behaviors);
 		let modules = Modules::new(id, desc.modules(), scopes);
 
 		Self { types, modules }

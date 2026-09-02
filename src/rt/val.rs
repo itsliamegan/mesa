@@ -8,12 +8,13 @@ use rustc_hash::FxHashMap;
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
+use crate::rt::Runtime;
+use crate::rt::eval::{Interpreter, Raise};
 use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMethod, NativeTypeId, TypeId};
-use crate::rt::{Error, Runtime};
 use crate::sem::modules::ModuleId;
 use crate::sem::protos::ProtoId;
-use crate::sem::types::{self, Type};
+use crate::sem::types;
 use crate::syn::ChunkId;
 use crate::syn::nodes::{BlockId, Param};
 
@@ -25,7 +26,7 @@ impl Num {
 		Val::Num(Num(0.0))
 	}
 
-	pub fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
+	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Num(Num(this)) = val else { panic!() };
 		let Val::Num(Num(other)) = &args[0] else {
 			panic!()
@@ -47,7 +48,7 @@ impl Bool {
 pub struct Char(pub char);
 
 impl Char {
-	pub fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
+	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Char(Char(this)) = val else { panic!() };
 		let Val::Char(Char(other)) = &args[0] else {
 			panic!()
@@ -70,7 +71,7 @@ impl Str {
 		}))
 	}
 
-	pub fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(str) = val else { panic!() };
 		let size = match str.size.get() {
 			Some(size) => size,
@@ -83,17 +84,17 @@ impl Str {
 		Ok(Val::Num(Num(size)))
 	}
 
-	pub fn empty(_val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	pub fn empty(_interp: &mut Interpreter, _val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		Ok(Str::new())
 	}
 
-	pub fn chars(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	pub fn chars(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(str) = val else { panic!() };
 		let items = str.text.chars().map(|c| Val::Char(Char(c))).collect();
 		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
 	}
 
-	pub fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
+	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(this) = val else { panic!() };
 		let Val::Str(other) = &args[0] else { panic!() };
 		let order = match this.text.cmp(&other.text) {
@@ -231,7 +232,7 @@ impl List {
 		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
 	}
 
-	pub fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Obj(obj) = val else { panic!() };
 		let Obj::List(list) = &*obj.borrow() else {
 			panic!()
@@ -252,7 +253,7 @@ impl Dict {
 		}))))
 	}
 
-	pub fn size(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Obj(obj) = val else { panic!() };
 		let Obj::Dict(dict) = &*obj.borrow() else {
 			panic!()
@@ -292,26 +293,6 @@ pub enum Method {
 	Native(Val, Sym, NativeMethod),
 }
 
-pub fn rt_print_proc(syms: &Interner, proc: &Proc) -> String {
-	let mut res = String::new();
-	let name = syms.resolve(proc.name);
-	res.push_str(&format!("def {}", name));
-	if !proc.params.is_empty() {
-		res.push('(');
-	}
-	for (i, param) in proc.params.iter().enumerate() {
-		let param = syms.resolve(param.name);
-		res.push_str(param);
-		if i + 1 != proc.params.len() {
-			res.push_str(", ");
-		}
-	}
-	if !proc.params.is_empty() {
-		res.push(')');
-	}
-	res
-}
-
 // Name the namespace a member lookup was made in. For a module, the name of the
 // module; otherwise, the name of the type.
 pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
@@ -322,115 +303,4 @@ pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 		return format!("module {}", pkg_modules.name(syms, *id));
 	}
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
-}
-
-pub fn rt_print_val(syms: &Interner, rt: &Runtime, val: &Val) -> String {
-	match val {
-		Val::Num(num) => format!("{}", num.0),
-		Val::Bool(bool) => format!("{}", bool.0),
-		Val::Char(char) => format!("{}", char.0),
-		Val::Str(str) => format!("{}", str.text),
-		Val::Obj(obj) => rt_print_obj(syms, rt, &obj.borrow()),
-		Val::Nil(_) => String::from("nil"),
-	}
-}
-
-pub fn rt_print_obj(syms: &Interner, rt: &Runtime, obj: &Obj) -> String {
-	match obj {
-		Obj::Module(pkg, id) => format!("module {}", rt.pkgs.get(*pkg).modules.name(syms, *id)),
-		Obj::List(list) => {
-			let mut res = String::new();
-			res.push('[');
-			for (i, item) in list.items.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, rt, item));
-				if i + 1 != list.items.len() {
-					res.push_str(", ");
-				}
-			}
-			res.push(']');
-			res
-		}
-		Obj::Dict(dict) => {
-			let mut res = String::new();
-			res.push('{');
-			for (i, (key, val)) in dict.pairs.iter().enumerate() {
-				res.push_str(&rt_debug_val(syms, rt, key));
-				res.push_str(": ");
-				res.push_str(&rt_debug_val(syms, rt, val));
-				if i + 1 != dict.pairs.len() {
-					res.push_str(", ");
-				}
-			}
-			res.push('}');
-			res
-		}
-		Obj::Proc(proc) => rt_print_proc(syms, proc),
-		Obj::Type(type_id) => match type_id {
-			TypeId::User(type_pkg, type_id) => {
-				let Type::User(desc) = rt.pkgs.get(*type_pkg).types.descs.get_type(*type_id) else {
-					panic!()
-				};
-				let name = rt.type_name(syms, TypeId::User(*type_pkg, *type_id));
-				let mut res = String::new();
-				res.push_str(&format!("type {}(", name));
-				for (i, field) in desc.ctor_fields.iter().enumerate() {
-					let field = syms.resolve(field.name);
-					res.push_str(field);
-					if i + 1 != desc.ctor_fields.len() {
-						res.push_str(", ");
-					}
-				}
-				res.push(')');
-				res
-			}
-			TypeId::Native(type_id) => {
-				let type_ = rt.natives.get(*type_id);
-				let name = syms.resolve(type_.name);
-				format!("type {}", name)
-			}
-		},
-		Obj::Proto(pkg, proto_id) => {
-			let proto = rt.pkgs.desc(*pkg).protos().get_proto(*proto_id);
-			format!("proto {}", syms.resolve(proto.name))
-		}
-		Obj::Instance(instance) => {
-			let Type::User(desc) = rt
-				.pkgs
-				.get(instance.pkg)
-				.types
-				.descs
-				.get_type(instance.type_)
-			else {
-				panic!()
-			};
-			let name = rt.type_name(syms, TypeId::User(instance.pkg, instance.type_));
-			let mut res = String::new();
-			res.push_str(&format!("{}(", name));
-			for (i, field) in desc.ctor_fields.iter().enumerate() {
-				let val = instance.fields.get(&field.name).unwrap();
-				res.push_str(&rt_debug_val(syms, rt, val));
-				if i + 1 != desc.ctor_fields.len() {
-					res.push_str(", ");
-				}
-			}
-			res.push(')');
-			res
-		}
-		Obj::Method(method) => match method {
-			Method::User(_, proc) => rt_print_proc(syms, &proc.borrow()),
-			Method::Native(_, name, _) => {
-				format!("def {}", syms.resolve(*name))
-			}
-		},
-		Obj::Native(id, _) => format!("<native {}>", syms.resolve(rt.natives.get(*id).name)),
-	}
-}
-
-pub fn rt_debug_val(syms: &Interner, rt: &Runtime, val: &Val) -> String {
-	match val {
-		Val::Char(char) => format!("'{}'", char.0),
-		Val::Str(str) => format!("\"{}\"", str.text),
-		Val::Obj(obj) => rt_print_obj(syms, rt, &obj.borrow()),
-		val => rt_print_val(syms, rt, val),
-	}
 }

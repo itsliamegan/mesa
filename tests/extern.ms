@@ -56,3 +56,16 @@ $print(Counter.at(5) >= Counter.at(3))
 import Core.Counter
 
 Counter()
+
+#---
+
+import Core.Counter
+
+#> <native Counter>
+$print(Counter.zero.inspect)
+#> 5
+$print((5).inspect)
+#> "laundry"
+$print("laundry".inspect)
+#> ['a', 'b']
+$print(['a', 'b'].inspect)

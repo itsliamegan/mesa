@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::rt::Error;
+use crate::rt::eval::{Interpreter, Raise};
 use crate::rt::types::{NativeParam, NativeTypeSpec, TypeId};
 use crate::rt::val::{NativeData, Num, Obj, Val};
 
@@ -9,7 +9,7 @@ use crate::rt::val::{NativeData, Num, Obj, Val};
 pub const TYPES: &[NativeTypeSpec] = &[NativeTypeSpec {
 	name: "Counter",
 	new: None,
-	members: &[
+	methods: &[
 		("count", &[], Counter::count),
 		("bump", &[], Counter::bump),
 		(
@@ -31,7 +31,7 @@ struct Counter {
 }
 
 impl Counter {
-	fn zero(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	fn zero(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		// The receiver of a static is the type value itself, so the id wanted
 		// here is the type it names, not the type it is.
 		let TypeId::Native(id) = val.namespace_type_id() else {
@@ -44,17 +44,17 @@ impl Counter {
 		)))))
 	}
 
-	fn order(val: &Val, args: Vec<Val>) -> Result<Val, Error> {
-		let Val::Num(Num(count)) = Counter::count(val, Vec::new())? else {
+	fn order(interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(Num(count)) = Counter::count(interp, val, Vec::new())? else {
 			panic!();
 		};
-		let Val::Num(Num(other)) = Counter::count(&args[0], Vec::new())? else {
+		let Val::Num(Num(other)) = Counter::count(interp, &args[0], Vec::new())? else {
 			panic!();
 		};
 		Ok(Val::Num(Num(count - other)))
 	}
 
-	fn count(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	fn count(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Obj(obj) = val else {
 			panic!();
 		};
@@ -68,7 +68,7 @@ impl Counter {
 			.count)))
 	}
 
-	fn bump(val: &Val, _args: Vec<Val>) -> Result<Val, Error> {
+	fn bump(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Obj(obj) = val else {
 			panic!();
 		};

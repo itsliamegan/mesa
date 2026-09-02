@@ -9,10 +9,11 @@ use mesa::intern::Interner;
 use mesa::load;
 use mesa::pkg::{PackageId, Packages};
 use mesa::rt::{
-	self, CORE_TYPES, NativeTypeSpec, Natives, Raised, build_errors, build_prelude, build_protos,
-	rt_debug_val,
+	self, CORE_TYPES, NativeTypeSpec, Natives, Raise, Raised, build_errors, build_prelude,
+	inspect_val,
 };
 use mesa::sem;
+use mesa::sem::protos::build_behaviors;
 use mesa::syn;
 
 // The native types the stdlib provides: Rust code linked into this binary, and
@@ -53,17 +54,17 @@ fn main() {
 			process::exit(1);
 		}
 	};
-	let protos = build_protos(&pkgs, &mut syms, stdlib_pkg_id);
+	let behaviors = build_behaviors(&mut syms, &pkgs, stdlib_pkg_id);
 	let errors = build_errors(&pkgs, &mut syms, stdlib_pkg_id);
-	let mut rt = rt::Runtime::new(&pkgs, natives, protos, errors);
+	let mut rt = rt::Runtime::new(&pkgs, natives, behaviors, errors);
 
 	match rt::eval(&mut syms, &mut rt, &prelude) {
 		Ok(()) => {}
-		Err((err, mut trace)) => {
+		Err(Raise(err, mut trace)) => {
 			{
 				let message = match &err {
 					Raised::Native(err) => err.message(&syms, &rt),
-					Raised::Val(val) => rt_debug_val(&syms, &rt, val),
+					Raised::Val(val) => inspect_val(&syms, &rt, val),
 				};
 				let mut frame = trace.first_mut().unwrap();
 				eprintln!("{}: runtime error: {}", frame.1, message);

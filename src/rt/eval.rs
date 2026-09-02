@@ -9,13 +9,14 @@ use crate::intern::{Interner, Sym};
 use crate::pkg::{self, PackageId};
 use crate::rt::modules::Modules;
 use crate::rt::scope::{Local, Place, Scope, Tier};
-use crate::rt::types::{NativeParam, Natives, TypeId, Types};
+use crate::rt::types::{NativeMethod, NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
-	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, rt_print_val,
+	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val,
 };
-use crate::rt::{ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError};
+use crate::rt::{
+	ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError, display_val,
+};
 use crate::sem::modules;
-use crate::sem::protos::ProtoId;
 use crate::sem::types::Type;
 use crate::src::{Location, Span};
 use crate::syn::nodes::{
@@ -64,54 +65,13 @@ pub fn build_prelude(
 	Ok(Prelude { scope })
 }
 
-// Identity of every protocol an operator arm dispatches through, resolved
-// once at boot.
-pub struct Protos {
-	pub order: Proto,
-}
-
-pub struct Proto {
-	pub id: (PackageId, ProtoId),
-	pub verb: Sym,
-}
-
-// Resolve the well-known protocols of 'Core.Protos' by name. A missing or
-// misnamed protocol is a broken build.
-pub fn build_protos(descs: &pkg::Packages, syms: &mut Interner, stdlib: PackageId) -> Protos {
-	let stdlib_pkg = descs.get(stdlib);
-	let path = [syms.intern("Core"), syms.intern("Protos")];
-	let Some(protos_mod) = stdlib_pkg.modules().by_path(&path) else {
-		panic!("stdlib does not declare a 'Core.Protos' module");
-	};
-	let chunk_id = stdlib_pkg.modules().chunk(protos_mod);
-	let chunk = stdlib_pkg.chunks().get(chunk_id);
-
-	let order_name = syms.intern("Order");
-	let mut order = None;
-	for item_id in &chunk.top {
-		if let ModuleItem::Proto(proto) = chunk.get_module_item(*item_id) {
-			if proto.name == order_name {
-				let proto_id = stdlib_pkg.protos().get_proto_by_item(chunk_id, *item_id);
-				order = Some(Proto {
-					id: (stdlib, proto_id),
-					verb: syms.intern("order"),
-				});
-			}
-		}
-	}
-	let Some(order) = order else {
-		panic!("stdlib does not declare a 'Core.Protos.Order' protocol");
-	};
-
-	Protos { order }
-}
-
 pub struct Interpreter<'syms, 'descs, 'rt> {
 	syms: &'syms mut Interner,
 	rt: &'rt Runtime<'descs>,
 	pkg_id: PackageId,
 	scope: Rc<RefCell<Scope>>,
 	receiver: Option<Val>,
+	call_span: Option<Span>,
 }
 
 pub enum Raised {
@@ -119,10 +79,18 @@ pub enum Raised {
 	Val(Val),
 }
 
+pub struct Raise(pub Raised, pub Vec<(String, Location)>);
+
 enum Signal {
 	Return(Val),
 	Break(Val),
-	Error(Raised, Vec<(String, Location)>),
+	Raise(Raise),
+}
+
+impl Signal {
+	fn raise(raised: Raised, trace: Vec<(String, Location)>) -> Self {
+		Self::Raise(Raise(raised, trace))
+	}
 }
 
 impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
@@ -137,6 +105,33 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			pkg_id,
 			scope,
 			receiver: None,
+			call_span: None,
+		}
+	}
+
+	#[allow(dead_code)]
+	pub(crate) fn syms(&self) -> &Interner {
+		self.syms
+	}
+
+	#[allow(dead_code)]
+	pub(crate) fn rt(&self) -> &Runtime<'_> {
+		self.rt
+	}
+
+	#[allow(dead_code)]
+	pub(crate) fn call(
+		&mut self,
+		receiver: &Val,
+		member: Sym,
+		args: Vec<Val>,
+	) -> Result<Val, Raise> {
+		let span = self.call_span.unwrap();
+		let args = args.into_iter().map(|arg| (None, arg)).collect();
+		match self.call_member(span, receiver.clone(), member, args) {
+			Ok(val) => Ok(val),
+			Err(Signal::Raise(raise)) => Err(raise),
+			Err(Signal::Return(_) | Signal::Break(_)) => panic!(),
 		}
 	}
 
@@ -148,7 +143,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		&self.rt.pkgs.get(self.pkg_id).modules
 	}
 
-	pub fn eval(mut self) -> Result<(), (Raised, Vec<(String, Location)>)> {
+	pub fn eval(mut self) -> Result<(), Raise> {
 		// Declarations are order-independent, so every module's items enter its
 		// scope before anything is evaluated.
 		for id in self.modules().descs.ids() {
@@ -172,7 +167,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					Ok(()) => {}
 					Err(Signal::Return(_)) => break,
 					Err(Signal::Break(_)) => panic!(),
-					Err(Signal::Error(err, trace)) => return Err((err, trace)),
+					Err(Signal::Raise(raise)) => return Err(raise),
 				}
 			}
 		}
@@ -304,7 +299,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(expr_id));
-						Err(Signal::Error(
+						Err(Signal::raise(
 							Raised::Native(Error::ProtocolError(ProtocolError::NotIterable(
 								obj.type_id(),
 							))),
@@ -318,7 +313,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						.pkgs
 						.desc(self.pkg_id)
 						.loc(chunk.get_expr_span(expr_id));
-					Err(Signal::Error(
+					Err(Signal::raise(
 						Raised::Native(Error::ProtocolError(ProtocolError::NotIterable(
 							val.type_id(),
 						))),
@@ -384,7 +379,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					tier: Tier::Local,
 				}));
 				let (raised, trace) = match self.eval_block(chunk, scope, do_.body) {
-					Err(Signal::Error(raised, trace)) => (raised, trace),
+					Err(Signal::Raise(Raise(raised, trace))) => (raised, trace),
 					other => return other,
 				};
 				let raised_type_id = match &raised {
@@ -419,7 +414,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					}));
 					self.eval_block(chunk, scope, else_branch)
 				} else {
-					Err(Signal::Error(raised, trace))
+					Err(Signal::Raise(Raise(raised, trace)))
 				}
 			}
 			Expr::Return(return_) => {
@@ -445,7 +440,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					.pkgs
 					.desc(self.pkg_id)
 					.loc(chunk.get_expr_span(expr_id));
-				Err(Signal::Error(Raised::Val(val), vec![(String::new(), loc)]))
+				Err(Signal::raise(Raised::Val(val), vec![(String::new(), loc)]))
 			}
 			Expr::Call(call) => {
 				let span = chunk.get_expr_span(expr_id);
@@ -474,7 +469,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									&& !variants.is_empty()
 								{
 									let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-									return Err(Signal::Error(
+									return Err(Signal::raise(
 										Raised::Native(Error::TypeError(
 											TypeError::NotConstructible(TypeId::User(
 												type_pkg, type_id,
@@ -561,7 +556,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									}
 									None => {
 										let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-										Err(Signal::Error(
+										Err(Signal::raise(
 											Raised::Native(Error::TypeError(
 												TypeError::NotConstructible(TypeId::Native(
 													*type_id,
@@ -584,7 +579,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						},
 						obj => {
 							let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-							Err(Signal::Error(
+							Err(Signal::raise(
 								Raised::Native(Error::TypeError(TypeError::NotCallable(
 									obj.type_id(),
 								))),
@@ -594,7 +589,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					},
 					val => {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						Err(Signal::Error(
+						Err(Signal::raise(
 							Raised::Native(Error::TypeError(TypeError::NotCallable(val.type_id()))),
 							vec![(String::new(), loc)],
 						))
@@ -622,7 +617,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								Err(Signal::Error(
+								Err(Signal::raise(
 									Raised::Native(Error::KeyError(key)),
 									vec![(String::new(), loc)],
 								))
@@ -635,7 +630,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(expr_id));
-						Err(Signal::Error(
+						Err(Signal::raise(
 							Raised::Native(Error::ProtocolError(ProtocolError::NotAccessible(
 								obj.type_id(),
 							))),
@@ -649,7 +644,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						.pkgs
 						.desc(self.pkg_id)
 						.loc(chunk.get_expr_span(expr_id));
-					Err(Signal::Error(
+					Err(Signal::raise(
 						Raised::Native(Error::ProtocolError(ProtocolError::NotAccessible(
 							val.type_id(),
 						))),
@@ -693,7 +688,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								.pkgs
 								.desc(self.pkg_id)
 								.loc(chunk.get_expr_span(expr_id));
-							return Err(Signal::Error(
+							return Err(Signal::raise(
 								Raised::Native(Error::MemberError(MemberError::ReadOnly(
 									namespace, sym,
 								))),
@@ -711,7 +706,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								return Err(Signal::Error(
+								return Err(Signal::raise(
 									Raised::Native(Error::MemberError(MemberError::ReadOnly(
 										receiver.clone(),
 										member.name,
@@ -726,7 +721,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								.pkgs
 								.desc(self.pkg_id)
 								.loc(chunk.get_expr_span(expr_id));
-							Err(Signal::Error(
+							Err(Signal::raise(
 								Raised::Native(Error::MemberError(MemberError::Missing(
 									receiver.clone(),
 									member.name,
@@ -760,7 +755,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 										.pkgs
 										.desc(self.pkg_id)
 										.loc(chunk.get_expr_span(expr_id));
-									Err(Signal::Error(
+									Err(Signal::raise(
 										Raised::Native(Error::ProtocolError(
 											ProtocolError::NotAccessible(obj.type_id()),
 										)),
@@ -774,7 +769,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								Err(Signal::Error(
+								Err(Signal::raise(
 									Raised::Native(Error::ProtocolError(
 										ProtocolError::NotAccessible(val.type_id()),
 									)),
@@ -850,20 +845,22 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								(lhs, rhs) => {
 									let span = chunk.get_expr_span(expr_id);
 									if lhs.type_id() == rhs.type_id()
-										&& self.rt.conforms(lhs.type_id(), self.rt.protos.order.id)
+										&& self
+											.rt
+											.conforms(lhs.type_id(), self.rt.behaviors.order.proto)
 									{
-										let verb = self.rt.protos.order.verb;
+										let member = self.rt.behaviors.order.method;
 										let sign = self.call_member(
 											span,
 											lhs.clone(),
-											verb,
+											member,
 											vec![(None, rhs.clone())],
 										)?;
 										// A conforming type promised a 'Num' sign. Anything
 										// else is a in that type's implementation of 'Order'.
 										let Val::Num(Num(sign)) = sign else {
 											let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-											return Err(Signal::Error(
+											return Err(Signal::raise(
 												Raised::Native(Error::ProtocolError(
 													ProtocolError::NotOrderable(lhs.type_id()),
 												)),
@@ -884,7 +881,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 											(_, Val::Num(_)) => lhs,
 											_ => lhs,
 										};
-										Err(Signal::Error(
+										Err(Signal::raise(
 											Raised::Native(Error::ProtocolError(
 												ProtocolError::NotOrderable(val.type_id()),
 											)),
@@ -901,7 +898,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								return Err(Signal::Error(
+								return Err(Signal::raise(
 									Raised::Native(Error::ProtocolError(
 										ProtocolError::NotAppendable(lhs.type_id()),
 									)),
@@ -914,7 +911,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								return Err(Signal::Error(
+								return Err(Signal::raise(
 									Raised::Native(Error::ProtocolError(
 										ProtocolError::NotAppendable(obj.borrow().type_id()),
 									)),
@@ -942,7 +939,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								Err(Signal::Error(
+								Err(Signal::raise(
 									Raised::Native(Error::TypeError(TypeError::ConcatNonStr(
 										rhs.type_id(),
 									))),
@@ -955,7 +952,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.pkgs
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
-								Err(Signal::Error(
+								Err(Signal::raise(
 									Raised::Native(Error::TypeError(TypeError::ArithNonNum(
 										rhs.type_id(),
 									))),
@@ -981,7 +978,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									(_, Val::Num(_)) => lhs,
 									_ => lhs,
 								};
-								Err(Signal::Error(
+								Err(Signal::raise(
 									Raised::Native(Error::TypeError(TypeError::ArithNonNum(
 										val.type_id(),
 									))),
@@ -1006,7 +1003,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 							.pkgs
 							.desc(self.pkg_id)
 							.loc(chunk.get_expr_span(expr_id));
-						Err(Signal::Error(
+						Err(Signal::raise(
 							Raised::Native(Error::TypeError(TypeError::ArithNonNum(val.type_id()))),
 							vec![(String::new(), loc)],
 						))
@@ -1024,7 +1021,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Print { val: val_id } => {
 					let val = self.eval_expr(chunk, *val_id)?;
-					println!("{}", rt_print_val(self.syms, self.rt, &val));
+					println!("{}", display_val(self.syms, self.rt, &val));
 					Ok(val)
 				}
 				Builtin::Type { val: val_id } => {
@@ -1084,7 +1081,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(arm.path));
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::TypeError(TypeError::CaseNonType(path_val.type_id()))),
 				vec![(String::new(), loc)],
 			));
@@ -1128,7 +1125,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			Ok(val) => val,
 			Err(err) => {
 				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-				return Err(Signal::Error(
+				return Err(Signal::raise(
 					Raised::Native(err),
 					vec![(String::new(), loc)],
 				));
@@ -1140,20 +1137,25 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				self.eval_proc_call(span, &proc.borrow(), Some(receiver.clone()), args)
 			}
 			Obj::Method(Method::Native(receiver, _name, method)) => {
+				let method = *method;
 				let args = self.bind_native_args(span, method.params, args)?;
-				match (method.call)(receiver, args) {
-					Ok(val) => Ok(val),
-					Err(err) => {
-						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						Err(Signal::Error(
-							Raised::Native(err),
-							vec![(String::new(), loc)],
-						))
-					}
-				}
+				self.call_native(span, method, receiver, args)
 			}
 			_ => panic!(),
 		}
+	}
+
+	fn call_native(
+		&mut self,
+		span: Span,
+		method: NativeMethod,
+		receiver: &Val,
+		args: Vec<Val>,
+	) -> Result<Val, Signal> {
+		let saved_call_span = self.call_span.replace(span);
+		let result = (method.call)(self, receiver, args);
+		self.call_span = saved_call_span;
+		result.map_err(Signal::Raise)
 	}
 
 	fn resolve_name(&self, name: Sym) -> Place {
@@ -1191,7 +1193,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::NameError(name)),
 				vec![(String::new(), loc)],
 			));
@@ -1204,7 +1206,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					.pkgs
 					.desc(self.pkg_id)
 					.loc(chunk.get_expr_span(expr_id));
-				Err(Signal::Error(
+				Err(Signal::raise(
 					Raised::Native(err),
 					vec![(String::new(), loc)],
 				))
@@ -1230,7 +1232,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						.pkgs
 						.desc(self.pkg_id)
 						.loc(chunk.get_expr_span(expr_id));
-					Err(Signal::Error(
+					Err(Signal::raise(
 						Raised::Native(err),
 						vec![(String::new(), loc)],
 					))
@@ -1242,7 +1244,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
-			Err(Signal::Error(
+			Err(Signal::raise(
 				Raised::Native(Error::MemberError(MemberError::Missing(val.clone(), name))),
 				vec![(String::new(), loc)],
 			))
@@ -1264,7 +1266,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					.pkgs
 					.desc(self.pkg_id)
 					.loc(chunk.get_expr_span(expr_id));
-				return Err(Signal::Error(
+				return Err(Signal::raise(
 					Raised::Native(Error::TypeError(TypeError::IndexNonNum(val))),
 					vec![(String::new(), loc)],
 				));
@@ -1277,7 +1279,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::IndexError(IndexError::NonIntegral(num))),
 				vec![(String::new(), loc)],
 			));
@@ -1289,7 +1291,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::IndexError(IndexError::OutOfRange(num))),
 				vec![(String::new(), loc)],
 			));
@@ -1316,7 +1318,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.pkgs
 			.desc(self.pkg_id)
 			.loc(chunk.get_expr_span(expr_id));
-		Err(Signal::Error(
+		Err(Signal::raise(
 			Raised::Native(Error::TypeError(TypeError::NotInvocable(val.type_id()))),
 			vec![(String::new(), loc)],
 		))
@@ -1360,7 +1362,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		// Used in an invoking position but requires arguments; error.
 		if let Some(name) = missing {
 			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::ArgumentError(ArgumentError::Missing(vec![name]))),
 				vec![(String::new(), loc)],
 			));
@@ -1372,16 +1374,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				self.eval_proc_call(span, &proc.borrow(), Some(receiver.clone()), Vec::new())
 			}
 			Obj::Method(Method::Native(receiver, _name, method)) => {
-				match (method.call)(receiver, method.defaults().unwrap()) {
-					Ok(val) => Ok(val),
-					Err(err) => {
-						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						Err(Signal::Error(
-							Raised::Native(err),
-							vec![(String::new(), loc)],
-						))
-					}
-				}
+				let method = *method;
+				self.call_native(span, method, receiver, method.defaults().unwrap())
 			}
 			_ => panic!(),
 		}
@@ -1404,7 +1398,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						Some(index) => index,
 						None => {
 							let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-							return Err(Signal::Error(
+							return Err(Signal::raise(
 								Raised::Native(Error::ArgumentError(ArgumentError::Unknown(name))),
 								vec![(String::new(), loc)],
 							));
@@ -1414,7 +1408,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				None => {
 					if next == params.len() {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						return Err(Signal::Error(
+						return Err(Signal::raise(
 							Raised::Native(Error::ArgumentError(ArgumentError::TooMany(
 								arg_count,
 								params.len(),
@@ -1430,7 +1424,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			if slots[index].is_some() {
 				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
 				let name = self.syms.intern(params[index].name);
-				return Err(Signal::Error(
+				return Err(Signal::raise(
 					Raised::Native(Error::ArgumentError(ArgumentError::Duplicate(name))),
 					vec![(String::new(), loc)],
 				));
@@ -1446,7 +1440,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.collect::<Vec<_>>();
 		if !missing.is_empty() {
 			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::ArgumentError(ArgumentError::Missing(missing))),
 				vec![(String::new(), loc)],
 			));
@@ -1479,7 +1473,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					Some(index) => index,
 					None => {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						return Err(Signal::Error(
+						return Err(Signal::raise(
 							Raised::Native(Error::ArgumentError(ArgumentError::Unknown(name))),
 							vec![(String::new(), loc)],
 						));
@@ -1488,7 +1482,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				None => {
 					if next == params.len() {
 						let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-						return Err(Signal::Error(
+						return Err(Signal::raise(
 							Raised::Native(Error::ArgumentError(ArgumentError::TooMany(
 								arg_count,
 								params.len(),
@@ -1503,7 +1497,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			};
 			if slots[index].is_some() {
 				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-				return Err(Signal::Error(
+				return Err(Signal::raise(
 					Raised::Native(Error::ArgumentError(ArgumentError::Duplicate(
 						params[index].name,
 					))),
@@ -1523,7 +1517,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			.collect::<Vec<_>>();
 		if !missing.is_empty() {
 			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
-			return Err(Signal::Error(
+			return Err(Signal::raise(
 				Raised::Native(Error::ArgumentError(ArgumentError::Missing(missing))),
 				vec![(String::new(), loc)],
 			));
@@ -1593,13 +1587,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			Ok(val) => Ok(val),
 			Err(Signal::Return(val)) => Ok(val),
 			Err(Signal::Break(_)) => panic!(),
-			Err(Signal::Error(err, mut trace)) => {
+			Err(Signal::Raise(Raise(err, mut trace))) => {
 				let proc_name = self.syms.resolve(proc.name);
 				trace.last_mut().unwrap().0.push_str(proc_name);
 
 				let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
 				trace.push((String::new(), loc));
-				Err(Signal::Error(err, trace))
+				Err(Signal::Raise(Raise(err, trace)))
 			}
 		}
 	}
@@ -1627,9 +1621,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					self.scope = saved;
 					return Err(Signal::Break(val));
 				}
-				Err(Signal::Error(err, loc)) => {
+				Err(Signal::Raise(raise)) => {
 					self.scope = saved;
-					return Err(Signal::Error(err, loc));
+					return Err(Signal::Raise(raise));
 				}
 			}
 		}

@@ -105,7 +105,13 @@ pub struct Extern {
 pub struct Proto {
 	pub name: Sym,
 	pub impls: Vec<Vec<Sym>>,
-	pub items: Vec<DefId>,
+	pub items: Vec<ProtoItem>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ProtoItem {
+	Declared(DefId),
+	Derived(DefId),
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -180,10 +186,6 @@ impl NodeId for ExternItemId {
 	}
 }
 
-// An item of an 'extern type' body: a mesa-defined method, or one named here
-// but implemented in Rust. Both hold a 'Method' — the variant is the only
-// distinction, since a native def is a 'Def' like any other, with a synthetic
-// empty body standing in for the implementation this declaration only names.
 #[derive(Debug)]
 pub enum ExternItem {
 	User(Method),

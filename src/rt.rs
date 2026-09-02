@@ -3,22 +3,22 @@ mod eval;
 mod modules;
 mod native;
 pub mod pkg;
+mod render;
 mod scope;
 mod types;
 mod val;
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
-use crate::sem::protos::ProtoId;
+use crate::sem::protos::{Behaviors, ProtoId};
 use crate::sem::types::Type;
-use crate::src::Location;
 
 pub use err::{Errors, build_errors};
-pub use eval::{Prelude, Proto, Protos, Raised, build_prelude, build_protos};
+pub use eval::{Prelude, Raise, Raised, build_prelude};
 pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
+pub use render::{display_val, inspect_val};
 pub use types::{CORE_TYPES, NativeTypeSpec, Natives, TypeId};
-pub use val::rt_debug_val;
 
 use val::{Member, Val, namespace_name};
 
@@ -27,7 +27,7 @@ use val::{Member, Val, namespace_name};
 pub struct Runtime<'descs> {
 	pub pkgs: Packages<'descs>,
 	pub natives: Natives,
-	pub protos: Protos,
+	pub behaviors: Behaviors,
 	pub errors: Errors,
 }
 
@@ -35,13 +35,13 @@ impl<'descs> Runtime<'descs> {
 	pub fn new(
 		descs: &'descs crate::pkg::Packages,
 		natives: Natives,
-		protos: Protos,
+		behaviors: Behaviors,
 		errors: Errors,
 	) -> Self {
 		Self {
 			pkgs: Packages::new(descs),
 			natives,
-			protos,
+			behaviors,
 			errors,
 		}
 	}
@@ -99,7 +99,7 @@ impl<'descs> Runtime<'descs> {
 				let TypeId::Native(id) = type_id else {
 					panic!();
 				};
-				if self.natives.get(id).has_member(name) {
+				if self.natives.get(id).has_method(name) {
 					Some(Member::Native(val.clone(), name))
 				} else {
 					None
@@ -119,7 +119,7 @@ impl<'descs> Runtime<'descs> {
 					}
 				}
 				TypeId::Native(id) => {
-					if self.natives.get(id).has_member(name) {
+					if self.natives.get(id).has_method(name) {
 						Some(Member::Native(val.clone(), name))
 					} else {
 						None
@@ -131,17 +131,14 @@ impl<'descs> Runtime<'descs> {
 }
 
 // Evaluate the packages in the runtime, *in dependency order*.
-pub fn eval(
-	syms: &mut Interner,
-	rt: &mut Runtime,
-	prelude: &Prelude,
-) -> Result<(), (Raised, Vec<(String, Location)>)> {
+pub fn eval(syms: &mut Interner, rt: &mut Runtime, prelude: &Prelude) -> Result<(), Raise> {
 	let ids: Vec<_> = rt.pkgs.ids().collect();
 	for pkg_id in ids {
 		let pkg = pkg::Package::new(
 			prelude,
 			&rt.pkgs,
 			&mut rt.natives,
+			&rt.behaviors,
 			rt.pkgs.desc(pkg_id),
 			pkg_id,
 		);
@@ -210,7 +207,7 @@ impl Error {
 			Self::MemberError(err) => err.message(syms, rt),
 			Self::IndexError(err) => err.message(),
 			Self::NameError(name) => format!("name '{}' is not defined", syms.resolve(*name)),
-			Self::KeyError(key) => format!("key {} not found", rt_debug_val(syms, rt, key)),
+			Self::KeyError(key) => format!("key {} not found", inspect_val(syms, rt, key)),
 		}
 	}
 }
@@ -255,7 +252,7 @@ impl TypeError {
 	fn message(&self, syms: &Interner, rt: &Runtime) -> String {
 		match self {
 			Self::IndexNonNum(val) => {
-				format!("index {} is not a number", rt_debug_val(syms, rt, val))
+				format!("index {} is not a number", inspect_val(syms, rt, val))
 			}
 			Self::ArithNonNum(id) => format!(
 				"type {} cannot be used in arithmetic",

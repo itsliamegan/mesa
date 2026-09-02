@@ -7,7 +7,7 @@ use crate::pkg::{PackageId, Packages};
 use crate::sem::modules::{Member, ModuleId, Resolved};
 use crate::sem::{Error, Visit};
 use crate::src::Span;
-use crate::syn::nodes::{DefId, ModuleItem, ModuleItemId};
+use crate::syn::nodes::{DefId, ModuleItem, ModuleItemId, ProtoItem};
 use crate::syn::{self, Chunk, ChunkId};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -40,12 +40,72 @@ pub struct Proto {
 	pub span: Span,
 	pub required: OrderMap<Sym, DefId>,
 	pub provided: OrderMap<Sym, DefId>,
+	pub derived: OrderMap<Sym, DefId>,
 	// Every protocol reachable through this one's prerequisites, itself
 	// included, ordered so that a protocol always follows everything it
 	// requires.
 	pub impls: Vec<(PackageId, ProtoId)>,
 	// Every member name declared anywhere in 'impls'.
 	pub effective: HashSet<Sym>,
+}
+
+// One built-in behavior: the protocol governing it, and the method carrying it.
+#[derive(Debug)]
+pub struct Behavior {
+	pub proto: (PackageId, ProtoId),
+	pub method: Sym,
+}
+
+// Every built-in behavior the interpreter dispatches through.
+#[derive(Debug)]
+pub struct Behaviors {
+	pub order: Behavior,
+	pub display: Behavior,
+	pub inspect: Behavior,
+}
+
+impl Behaviors {
+	// The protocol governing each built-in behavior and the method it dispatches
+	// through, both fixed by the language.
+	pub const ORDER: (&str, &str) = ("Order", "order");
+	pub const DISPLAY: (&str, &str) = ("Display", "display");
+	// Automatic: every type has this method without opting in, so the type pass
+	// seeds it long before the protocols can be resolved.
+	pub const INSPECT: (&str, &str) = ("Inspect", "inspect");
+}
+
+// Resolve the protocols of 'Core.Protos' governing built-in behavior, and the
+// method each behavior dispatches through. A missing or misnamed protocol is a
+// broken build.
+pub fn build_behaviors(syms: &mut Interner, pkgs: &Packages, stdlib: PackageId) -> Behaviors {
+	let path = [syms.intern("Core"), syms.intern("Protos")];
+	let Some(module) = pkgs.get(stdlib).modules().by_path(&path) else {
+		panic!("stdlib does not declare a 'Core.Protos' module");
+	};
+	Behaviors {
+		order: build_behavior(syms, pkgs, stdlib, module, Behaviors::ORDER),
+		display: build_behavior(syms, pkgs, stdlib, module, Behaviors::DISPLAY),
+		inspect: build_behavior(syms, pkgs, stdlib, module, Behaviors::INSPECT),
+	}
+}
+
+fn build_behavior(
+	syms: &mut Interner,
+	pkgs: &Packages,
+	stdlib: PackageId,
+	module: ModuleId,
+	names: (&str, &str),
+) -> Behavior {
+	let (proto, method) = names;
+	let pkg = pkgs.get(stdlib);
+	let Some(Member::Proto(item_id)) = pkg.modules().member(module, syms.intern(proto)) else {
+		panic!("stdlib does not declare a 'Core.Protos.{}' protocol", proto);
+	};
+	let chunk_id = pkg.modules().chunk(module);
+	Behavior {
+		proto: (stdlib, pkg.protos().get_proto_by_item(chunk_id, item_id)),
+		method: syms.intern(method),
+	}
 }
 
 impl Protos {
@@ -71,7 +131,12 @@ impl Protos {
 
 	fn add_proto(&mut self, chunk: ChunkId, item_id: ModuleItemId, proto: Proto) -> ProtoId {
 		let id = ProtoId(self.protos.len() as u32);
-		for member_item in proto.required.values().chain(proto.provided.values()) {
+		for member_item in proto
+			.required
+			.values()
+			.chain(proto.provided.values())
+			.chain(proto.derived.values())
+		{
 			self.proto_by_proto_item.insert((chunk, *member_item), id);
 		}
 		self.protos.push(proto);
@@ -142,14 +207,24 @@ fn describe_proto(
 ) -> Proto {
 	let mut required = OrderMap::new();
 	let mut provided = OrderMap::new();
-	for def_id in &proto.items {
-		let def = chunk.get_def(*def_id);
-		// A proc is provided if its def block is not empty, otherwise it is
-		// required.
-		if !chunk.get_block(def.body).exprs.is_empty() {
-			provided.insert(def.name, *def_id);
-		} else {
-			required.insert(def.name, *def_id);
+	let mut derived = OrderMap::new();
+	for item in &proto.items {
+		match item {
+			ProtoItem::Declared(def_id) => {
+				let def = chunk.get_def(*def_id);
+				// A proc is provided if its def block is not empty, otherwise
+				// it is required.
+				if !chunk.get_block(def.body).exprs.is_empty() {
+					provided.insert(def.name, *def_id);
+				} else {
+					required.insert(def.name, *def_id);
+				}
+			}
+			// A derived member has an empty block just as a required one does,
+			// so only the variant tells the two apart.
+			ProtoItem::Derived(def_id) => {
+				derived.insert(chunk.get_def(*def_id).name, *def_id);
+			}
 		}
 	}
 	Proto {
@@ -158,6 +233,7 @@ fn describe_proto(
 		span,
 		required,
 		provided,
+		derived,
 		impls: Vec::new(),
 		effective: HashSet::new(),
 	}
@@ -299,6 +375,7 @@ fn effective_members(
 		let proto = owner_protos(pkgs, pkg_id, protos, *pkg).get_proto(*id);
 		effective.extend(proto.required.keys().copied());
 		effective.extend(proto.provided.keys().copied());
+		effective.extend(proto.derived.keys().copied());
 	}
 	effective
 }

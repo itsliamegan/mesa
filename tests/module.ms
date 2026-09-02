@@ -410,7 +410,7 @@ module Test.Receipt.Ledger
 
 import Test.Ledger
 
-#> type Group()
+#> type Group
 $print(Ledger.Group)
 
 #:ledger.ms
@@ -513,7 +513,7 @@ $print(Order)
 $print(Task(1).min(Task(5)).priority)
 #> 5
 $print(Task(1).max(Task(5)).priority)
-#> Task(1)
+#> Task(priority: 1)
 $print(Task(5).min(Task(1)))
 
 #---

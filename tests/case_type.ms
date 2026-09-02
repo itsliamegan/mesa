@@ -39,7 +39,7 @@ $print(Transaction.Credit == Transaction.Credit)
 #> false
 $print(Transaction.Credit == Transaction.Debit)
 
-#> Transaction.Credit(50, "rent")
+#> Transaction.Credit(amount: 50, note: "rent")
 $print(Transaction.Credit(50, "rent"))
 #> type Transaction.Credit(amount, note)
 $print(Transaction.Credit)
@@ -57,7 +57,7 @@ $print(Transaction.Debit(1, "atm").where)
 
 #> 4
 $print(Transaction.Credit.Period(1, 5).days)
-#> Transaction.Credit.Period(1, 2)
+#> Transaction.Credit.Period(start: 1, finish: 2)
 $print(Transaction.Credit.Period(1, 2))
 
 type Entry
@@ -78,7 +78,7 @@ type Entry
 end
 
 b := Entry.Batch([Entry.Posted(Transaction.Credit(1, "rent")), Entry.Posted(Transaction.Debit(2, "atm"))])
-#> Entry.Posted(Transaction.Credit(1, "rent"))
+#> Entry.Posted(transaction: Transaction.Credit(amount: 1, note: "rent"))
 $print(b.entries[0])
 #> 1
 $print(b.entries[0].transaction.amount)
@@ -102,7 +102,7 @@ type Ledger
 	end
 end
 
-#> Ledger.Transaction.Credit(50)
+#> Ledger.Transaction.Credit(amount: 50)
 $print(Ledger.Transaction.Credit(50))
 #> type Ledger.Transaction.Credit(amount)
 $print(Ledger.Transaction.Credit)

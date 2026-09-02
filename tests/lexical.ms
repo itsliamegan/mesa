@@ -36,6 +36,11 @@ $print('\'')
 #> "
 $print('"')
 
+#> ["Multi-\nline", "Tabu\tlated", "\"Quoted\"", "Back\\slash"]
+$print(["Multi-\nline", "Tabu\tlated", "\"Quoted\"", "Back\\slash"])
+#> ['\n', '\t', '\\', '\'', '"']
+$print(['\n', '\t', '\\', '\'', '"'])
+
 # A comment.
 #> nil
 $print(nil) # A trailing comment.

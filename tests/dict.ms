@@ -22,6 +22,11 @@ each key in dict do
 	end
 end
 
+dict := {}
+dict["self"] := dict
+#> {"self": ...}
+$print(dict)
+
 #---
 
 #! runtime error: key "b" not found

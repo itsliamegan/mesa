@@ -97,7 +97,7 @@ $print(Rect(3, 4).area)
 $print(Rect(h: 4, w: 3).area)
 #> 25
 $print(Rect(w: 5).area)
-#> Rect(3, 3)
+#> Rect(w: 3, h: 3)
 $print(Rect(3))
 
 #---

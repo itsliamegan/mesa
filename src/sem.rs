@@ -24,11 +24,11 @@ pub enum Error {
 	ProvidedWithoutRequired(Location, String),
 	UnknownProtocol(Location, String),
 	NotAProtocol(Location, String),
-	MissingMember(Location, String, String, String),
+	MissingMethod(Location, String, String, String),
 	SignatureMismatch(Location, String, String, String),
 	ProtocolConflict(Location, String, String, String),
 	DuplicateImpl(Location, String),
-	MemberCollision(Location, String, String, String),
+	MethodCollision(Location, String, String, String),
 	DuplicateTypeMember(Location, String, String),
 	UnimplementedExtern(Location, String),
 	UndeclaredNativeMember(Location, String, String),
@@ -60,11 +60,11 @@ impl Error {
 			Self::ProvidedWithoutRequired(loc, _) => loc,
 			Self::UnknownProtocol(loc, _) => loc,
 			Self::NotAProtocol(loc, _) => loc,
-			Self::MissingMember(loc, ..) => loc,
+			Self::MissingMethod(loc, ..) => loc,
 			Self::SignatureMismatch(loc, ..) => loc,
 			Self::ProtocolConflict(loc, ..) => loc,
 			Self::DuplicateImpl(loc, _) => loc,
-			Self::MemberCollision(loc, ..) => loc,
+			Self::MethodCollision(loc, ..) => loc,
 			Self::DuplicateTypeMember(loc, ..) => loc,
 			Self::UnimplementedExtern(loc, _) => loc,
 			Self::UndeclaredNativeMember(loc, ..) => loc,
@@ -109,11 +109,11 @@ impl Display for Error {
 				write!(f, "case type '{}' cannot declare field '{}'", name, field)
 			}
 			Self::ProvidedWithoutRequired(_, proto) => {
-				write!(f, "protocol '{}' provides members but requires none", proto)
+				write!(f, "protocol '{}' provides methods but requires none", proto)
 			}
 			Self::UnknownProtocol(_, proto) => write!(f, "unknown protocol '{}'", proto),
 			Self::NotAProtocol(_, name) => write!(f, "'{}' is not a protocol", name),
-			Self::MissingMember(_, name, proto, member) => {
+			Self::MissingMethod(_, name, proto, member) => {
 				write!(
 					f,
 					"type '{}' does not implement '{}', required by protocol '{}'",
@@ -135,10 +135,10 @@ impl Display for Error {
 				)
 			}
 			Self::DuplicateImpl(_, name) => write!(f, "protocol '{}' is named twice", name),
-			Self::MemberCollision(_, name, proto, member) => {
+			Self::MethodCollision(_, name, proto, member) => {
 				write!(
 					f,
-					"member '{}' provided by protocol '{}' collides with a member of type '{}'",
+					"method '{}' provided by protocol '{}' collides with a member of type '{}'",
 					member, proto, name
 				)
 			}
@@ -225,7 +225,7 @@ pub enum Visit {
 }
 
 pub fn check(
-	syms: &Interner,
+	syms: &mut Interner,
 	pkgs: &mut Packages,
 	pkg_id: PackageId,
 	natives: &HashMap<Sym, types::NativeTypeShape>,
