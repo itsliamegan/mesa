@@ -1,3 +1,5 @@
+import Core.Protos.Hash
+
 dict := {"id": 105}
 #> {"id": 105}
 $print(dict)
@@ -32,6 +34,32 @@ dict := {}
 dict["self"] := dict
 #> {"self": ...}
 $print(dict)
+
+type Task(priority)
+	impl Hash
+
+	def hash
+		0
+	end
+end
+
+collisions := {}
+collisions[Task(1)] := "first"
+collisions[Task(2)] := "second"
+collisions[Task(1)] := "updated"
+#> updated
+$print(collisions[Task(1)])
+#> second
+$print(collisions[Task(2)])
+#> 1
+#> 2
+each task in collisions do
+	$print(task.priority)
+end
+
+literal := {Task(1): "first", Task(2): "second", Task(1): "updated"}
+#> {Task(priority: 1): "updated", Task(priority: 2): "second"}
+$print(literal)
 
 #---
 
@@ -69,9 +97,9 @@ type Task(priority) end
 
 #---
 
-#! runtime error: type Type is not hashable
-
 type Task(priority) end
 
 dict := {}
 dict[Task] := 1
+#> 1
+$print(dict[Task])

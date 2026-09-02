@@ -311,6 +311,11 @@ const EQUAL: NativeMethod = NativeMethod {
 	call: val::derived_equal,
 };
 
+const HASH: NativeMethod = NativeMethod {
+	params: &[],
+	call: val::derived_hash,
+};
+
 const INSPECT: NativeMethod = NativeMethod {
 	params: &[],
 	call: val::derived_inspect,
@@ -335,6 +340,8 @@ const STORE: NativeMethod = NativeMethod {
 fn derived_method(behaviors: &Behaviors, name: Sym) -> MethodImpl {
 	if name == behaviors.equal.method {
 		MethodImpl::Native(EQUAL)
+	} else if name == behaviors.hash.method {
+		MethodImpl::Native(HASH)
 	} else if name == behaviors.inspect.method {
 		MethodImpl::Native(INSPECT)
 	} else if name == behaviors.access.store {

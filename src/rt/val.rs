@@ -3,8 +3,7 @@ use std::fmt::{self, Debug, Formatter};
 use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
-use ordermap::OrderMap;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 
 use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
@@ -201,42 +200,6 @@ impl Val {
 			_ => true,
 		}
 	}
-
-	pub fn is_hashable(&self) -> bool {
-		matches!(
-			self,
-			Val::Num(_) | Val::Bool(_) | Val::Char(_) | Val::Str(_) | Val::Nil(_)
-		)
-	}
-}
-
-impl PartialEq for Val {
-	fn eq(&self, other: &Self) -> bool {
-		match (self, other) {
-			(Self::Num(num), Self::Num(other_num)) => num.0 == other_num.0,
-			(Self::Bool(bool), Self::Bool(other_bool)) => bool.0 == other_bool.0,
-			(Self::Char(char), Self::Char(other_char)) => char.0 == other_char.0,
-			(Self::Str(str), Self::Str(other_str)) => str.text == other_str.text,
-			(Self::Obj(obj), Self::Obj(other)) => obj.as_ptr() == other.as_ptr(),
-			(Self::Nil(_), Self::Nil(_)) => true,
-			_ => false,
-		}
-	}
-}
-
-impl Eq for Val {}
-
-impl Hash for Val {
-	fn hash<H: Hasher>(&self, state: &mut H) {
-		match self {
-			Self::Num(num) => num.0.to_bits().hash(state),
-			Self::Bool(bool) => bool.0.hash(state),
-			Self::Char(char) => char.0.hash(state),
-			Self::Str(str) => str.text.hash(state),
-			Self::Obj(obj) => obj.as_ptr().hash(state),
-			Self::Nil(_) => 0_u8.hash(state),
-		}
-	}
 }
 
 #[derive(Debug)]
@@ -356,14 +319,38 @@ impl List {
 
 #[derive(Debug)]
 pub struct Dict {
-	pub pairs: OrderMap<Val, Val>,
+	pub pairs: Vec<(Val, Val)>,
+	index: FxHashMap<u64, Vec<usize>>,
 }
 
 impl Dict {
 	pub fn new() -> Val {
 		Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict {
-			pairs: OrderMap::new(),
+			pairs: Vec::new(),
+			index: FxHashMap::default(),
 		}))))
+	}
+
+	pub(crate) fn with_capacity(capacity: usize) -> Self {
+		Self {
+			pairs: Vec::with_capacity(capacity),
+			index: FxHashMap::default(),
+		}
+	}
+
+	pub(crate) fn candidates(&self, hash: u64) -> Vec<(usize, Val)> {
+		self.index
+			.get(&hash)
+			.into_iter()
+			.flatten()
+			.map(|index| (*index, self.pairs[*index].0.clone()))
+			.collect()
+	}
+
+	pub(crate) fn insert(&mut self, hash: u64, key: Val, val: Val) {
+		let index = self.pairs.len();
+		self.pairs.push((key, val));
+		self.index.entry(hash).or_default().push(index);
 	}
 
 	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -375,40 +362,51 @@ impl Dict {
 	}
 
 	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		if !args[0].is_hashable() {
-			return Err(
-				interp.native_error(Error::ProtocolError(ProtocolError::NotHashable(
-					args[0].type_id(),
-				))),
-			);
-		}
+		let hash = interp.hash_val(&args[0])?;
 		let Val::Obj(obj) = self_ else { panic!() };
-		let Obj::Dict(dict) = &*obj.borrow() else {
-			panic!()
+		let candidates = {
+			let Obj::Dict(dict) = &*obj.borrow() else {
+				panic!()
+			};
+			dict.candidates(hash)
 		};
-		match dict.pairs.get(&args[0]) {
-			Some(val) => Ok(val.clone()),
-			None => Err(interp.native_error(Error::KeyError(print::inspect_val(
-				interp.syms(),
-				interp.rt(),
-				&args[0],
-			)))),
+		for (index, key) in candidates {
+			if interp.equal_vals(&key, &args[0])? {
+				let Obj::Dict(dict) = &*obj.borrow() else {
+					panic!()
+				};
+				return Ok(dict.pairs[index].1.clone());
+			}
 		}
+		Err(interp.native_error(Error::KeyError(print::inspect_val(
+			interp.syms(),
+			interp.rt(),
+			&args[0],
+		))))
 	}
 
 	pub fn store(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		if !args[0].is_hashable() {
-			return Err(
-				interp.native_error(Error::ProtocolError(ProtocolError::NotHashable(
-					args[0].type_id(),
-				))),
-			);
-		}
+		let hash = interp.hash_val(&args[0])?;
 		let Val::Obj(obj) = self_ else { panic!() };
+		let candidates = {
+			let Obj::Dict(dict) = &*obj.borrow() else {
+				panic!()
+			};
+			dict.candidates(hash)
+		};
+		for (index, key) in candidates {
+			if interp.equal_vals(&key, &args[0])? {
+				let Obj::Dict(dict) = &mut *obj.borrow_mut() else {
+					panic!()
+				};
+				dict.pairs[index].1 = args[1].clone();
+				return Ok(args[1].clone());
+			}
+		}
 		let Obj::Dict(dict) = &mut *obj.borrow_mut() else {
 			panic!()
 		};
-		dict.pairs.insert(args[0].clone(), args[1].clone());
+		dict.insert(hash, args[0].clone(), args[1].clone());
 		Ok(args[1].clone())
 	}
 
@@ -474,6 +472,90 @@ pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
 }
 
+fn hash_type_id(type_id: TypeId, hasher: &mut FxHasher) {
+	match type_id {
+		TypeId::User(pkg, id) => {
+			0_u8.hash(hasher);
+			pkg.hash(hasher);
+			id.index().hash(hasher);
+		}
+		TypeId::Native(id) => {
+			1_u8.hash(hasher);
+			id.index().hash(hasher);
+		}
+	}
+}
+
+pub fn derived_hash(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let top_level = interp.start_derived_hash();
+	let result = derived_hash_bounded(interp, self_);
+	interp.finish_derived_hash(top_level);
+	result.map(|hash| Val::Num(Num(f64::from_bits(hash))))
+}
+
+fn derived_hash_bounded(interp: &mut Interpreter, self_: &Val) -> Result<u64, Raise> {
+	let hash = match self_ {
+		Val::Num(num) => num.0.to_bits(),
+		Val::Bool(bool) => u64::from(bool.0),
+		Val::Char(char) => char.0 as u64,
+		Val::Str(str) => {
+			let mut hasher = FxHasher::default();
+			str.text.hash(&mut hasher);
+			hasher.finish()
+		}
+		Val::Obj(obj) => {
+			let obj_ref = obj.borrow();
+			match &*obj_ref {
+				Obj::Proc(_) | Obj::Method(_) => Rc::as_ptr(obj) as usize as u64,
+				Obj::Type(type_id) => {
+					let mut hasher = FxHasher::default();
+					hash_type_id(*type_id, &mut hasher);
+					hasher.finish()
+				}
+				Obj::Module(pkg, id) => {
+					let mut hasher = FxHasher::default();
+					pkg.hash(&mut hasher);
+					id.index().hash(&mut hasher);
+					hasher.finish()
+				}
+				Obj::Instance(instance) => {
+					let type_id = TypeId::User(instance.pkg, instance.type_);
+					let types::Type::User(desc) = interp
+						.rt()
+						.pkgs
+						.get(instance.pkg)
+						.types
+						.descs
+						.get_type(instance.type_)
+					else {
+						panic!()
+					};
+					let fields = desc
+						.ctor_fields
+						.iter()
+						.map(|field| field.name)
+						.chain(desc.body_fields.iter().map(|(name, _)| *name))
+						.map(|name| instance.fields.get(&name).unwrap().clone())
+						.collect::<Vec<_>>();
+					drop(obj_ref);
+					let mut hasher = FxHasher::default();
+					hash_type_id(type_id, &mut hasher);
+					for field in fields {
+						if interp.hash_exhausted() {
+							break;
+						}
+						interp.hash_val(&field)?.hash(&mut hasher);
+					}
+					hasher.finish()
+				}
+				_ => unreachable!(),
+			}
+		}
+		Val::Nil(_) => 0,
+	};
+	Ok(hash)
+}
+
 pub fn derived_equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 	let other = &args[0];
 	if self_.type_id() != other.type_id() {
@@ -486,67 +568,89 @@ pub fn derived_equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> R
 		(Val::Str(str), Val::Str(other)) => str.text == other.text,
 		(Val::Obj(obj), Val::Obj(other)) if Rc::ptr_eq(obj, other) => true,
 		(Val::Obj(obj), Val::Obj(other)) => {
-			let values = {
-				let obj = obj.borrow();
-				let other = other.borrow();
-				match (&*obj, &*other) {
-					(Obj::Instance(instance), Obj::Instance(other)) => {
-						let types::Type::User(desc) = interp
-							.rt()
-							.pkgs
-							.get(instance.pkg)
-							.types
-							.descs
-							.get_type(instance.type_)
-						else {
-							panic!()
-						};
-						desc.ctor_fields
-							.iter()
-							.map(|field| field.name)
-							.chain(desc.body_fields.iter().map(|(name, _)| *name))
-							.map(|name| {
-								(
-									instance.fields.get(&name).unwrap().clone(),
-									other.fields.get(&name).unwrap().clone(),
-								)
-							})
-							.collect::<Vec<_>>()
-					}
-					(Obj::List(list), Obj::List(other)) => {
-						if list.items.len() != other.items.len() {
+			let obj_ref = obj.borrow();
+			let other_ref = other.borrow();
+			match (&*obj_ref, &*other_ref) {
+				(Obj::Instance(instance), Obj::Instance(other)) => {
+					let types::Type::User(desc) = interp
+						.rt()
+						.pkgs
+						.get(instance.pkg)
+						.types
+						.descs
+						.get_type(instance.type_)
+					else {
+						panic!()
+					};
+					let values = desc
+						.ctor_fields
+						.iter()
+						.map(|field| field.name)
+						.chain(desc.body_fields.iter().map(|(name, _)| *name))
+						.map(|name| {
+							(
+								instance.fields.get(&name).unwrap().clone(),
+								other.fields.get(&name).unwrap().clone(),
+							)
+						})
+						.collect::<Vec<_>>();
+					drop(other_ref);
+					drop(obj_ref);
+					for (val, other) in values {
+						if !interp.equal_vals(&val, &other)? {
 							return Ok(Val::Bool(Bool(false)));
 						}
-						list.items
-							.iter()
-							.cloned()
-							.zip(other.items.iter().cloned())
-							.collect()
 					}
-					(Obj::Dict(dict), Obj::Dict(other)) => {
-						if dict.pairs.len() != other.pairs.len() {
+					true
+				}
+				(Obj::List(list), Obj::List(other_list)) => {
+					if list.items.len() != other_list.items.len() {
+						return Ok(Val::Bool(Bool(false)));
+					}
+					let values = list
+						.items
+						.iter()
+						.cloned()
+						.zip(other_list.items.iter().cloned())
+						.collect::<Vec<_>>();
+					drop(other_ref);
+					drop(obj_ref);
+					for (val, other) in values {
+						if !interp.equal_vals(&val, &other)? {
 							return Ok(Val::Bool(Bool(false)));
 						}
-						let mut values = Vec::with_capacity(dict.pairs.len());
-						for (key, val) in &dict.pairs {
-							let Some(other) = other.pairs.get(key) else {
-								return Ok(Val::Bool(Bool(false)));
-							};
-							values.push((val.clone(), other.clone()));
-						}
-						values
 					}
-					_ => return Ok(Val::Bool(Bool(false))),
+					true
 				}
-			};
-			let mut equal = true;
-			for (val, other) in values {
-				if !interp.equal_vals(&val, &other)? {
-					equal = false;
-					break;
+				(Obj::Dict(dict), Obj::Dict(other_dict)) => {
+					if dict.pairs.len() != other_dict.pairs.len() {
+						return Ok(Val::Bool(Bool(false)));
+					}
+					let pairs = dict.pairs.clone();
+					let other_pairs = other_dict.pairs.clone();
+					let other_index = other_dict.index.clone();
+					drop(other_ref);
+					drop(obj_ref);
+					for (key, val) in pairs {
+						let hash = interp.hash_val(&key)?;
+						let mut found = false;
+						for index in other_index.get(&hash).into_iter().flatten() {
+							if interp.equal_vals(&key, &other_pairs[*index].0)? {
+								if !interp.equal_vals(&val, &other_pairs[*index].1)? {
+									return Ok(Val::Bool(Bool(false)));
+								}
+								found = true;
+								break;
+							}
+						}
+						if !found {
+							return Ok(Val::Bool(Bool(false)));
+						}
+					}
+					true
 				}
+				_ => false,
 			}
-			equal
 		}
 		(Val::Nil(_), Val::Nil(_)) => true,
 		_ => unreachable!(),

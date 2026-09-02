@@ -363,6 +363,7 @@ raise Point(1, 2)
 #---
 
 import Core.Errors.Error
+import Core.Errors.ProtocolError
 
 type Task(name)
 	def inspect
@@ -375,4 +376,8 @@ do
 rescue e case Error.ProtocolError then
 	#> Error.ProtocolError(cause: ProtocolError.NotHashable(message: "type Task is not hashable"))
 	$print(e)
+	when e.cause case ProtocolError.NotHashable then
+		#> caught NotHashable
+		$print("caught NotHashable")
+	end
 end

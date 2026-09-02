@@ -68,6 +68,7 @@ pub struct AccessBehavior {
 #[derive(Debug)]
 pub struct Behaviors {
 	pub equal: Behavior,
+	pub hash: Behavior,
 	pub order: Behavior,
 	pub display: Behavior,
 	pub inspect: Behavior,
@@ -79,6 +80,7 @@ impl Behaviors {
 	// The protocol governing each built-in behavior and the method it dispatches
 	// through, both fixed by the language.
 	pub const EQUAL: (&str, &str) = ("Equal", "equal");
+	pub const HASH: (&str, &str) = ("Hash", "hash");
 	pub const ORDER: (&str, &str) = ("Order", "order");
 	pub const DISPLAY: (&str, &str) = ("Display", "display");
 	// Automatic: every type has this method without opting in, so the type pass
@@ -98,6 +100,7 @@ pub fn build_behaviors(syms: &mut Interner, pkgs: &Packages, stdlib: PackageId) 
 	};
 	Behaviors {
 		equal: build_behavior(syms, pkgs, stdlib, module, Behaviors::EQUAL),
+		hash: build_behavior(syms, pkgs, stdlib, module, Behaviors::HASH),
 		order: build_behavior(syms, pkgs, stdlib, module, Behaviors::ORDER),
 		display: build_behavior(syms, pkgs, stdlib, module, Behaviors::DISPLAY),
 		inspect: build_behavior(syms, pkgs, stdlib, module, Behaviors::INSPECT),

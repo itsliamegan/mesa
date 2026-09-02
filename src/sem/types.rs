@@ -401,6 +401,36 @@ fn describe_type(
 	}
 	methods.extend(&declared);
 
+	let core_protos = [syms.intern("Core"), syms.intern("Protos")];
+	let hash_proto_name = syms.intern(Behaviors::HASH.0);
+	let implements_hash = impls.iter().any(|(proto_pkg, proto_id)| {
+		let pkg = pkgs.get(*proto_pkg);
+		let proto = pkg.protos().get_proto(*proto_id);
+		proto.name == hash_proto_name
+			&& pkg
+				.modules()
+				.by_path(&core_protos)
+				.is_some_and(|module| pkg.modules().chunk(module) == proto.chunk)
+	});
+	let equal = syms.intern(Behaviors::EQUAL.1);
+	let hash = syms.intern(Behaviors::HASH.1);
+	let equal_is_declared = if let Some(MethodSite::Declared(..)) = methods.get(&equal) {
+		true
+	} else {
+		false
+	};
+	let hash_is_declared = if let Some(MethodSite::Declared(..)) = methods.get(&hash) {
+		true
+	} else {
+		false
+	};
+	if implements_hash && equal_is_declared && !hash_is_declared {
+		errs.push(Error::MissingHashForEqual(
+			pkg.sources().loc(span),
+			syms.resolve(type_.name).to_string(),
+		));
+	}
+
 	let own = Inherited {
 		declared: declared.clone(),
 		acquired,

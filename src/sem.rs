@@ -29,6 +29,7 @@ pub enum Error {
 	ProtocolConflict(Location, String, String, String),
 	DuplicateImpl(Location, String),
 	MethodCollision(Location, String, String, String),
+	MissingHashForEqual(Location, String),
 	DuplicateTypeMember(Location, String, String),
 	UnimplementedExtern(Location, String),
 	UndeclaredNativeMember(Location, String, String),
@@ -65,6 +66,7 @@ impl Error {
 			Self::ProtocolConflict(loc, ..) => loc,
 			Self::DuplicateImpl(loc, _) => loc,
 			Self::MethodCollision(loc, ..) => loc,
+			Self::MissingHashForEqual(loc, _) => loc,
 			Self::DuplicateTypeMember(loc, ..) => loc,
 			Self::UnimplementedExtern(loc, _) => loc,
 			Self::UndeclaredNativeMember(loc, ..) => loc,
@@ -140,6 +142,13 @@ impl Display for Error {
 					f,
 					"method '{}' provided by protocol '{}' collides with a member of type '{}'",
 					member, proto, name
+				)
+			}
+			Self::MissingHashForEqual(_, name) => {
+				write!(
+					f,
+					"type '{}' must declare 'hash' when overriding 'equal' and implementing 'Hash'",
+					name
 				)
 			}
 			Self::DuplicateTypeMember(_, name, member) => {

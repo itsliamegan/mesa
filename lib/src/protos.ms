@@ -4,6 +4,12 @@ proto Equal
 	extern def equal(other) end
 end
 
+proto Hash
+	impl Equal
+
+	extern def hash end
+end
+
 proto Inspect
 	extern def inspect end
 end

@@ -3,28 +3,29 @@ module Core.Prelude
 import Core.Protos.Access
 import Core.Protos.Append
 import Core.Protos.Display
+import Core.Protos.Hash
 import Core.Protos.Order
 
-extern type Nil
+extern type Nil impl Hash
 	extern def inspect end
 end
 
-extern type Num impl Order
+extern type Num impl Hash, Order
 	extern def order(other) end
 	extern def inspect end
 end
 
-extern type Bool
+extern type Bool impl Hash
 	extern def inspect end
 end
 
-extern type Char impl Order, Display
+extern type Char impl Hash, Order, Display
 	extern def order(other) end
 	extern def display end
 	extern def inspect end
 end
 
-extern type Str impl Order, Display
+extern type Str impl Hash, Order, Display
 	extern def size end
 	extern def chars end
 	extern def order(other) end
@@ -56,11 +57,11 @@ extern type Dict impl Access
 	extern def store(key, item) end
 end
 
-extern type Proc
+extern type Proc impl Hash
 	extern def inspect end
 end
 
-extern type Type
+extern type Type impl Hash
 	extern def inspect end
 end
 
@@ -68,6 +69,6 @@ extern type Proto
 	extern def inspect end
 end
 
-extern type Module
+extern type Module impl Hash
 	extern def inspect end
 end

@@ -2,7 +2,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-use ordermap::OrderMap;
 use rustc_hash::{FxBuildHasher, FxHashMap};
 
 use crate::intern::{Interner, Sym};
@@ -75,9 +74,12 @@ pub struct Interpreter<'syms, 'descs, 'rt> {
 	printing: HashSet<*const RefCell<Obj>>,
 	print_depth: usize,
 	equating: Vec<(*const RefCell<Obj>, *const RefCell<Obj>)>,
+	// Remaining node budget during a hash traversal; absent between traversals.
+	hash_nodes: Option<usize>,
 }
 
 const MAX_PRINT_DEPTH: usize = 64;
+const MAX_HASH_NODES: usize = 64;
 
 pub enum Raised {
 	Native(Error),
@@ -114,6 +116,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			printing: HashSet::new(),
 			print_depth: 0,
 			equating: Vec::new(),
+			hash_nodes: None,
 		}
 	}
 
@@ -292,7 +295,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 						Ok(Val::Nil(Nil))
 					}
 					Obj::Dict(dict) => {
-						for key in dict.pairs.keys() {
+						for (key, _) in &dict.pairs {
 							let scope = Rc::new(RefCell::new(Scope {
 								locals: FxHashMap::default(),
 								outer: Some(self.scope.clone()),
@@ -1013,26 +1016,25 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					Val::Obj(Rc::new(RefCell::new(Obj::List(List { items }))))
 				}
 				Lit::Dict(pair_ids) => {
-					let mut pairs = OrderMap::with_capacity(pair_ids.len());
+					let mut dict = Dict::with_capacity(pair_ids.len());
 					for (key_id, val_id) in pair_ids {
+						let span = chunk.get_expr_span(*key_id);
 						let key = self.eval_expr(chunk, *key_id)?;
-						if !key.is_hashable() {
-							let loc = self
-								.rt
-								.pkgs
-								.desc(self.pkg_id)
-								.loc(chunk.get_expr_span(*key_id));
-							return Err(Signal::raise(
-								Raised::Native(Error::ProtocolError(ProtocolError::NotHashable(
-									key.type_id(),
-								))),
-								vec![(String::new(), loc)],
-							));
-						}
+						let hash = self.hash(span, &key)?;
 						let val = self.eval_expr(chunk, *val_id)?;
-						pairs.insert(key, val);
+						let mut found = false;
+						for (index, candidate) in dict.candidates(hash) {
+							if self.equal(span, &candidate, &key)? {
+								dict.pairs[index].1 = val.clone();
+								found = true;
+								break;
+							}
+						}
+						if !found {
+							dict.insert(hash, key, val);
+						}
 					}
-					Val::Obj(Rc::new(RefCell::new(Obj::Dict(Dict { pairs }))))
+					Val::Obj(Rc::new(RefCell::new(Obj::Dict(dict))))
 				}
 				Lit::Nil => Val::Nil(Nil),
 			}),
@@ -1083,6 +1085,87 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			}
 		}
 		self.rt.member(val, name)
+	}
+
+	fn hash(&mut self, span: Span, val: &Val) -> Result<u64, Signal> {
+		let saved_hash_nodes = self.hash_nodes.replace(MAX_HASH_NODES);
+		let result = self.hash_bounded(span, val);
+		self.hash_nodes = saved_hash_nodes;
+		result
+	}
+
+	fn hash_bounded(&mut self, span: Span, val: &Val) -> Result<u64, Signal> {
+		let hash_nodes = self.hash_nodes.as_mut().unwrap();
+		if *hash_nodes == 0 {
+			return Ok(0);
+		}
+		if !self
+			.rt
+			.conforms(val.type_id(), self.rt.behaviors.hash.proto)
+		{
+			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+			return Err(Signal::raise(
+				Raised::Native(Error::ProtocolError(ProtocolError::NotHashable(
+					val.type_id(),
+				))),
+				vec![(String::new(), loc)],
+			));
+		}
+
+		*hash_nodes -= 1;
+
+		let name = self.rt.behaviors.hash.method;
+		let result = match self.rt.method(val.type_id(), name).unwrap() {
+			MethodImpl::Native(method) => self.call_native(span, method, val, Vec::new()),
+			MethodImpl::User(proc) => {
+				self.eval_proc_call(span, &proc.borrow(), Some(val.clone()), Vec::new())
+			}
+		}?;
+		let Val::Num(hash) = result else {
+			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+			return Err(Signal::raise(
+				Raised::Native(Error::ProtocolError(ProtocolError::NotHashable(
+					val.type_id(),
+				))),
+				vec![(String::new(), loc)],
+			));
+		};
+		Ok(hash.0.to_bits())
+	}
+
+	pub(crate) fn hash_val(&mut self, val: &Val) -> Result<u64, Raise> {
+		let span = self.call_span.unwrap();
+		let top_level = self.hash_nodes.is_none();
+		if top_level {
+			self.hash_nodes = Some(MAX_HASH_NODES);
+		}
+		let result = match self.hash_bounded(span, val) {
+			Ok(hash) => Ok(hash),
+			Err(Signal::Raise(raise)) => Err(raise),
+			Err(Signal::Return(_) | Signal::Break(_)) => panic!(),
+		};
+		if top_level {
+			self.hash_nodes = None;
+		}
+		result
+	}
+
+	pub(crate) fn start_derived_hash(&mut self) -> bool {
+		if self.hash_nodes.is_some() {
+			return false;
+		}
+		self.hash_nodes = Some(MAX_HASH_NODES - 1);
+		true
+	}
+
+	pub(crate) fn finish_derived_hash(&mut self, top_level: bool) {
+		if top_level {
+			self.hash_nodes = None;
+		}
+	}
+
+	pub(crate) fn hash_exhausted(&self) -> bool {
+		self.hash_nodes == Some(0)
 	}
 
 	fn equal(&mut self, span: Span, lhs: &Val, rhs: &Val) -> Result<bool, Signal> {
