@@ -20,6 +20,7 @@ test_files! {
 	test_lexical => "lexical.ms",
 	test_num => "num.ms",
 	test_bool => "bool.ms",
+	test_equal => "equal.ms",
 	test_str => "str.ms",
 	test_list => "list.ms",
 	test_dict => "dict.ms",

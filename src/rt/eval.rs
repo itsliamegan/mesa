@@ -9,7 +9,7 @@ use crate::intern::{Interner, Sym};
 use crate::pkg::{self, PackageId};
 use crate::rt::modules::Modules;
 use crate::rt::scope::{Local, Place, Scope, Tier};
-use crate::rt::types::{NativeMethod, NativeParam, Natives, TypeId, Types};
+use crate::rt::types::{MethodImpl, NativeMethod, NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
 	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, namespace_name,
 };
@@ -74,6 +74,7 @@ pub struct Interpreter<'syms, 'descs, 'rt> {
 	call_span: Option<Span>,
 	printing: HashSet<*const RefCell<Obj>>,
 	print_depth: usize,
+	equating: Vec<(*const RefCell<Obj>, *const RefCell<Obj>)>,
 }
 
 const MAX_PRINT_DEPTH: usize = 64;
@@ -112,6 +113,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			call_span: None,
 			printing: HashSet::new(),
 			print_depth: 0,
+			equating: Vec::new(),
 		}
 	}
 
@@ -770,8 +772,15 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					let lhs = self.eval_expr(chunk, binary.lhs)?;
 					let rhs = self.eval_expr(chunk, binary.rhs)?;
 					match &binary.op {
-						BinaryOp::Eq => Ok(Val::Bool(Bool(lhs == rhs))),
-						BinaryOp::NotEq => Ok(Val::Bool(Bool(lhs != rhs))),
+						BinaryOp::Eq | BinaryOp::NotEq => {
+							let span = chunk.get_expr_span(expr_id);
+							let equal = self.equal(span, &lhs, &rhs)?;
+							Ok(Val::Bool(Bool(match &binary.op {
+								BinaryOp::Eq => equal,
+								BinaryOp::NotEq => !equal,
+								_ => panic!(),
+							})))
+						}
 						BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => {
 							match (lhs, rhs) {
 								(Val::Num(lhs), Val::Num(rhs)) => {
@@ -1007,6 +1016,19 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					let mut pairs = OrderMap::with_capacity(pair_ids.len());
 					for (key_id, val_id) in pair_ids {
 						let key = self.eval_expr(chunk, *key_id)?;
+						if !key.is_hashable() {
+							let loc = self
+								.rt
+								.pkgs
+								.desc(self.pkg_id)
+								.loc(chunk.get_expr_span(*key_id));
+							return Err(Signal::raise(
+								Raised::Native(Error::ProtocolError(ProtocolError::NotHashable(
+									key.type_id(),
+								))),
+								vec![(String::new(), loc)],
+							));
+						}
 						let val = self.eval_expr(chunk, *val_id)?;
 						pairs.insert(key, val);
 					}
@@ -1061,6 +1083,44 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			}
 		}
 		self.rt.member(val, name)
+	}
+
+	fn equal(&mut self, span: Span, lhs: &Val, rhs: &Val) -> Result<bool, Signal> {
+		let pair = match (lhs, rhs) {
+			(Val::Obj(lhs), Val::Obj(rhs)) => Some((Rc::as_ptr(lhs), Rc::as_ptr(rhs))),
+			_ => None,
+		};
+		if let Some(pair) = pair {
+			if self.equating.contains(&pair) {
+				return Ok(true);
+			}
+			self.equating.push(pair);
+		}
+
+		let name = self.rt.behaviors.equal.method;
+		let result = match self.rt.method(lhs.type_id(), name).unwrap() {
+			MethodImpl::Native(method) => self.call_native(span, method, lhs, vec![rhs.clone()]),
+			MethodImpl::User(proc) => self.eval_proc_call(
+				span,
+				&proc.borrow(),
+				Some(lhs.clone()),
+				vec![(None, rhs.clone())],
+			),
+		};
+
+		if pair.is_some() {
+			self.equating.pop();
+		}
+		result.map(|val| val.is_truthy())
+	}
+
+	pub(crate) fn equal_vals(&mut self, lhs: &Val, rhs: &Val) -> Result<bool, Raise> {
+		let span = self.call_span.unwrap();
+		match self.equal(span, lhs, rhs) {
+			Ok(equal) => Ok(equal),
+			Err(Signal::Raise(raise)) => Err(raise),
+			Err(Signal::Return(_) | Signal::Break(_)) => panic!(),
+		}
 	}
 
 	fn print(&mut self, span: Span, val: &Val) -> Result<String, Signal> {

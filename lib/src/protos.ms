@@ -1,5 +1,9 @@
 module Core.Protos
 
+proto Equal
+	extern def equal(other) end
+end
+
 proto Inspect
 	extern def inspect end
 end

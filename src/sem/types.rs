@@ -390,6 +390,7 @@ fn describe_type(
 	// Every type has the built-in behaviors that are automatic rather than
 	// opted into, below all four tiers.
 	let mut methods = HashMap::new();
+	methods.insert(syms.intern(Behaviors::EQUAL.1), MethodSite::Derived);
 	methods.insert(syms.intern(Behaviors::INSPECT.1), MethodSite::Derived);
 	if let Some(inherited) = inherited {
 		methods.extend(&inherited.acquired);
@@ -623,6 +624,7 @@ fn describe_extern(
 	);
 
 	let mut methods = HashMap::new();
+	methods.insert(syms.intern(Behaviors::EQUAL.1), MethodSite::Derived);
 	methods.insert(syms.intern(Behaviors::INSPECT.1), MethodSite::Derived);
 	methods.extend(&acquired);
 	methods.extend(&declared);

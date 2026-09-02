@@ -303,6 +303,14 @@ mod core_types_tests {
 	}
 }
 
+const EQUAL: NativeMethod = NativeMethod {
+	params: &[NativeParam {
+		name: "other",
+		default: None,
+	}],
+	call: val::derived_equal,
+};
+
 const INSPECT: NativeMethod = NativeMethod {
 	params: &[],
 	call: val::derived_inspect,
@@ -325,7 +333,9 @@ const STORE: NativeMethod = NativeMethod {
 // The implementation of a method the language derives. A name the semantic
 // layer records as derived and no behavior here names is a broken build.
 fn derived_method(behaviors: &Behaviors, name: Sym) -> MethodImpl {
-	if name == behaviors.inspect.method {
+	if name == behaviors.equal.method {
+		MethodImpl::Native(EQUAL)
+	} else if name == behaviors.inspect.method {
 		MethodImpl::Native(INSPECT)
 	} else if name == behaviors.access.store {
 		MethodImpl::Native(STORE)

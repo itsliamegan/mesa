@@ -201,6 +201,13 @@ impl Val {
 			_ => true,
 		}
 	}
+
+	pub fn is_hashable(&self) -> bool {
+		matches!(
+			self,
+			Val::Num(_) | Val::Bool(_) | Val::Char(_) | Val::Str(_) | Val::Nil(_)
+		)
+	}
 }
 
 impl PartialEq for Val {
@@ -368,6 +375,13 @@ impl Dict {
 	}
 
 	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		if !args[0].is_hashable() {
+			return Err(
+				interp.native_error(Error::ProtocolError(ProtocolError::NotHashable(
+					args[0].type_id(),
+				))),
+			);
+		}
 		let Val::Obj(obj) = self_ else { panic!() };
 		let Obj::Dict(dict) = &*obj.borrow() else {
 			panic!()
@@ -382,7 +396,14 @@ impl Dict {
 		}
 	}
 
-	pub fn store(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+	pub fn store(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		if !args[0].is_hashable() {
+			return Err(
+				interp.native_error(Error::ProtocolError(ProtocolError::NotHashable(
+					args[0].type_id(),
+				))),
+			);
+		}
 		let Val::Obj(obj) = self_ else { panic!() };
 		let Obj::Dict(dict) = &mut *obj.borrow_mut() else {
 			panic!()
@@ -451,6 +472,86 @@ pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 		return format!("module {}", pkg_modules.name(syms, *id));
 	}
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
+}
+
+pub fn derived_equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+	let other = &args[0];
+	if self_.type_id() != other.type_id() {
+		return Ok(Val::Bool(Bool(false)));
+	}
+	let equal = match (self_, other) {
+		(Val::Num(num), Val::Num(other)) => num.0 == other.0,
+		(Val::Bool(bool), Val::Bool(other)) => bool.0 == other.0,
+		(Val::Char(char), Val::Char(other)) => char.0 == other.0,
+		(Val::Str(str), Val::Str(other)) => str.text == other.text,
+		(Val::Obj(obj), Val::Obj(other)) if Rc::ptr_eq(obj, other) => true,
+		(Val::Obj(obj), Val::Obj(other)) => {
+			let values = {
+				let obj = obj.borrow();
+				let other = other.borrow();
+				match (&*obj, &*other) {
+					(Obj::Instance(instance), Obj::Instance(other)) => {
+						let types::Type::User(desc) = interp
+							.rt()
+							.pkgs
+							.get(instance.pkg)
+							.types
+							.descs
+							.get_type(instance.type_)
+						else {
+							panic!()
+						};
+						desc.ctor_fields
+							.iter()
+							.map(|field| field.name)
+							.chain(desc.body_fields.iter().map(|(name, _)| *name))
+							.map(|name| {
+								(
+									instance.fields.get(&name).unwrap().clone(),
+									other.fields.get(&name).unwrap().clone(),
+								)
+							})
+							.collect::<Vec<_>>()
+					}
+					(Obj::List(list), Obj::List(other)) => {
+						if list.items.len() != other.items.len() {
+							return Ok(Val::Bool(Bool(false)));
+						}
+						list.items
+							.iter()
+							.cloned()
+							.zip(other.items.iter().cloned())
+							.collect()
+					}
+					(Obj::Dict(dict), Obj::Dict(other)) => {
+						if dict.pairs.len() != other.pairs.len() {
+							return Ok(Val::Bool(Bool(false)));
+						}
+						let mut values = Vec::with_capacity(dict.pairs.len());
+						for (key, val) in &dict.pairs {
+							let Some(other) = other.pairs.get(key) else {
+								return Ok(Val::Bool(Bool(false)));
+							};
+							values.push((val.clone(), other.clone()));
+						}
+						values
+					}
+					_ => return Ok(Val::Bool(Bool(false))),
+				}
+			};
+			let mut equal = true;
+			for (val, other) in values {
+				if !interp.equal_vals(&val, &other)? {
+					equal = false;
+					break;
+				}
+			}
+			equal
+		}
+		(Val::Nil(_), Val::Nil(_)) => true,
+		_ => unreachable!(),
+	};
+	Ok(Val::Bool(Bool(equal)))
 }
 
 pub fn derived_inspect(

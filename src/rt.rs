@@ -20,6 +20,7 @@ pub use pkg::Packages;
 pub use print::inspect_val;
 pub use types::{CORE_TYPES, NativeTypeSpec, Natives, TypeId};
 
+use types::MethodImpl;
 use val::{Member, Val};
 
 // The runtime's representation of the world. Contains every package built so
@@ -62,6 +63,13 @@ impl<'descs> Runtime<'descs> {
 				}
 			}
 			TypeId::Native(id) => syms.resolve(self.natives.get(id).name).to_string(),
+		}
+	}
+
+	pub fn method(&self, type_id: TypeId, name: Sym) -> Option<MethodImpl> {
+		match type_id {
+			TypeId::User(pkg, id) => self.pkgs.get(pkg).types.method(id, name),
+			TypeId::Native(id) => self.natives.get(id).methods.get(&name).cloned(),
 		}
 	}
 
@@ -167,6 +175,7 @@ pub enum ProtocolError {
 	NotOrderable(TypeId),
 	NotInspectable(TypeId),
 	NotDisplayable(TypeId),
+	NotHashable(TypeId),
 	NotImplemented(TypeId, Sym),
 }
 
@@ -231,6 +240,9 @@ impl ProtocolError {
 			}
 			Self::NotDisplayable(id) => {
 				format!("type {} is not displayable", rt.type_name(syms, *id))
+			}
+			Self::NotHashable(id) => {
+				format!("type {} is not hashable", rt.type_name(syms, *id))
 			}
 			Self::NotImplemented(id, member) => format!(
 				"type {} does not implement '{}'",

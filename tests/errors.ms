@@ -105,6 +105,13 @@ rescue e case Error.ProtocolError then
 end
 
 do
+	{}.access([1])
+rescue e case Error.ProtocolError then
+	#> Error.ProtocolError(cause: ProtocolError.NotHashable(message: "type List is not hashable"))
+	$print(e)
+end
+
+do
 	Collection()[0] := "Item"
 rescue e case Error.ProtocolError then
 	#> Error.ProtocolError(cause: ProtocolError.NotImplemented(message: "type Collection does not implement 'store'"))
@@ -365,7 +372,7 @@ end
 
 do
 	$print({}[Task("a")])
-rescue e case Error.KeyError then
-	#> Error.KeyError(message: "key Task(name: \"a\") not found")
+rescue e case Error.ProtocolError then
+	#> Error.ProtocolError(cause: ProtocolError.NotHashable(message: "type Task is not hashable"))
 	$print(e)
 end

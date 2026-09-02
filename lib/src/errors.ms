@@ -17,6 +17,7 @@ type ProtocolError
 	case NotOrderable(message) end
 	case NotInspectable(message) end
 	case NotDisplayable(message) end
+	case NotHashable(message) end
 	case NotImplemented(message) end
 end
 

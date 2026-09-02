@@ -96,7 +96,7 @@ $print(tag)
 
 #---
 
-#! runtime error: key Stack(top: 3, items: [1, 2], count: 0) not found
+#! runtime error: type Stack is not hashable
 
 type Stack(top)
 	items := [1, 2]
@@ -335,8 +335,8 @@ end
 $print(Task("a"))
 #> [task, task]
 $print([Task("a"), Task("b")])
-#> {task: task}
-$print({Task("a"): Task("b")})
+#> {"task": task}
+$print({"task": Task("b")})
 #> Group(tasks: [task])
 $print(Group([Task("a")]))
 

@@ -44,3 +44,34 @@ $print({"a": 1}["b"])
 #! runtime error: type Dict is not appendable
 
 {"id": 105} << "name"
+
+#---
+
+#! runtime error: type List is not hashable
+
+dict := {}
+dict[[1]] := 1
+
+#---
+
+#! runtime error: type Dict is not hashable
+
+key := {}
+{key: 1}
+
+#---
+
+#! runtime error: type Task is not hashable
+
+type Task(priority) end
+
+{}[Task(1)]
+
+#---
+
+#! runtime error: type Type is not hashable
+
+type Task(priority) end
+
+dict := {}
+dict[Task] := 1

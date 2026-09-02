@@ -67,6 +67,7 @@ pub struct AccessBehavior {
 // Every built-in behavior the interpreter dispatches through.
 #[derive(Debug)]
 pub struct Behaviors {
+	pub equal: Behavior,
 	pub order: Behavior,
 	pub display: Behavior,
 	pub inspect: Behavior,
@@ -77,6 +78,7 @@ pub struct Behaviors {
 impl Behaviors {
 	// The protocol governing each built-in behavior and the method it dispatches
 	// through, both fixed by the language.
+	pub const EQUAL: (&str, &str) = ("Equal", "equal");
 	pub const ORDER: (&str, &str) = ("Order", "order");
 	pub const DISPLAY: (&str, &str) = ("Display", "display");
 	// Automatic: every type has this method without opting in, so the type pass
@@ -95,6 +97,7 @@ pub fn build_behaviors(syms: &mut Interner, pkgs: &Packages, stdlib: PackageId) 
 		panic!("stdlib does not declare a 'Core.Protos' module");
 	};
 	Behaviors {
+		equal: build_behavior(syms, pkgs, stdlib, module, Behaviors::EQUAL),
 		order: build_behavior(syms, pkgs, stdlib, module, Behaviors::ORDER),
 		display: build_behavior(syms, pkgs, stdlib, module, Behaviors::DISPLAY),
 		inspect: build_behavior(syms, pkgs, stdlib, module, Behaviors::INSPECT),
