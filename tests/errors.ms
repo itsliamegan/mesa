@@ -336,3 +336,20 @@ raise Error.KeyError
 type Point(x, y) end
 
 raise Point(1, 2)
+
+#---
+
+import Core.Errors.Error
+
+type Task(name)
+	def inspect
+		"task"
+	end
+end
+
+do
+	$print({}[Task("a")])
+rescue e case Error.KeyError then
+	#> Error.KeyError(message: "key Task(name: \"a\") not found")
+	$print(e)
+end

@@ -10,6 +10,7 @@ use crate::intern::{Interner, Sym};
 use crate::pkg::PackageId;
 use crate::rt::Runtime;
 use crate::rt::eval::{Interpreter, Raise};
+use crate::rt::print;
 use crate::rt::scope::Scope;
 use crate::rt::types::{NativeMethod, NativeTypeId, TypeId};
 use crate::sem::modules::ModuleId;
@@ -22,6 +23,11 @@ use crate::syn::nodes::{BlockId, Param};
 pub struct Num(pub f64);
 
 impl Num {
+	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(num) = val else { panic!() };
+		Ok(Str::of(&print::print_num(num.0)))
+	}
+
 	pub fn new() -> Val {
 		Val::Num(Num(0.0))
 	}
@@ -39,6 +45,11 @@ impl Num {
 pub struct Bool(pub bool);
 
 impl Bool {
+	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Bool(bool) = val else { panic!() };
+		Ok(Str::of(&print::print_bool(bool.0)))
+	}
+
 	pub fn new() -> Val {
 		Val::Bool(Bool(false))
 	}
@@ -48,6 +59,16 @@ impl Bool {
 pub struct Char(pub char);
 
 impl Char {
+	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = val else { panic!() };
+		Ok(Str::of(&print::print_char(char.0)))
+	}
+
+	pub fn display(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = val else { panic!() };
+		Ok(Str::of(&char.0.to_string()))
+	}
+
 	pub fn order(_interp: &mut Interpreter, val: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Char(Char(this)) = val else { panic!() };
 		let Val::Char(Char(other)) = &args[0] else {
@@ -64,11 +85,28 @@ pub struct Str {
 }
 
 impl Str {
+	pub fn of(text: &str) -> Val {
+		Val::Str(Rc::new(Str {
+			text: Box::from(text),
+			size: Cell::new(None),
+		}))
+	}
+
 	pub fn new() -> Val {
 		Val::Str(Rc::new(Str {
 			text: Box::from(""),
 			size: Cell::new(None),
 		}))
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(str) = val else { panic!() };
+		Ok(Str::of(&print::print_str(&str.text)))
+	}
+
+	pub fn display(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(str) = val else { panic!() };
+		Ok(Str::of(&str.text))
 	}
 
 	pub fn size(_interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -110,6 +148,10 @@ impl Str {
 pub struct Nil;
 
 impl Nil {
+	pub fn inspect(_interp: &mut Interpreter, _val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		Ok(Str::of(&print::print_nil()))
+	}
+
 	pub fn new() -> Val {
 		Val::Nil(Nil)
 	}
@@ -239,6 +281,21 @@ impl List {
 		};
 		Ok(Val::Num(Num(list.items.len() as f64)))
 	}
+
+	pub fn inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = val else { panic!() };
+		let items = {
+			let Obj::List(list) = &*obj.borrow() else {
+				panic!()
+			};
+			list.items.clone()
+		};
+		let mut printed = Vec::new();
+		for item in &items {
+			printed.push(interp.inspect(item)?);
+		}
+		Ok(Str::of(&print::print_list(&printed)))
+	}
 }
 
 #[derive(Debug)]
@@ -259,6 +316,24 @@ impl Dict {
 			panic!()
 		};
 		Ok(Val::Num(Num(dict.pairs.len() as f64)))
+	}
+
+	pub fn inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = val else { panic!() };
+		let pairs = {
+			let Obj::Dict(dict) = &*obj.borrow() else {
+				panic!()
+			};
+			dict.pairs
+				.iter()
+				.map(|(key, val)| (key.clone(), val.clone()))
+				.collect::<Vec<_>>()
+		};
+		let mut printed = Vec::new();
+		for (key, val) in &pairs {
+			printed.push((interp.inspect(key)?, interp.inspect(val)?));
+		}
+		Ok(Str::of(&print::print_dict(&printed)))
 	}
 }
 
@@ -303,4 +378,76 @@ pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 		return format!("module {}", pkg_modules.name(syms, *id));
 	}
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
+}
+
+pub fn derived_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let instance = match val {
+		Val::Obj(obj) => match &*obj.borrow() {
+			Obj::Instance(instance) => {
+				Some(print::instance_fields(interp.syms(), interp.rt(), instance))
+			}
+			_ => None,
+		},
+		_ => None,
+	};
+	let Some((name, fields)) = instance else {
+		return Ok(Str::of(&print::inspect_val(
+			interp.syms(),
+			interp.rt(),
+			val,
+		)));
+	};
+	let mut printed = Vec::new();
+	for (field, val) in &fields {
+		printed.push((field.clone(), interp.inspect(val)?));
+	}
+	Ok(Str::of(&print::print_instance(&name, &printed)))
+}
+
+pub fn proc_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = val else { panic!() };
+	let text = match &*obj.borrow() {
+		Obj::Proc(proc) => print::print_proc(interp.syms(), proc),
+		Obj::Method(method) => print::print_method(interp.syms(), method),
+		_ => panic!(),
+	};
+	Ok(Str::of(&text))
+}
+
+pub fn type_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = val else { panic!() };
+	let Obj::Type(type_id) = &*obj.borrow() else {
+		panic!()
+	};
+	Ok(Str::of(&print::print_type(
+		interp.syms(),
+		interp.rt(),
+		*type_id,
+	)))
+}
+
+pub fn proto_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = val else { panic!() };
+	let Obj::Proto(pkg, proto_id) = &*obj.borrow() else {
+		panic!()
+	};
+	Ok(Str::of(&print::print_proto(
+		interp.syms(),
+		interp.rt(),
+		*pkg,
+		*proto_id,
+	)))
+}
+
+pub fn module_inspect(interp: &mut Interpreter, val: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = val else { panic!() };
+	let Obj::Module(pkg, id) = &*obj.borrow() else {
+		panic!()
+	};
+	Ok(Str::of(&print::print_module(
+		interp.syms(),
+		interp.rt(),
+		*pkg,
+		*id,
+	)))
 }

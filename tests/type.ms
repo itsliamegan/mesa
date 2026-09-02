@@ -42,7 +42,7 @@ type Rect(w, h)
 end
 
 r := Rect(4, 6)
-#> Rect(w: 4, h: 6)
+#> Rect(w: 4, h: 6, area: 24, half_area: 12)
 $print(r)
 #> 24
 $print(r.area)
@@ -287,7 +287,7 @@ $print(Task.priority)
 #---
 
 #> Task(name: "laundry", priority: 2)
-#> Group(items: [1, 2])
+#> a group
 #> a group
 
 type Task(name, priority)
@@ -302,3 +302,52 @@ end
 $print(Task("laundry", 2).inspect)
 $print(Group([1, 2]))
 $print(Group([1, 2]).inspect)
+
+#---
+
+import Core.Protos.Display
+
+type Group(items)
+	impl Display
+
+	def display
+		"a group"
+	end
+end
+
+#> a group
+$print(Group([1, 2]))
+#> Group(items: [1, 2])
+$print(Group([1, 2]).inspect)
+
+#---
+
+type Task(name)
+	def inspect
+		"task"
+	end
+end
+
+type Group(tasks)
+end
+
+#> task
+$print(Task("a"))
+#> [task, task]
+$print([Task("a"), Task("b")])
+#> {task: task}
+$print({Task("a"): Task("b")})
+#> Group(tasks: [task])
+$print(Group([Task("a")]))
+
+#---
+
+type Node(n)
+	def inspect
+		[Node(self.n + 1)].inspect
+		"node"
+	end
+end
+
+#> node
+$print(Node(0))

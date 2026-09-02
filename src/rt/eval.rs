@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use ordermap::OrderMap;
@@ -11,10 +11,10 @@ use crate::rt::modules::Modules;
 use crate::rt::scope::{Local, Place, Scope, Tier};
 use crate::rt::types::{NativeMethod, NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
-	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val,
+	Bool, Char, Dict, Instance, List, Member, Method, Nil, Num, Obj, Proc, Str, Val, namespace_name,
 };
 use crate::rt::{
-	ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError, display_val,
+	ArgumentError, Error, IndexError, MemberError, ProtocolError, Runtime, TypeError, inspect_val,
 };
 use crate::sem::modules;
 use crate::sem::types::Type;
@@ -72,7 +72,11 @@ pub struct Interpreter<'syms, 'descs, 'rt> {
 	scope: Rc<RefCell<Scope>>,
 	receiver: Option<Val>,
 	call_span: Option<Span>,
+	printing: HashSet<*const RefCell<Obj>>,
+	print_depth: usize,
 }
+
+const MAX_PRINT_DEPTH: usize = 64;
 
 pub enum Raised {
 	Native(Error),
@@ -106,6 +110,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			scope,
 			receiver: None,
 			call_span: None,
+			printing: HashSet::new(),
+			print_depth: 0,
 		}
 	}
 
@@ -618,7 +624,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.desc(self.pkg_id)
 									.loc(chunk.get_expr_span(expr_id));
 								Err(Signal::raise(
-									Raised::Native(Error::KeyError(key)),
+									Raised::Native(Error::KeyError(inspect_val(
+										self.syms, self.rt, &key,
+									))),
 									vec![(String::new(), loc)],
 								))
 							}
@@ -690,7 +698,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								.loc(chunk.get_expr_span(expr_id));
 							return Err(Signal::raise(
 								Raised::Native(Error::MemberError(MemberError::ReadOnly(
-									namespace, sym,
+									namespace_name(self.syms, self.rt, &namespace),
+									sym,
 								))),
 								vec![(String::new(), loc)],
 							));
@@ -708,7 +717,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 									.loc(chunk.get_expr_span(expr_id));
 								return Err(Signal::raise(
 									Raised::Native(Error::MemberError(MemberError::ReadOnly(
-										receiver.clone(),
+										namespace_name(self.syms, self.rt, &receiver),
 										member.name,
 									))),
 									vec![(String::new(), loc)],
@@ -723,7 +732,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								.loc(chunk.get_expr_span(expr_id));
 							Err(Signal::raise(
 								Raised::Native(Error::MemberError(MemberError::Missing(
-									receiver.clone(),
+									namespace_name(self.syms, self.rt, &receiver),
 									member.name,
 								))),
 								vec![(String::new(), loc)],
@@ -1021,7 +1030,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Print { val: val_id } => {
 					let val = self.eval_expr(chunk, *val_id)?;
-					println!("{}", display_val(self.syms, self.rt, &val));
+					let span = chunk.get_expr_span(expr_id);
+					println!("{}", self.print(span, &val)?);
 					Ok(val)
 				}
 				Builtin::Type { val: val_id } => {
@@ -1109,6 +1119,64 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 			}
 		}
 		self.rt.member(val, name)
+	}
+
+	fn print(&mut self, span: Span, val: &Val) -> Result<String, Signal> {
+		let method = if self
+			.rt
+			.conforms(val.type_id(), self.rt.behaviors.display.proto)
+		{
+			self.rt.behaviors.display.method
+		} else {
+			self.rt.behaviors.inspect.method
+		};
+		self.print_via(span, val, method)
+	}
+
+	pub(crate) fn inspect(&mut self, val: &Val) -> Result<String, Raise> {
+		let span = self.call_span.unwrap();
+		let method = self.rt.behaviors.inspect.method;
+		match self.print_via(span, val, method) {
+			Ok(text) => Ok(text),
+			Err(Signal::Raise(raise)) => Err(raise),
+			Err(Signal::Return(_) | Signal::Break(_)) => panic!(),
+		}
+	}
+
+	fn print_via(&mut self, span: Span, val: &Val, method: Sym) -> Result<String, Signal> {
+		if self.print_depth == MAX_PRINT_DEPTH {
+			return Ok(String::from("..."));
+		}
+		let ptr = match val {
+			Val::Obj(obj) => Some(Rc::as_ptr(obj)),
+			_ => None,
+		};
+		if let Some(ptr) = ptr
+			&& !self.printing.insert(ptr)
+		{
+			return Ok(String::from("..."));
+		}
+		self.print_depth += 1;
+		let result = self.call_member(span, val.clone(), method, vec![]);
+		self.print_depth -= 1;
+		if let Some(ptr) = ptr {
+			self.printing.remove(&ptr);
+		}
+		// A conforming type promised a 'Str'. Anything else is a bug in that
+		// type's implementation of the protocol.
+		let Val::Str(str) = result? else {
+			let err = if method == self.rt.behaviors.display.method {
+				ProtocolError::NotDisplayable(val.type_id())
+			} else {
+				ProtocolError::NotInspectable(val.type_id())
+			};
+			let loc = self.rt.pkgs.desc(self.pkg_id).loc(span);
+			return Err(Signal::raise(
+				Raised::Native(Error::ProtocolError(err)),
+				vec![(String::new(), loc)],
+			));
+		};
+		Ok(str.text.to_string())
 	}
 
 	// Resolve and call a member by name on a receiver. The caller vouches for
@@ -1245,7 +1313,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
 			Err(Signal::raise(
-				Raised::Native(Error::MemberError(MemberError::Missing(val.clone(), name))),
+				Raised::Native(Error::MemberError(MemberError::Missing(
+					namespace_name(self.syms, self.rt, &val),
+					name,
+				))),
 				vec![(String::new(), loc)],
 			))
 		}
@@ -1267,7 +1338,9 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					.desc(self.pkg_id)
 					.loc(chunk.get_expr_span(expr_id));
 				return Err(Signal::raise(
-					Raised::Native(Error::TypeError(TypeError::IndexNonNum(val))),
+					Raised::Native(Error::TypeError(TypeError::IndexNonNum(inspect_val(
+						self.syms, self.rt, &val,
+					)))),
 					vec![(String::new(), loc)],
 				));
 			}

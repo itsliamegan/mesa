@@ -670,3 +670,60 @@ type Task(priority)
 end
 
 $print(Task(1) < Task(2))
+
+#---
+
+#> x
+$print("x".display)
+#> "x"
+$print("x".inspect)
+#> a
+$print('a'.display)
+#> 'a'
+$print('a'.inspect)
+
+#> Multi-
+#> line
+$print("Multi-\nline".display)
+#> "Multi-\nline"
+$print("Multi-\nline".inspect)
+
+#---
+
+#! semantic error: type 'Task' does not implement 'display', required by protocol 'Display'
+
+import Core.Protos.Display
+
+type Task(priority)
+	impl Display
+end
+
+$print(Task(1))
+
+#---
+
+#! runtime error: type Task is not inspectable
+
+type Task(name)
+	def inspect
+		0
+	end
+end
+
+$print(Task("a"))
+
+#---
+
+#! runtime error: type Task is not displayable
+
+import Core.Protos.Display
+
+type Task(name)
+	impl Display
+
+	def display
+		0
+	end
+end
+
+$print(Task("a"))

@@ -15,6 +15,8 @@ type ProtocolError
 	case NotAccessible(message) end
 	case NotAppendable(message) end
 	case NotOrderable(message) end
+	case NotInspectable(message) end
+	case NotDisplayable(message) end
 end
 
 type ArgumentError

@@ -47,6 +47,8 @@ const TAXONOMY: &[(&str, &[&str])] = &[
 			"NotAccessible",
 			"NotAppendable",
 			"NotOrderable",
+			"NotInspectable",
+			"NotDisplayable",
 		],
 	),
 	(
@@ -143,6 +145,8 @@ fn path(err: &Error) -> (&'static str, Option<&'static str>) {
 				ProtocolError::NotAccessible(_) => "NotAccessible",
 				ProtocolError::NotAppendable(_) => "NotAppendable",
 				ProtocolError::NotOrderable(_) => "NotOrderable",
+				ProtocolError::NotInspectable(_) => "NotInspectable",
+				ProtocolError::NotDisplayable(_) => "NotDisplayable",
 			}),
 		),
 		Error::ArgumentError(err) => (

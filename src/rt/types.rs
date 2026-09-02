@@ -8,8 +8,8 @@ use crate::intern::{Interner, Sym};
 use crate::pkg::{Package, PackageId};
 use crate::rt::eval::{Interpreter, Raise};
 use crate::rt::pkg::Packages;
-use crate::rt::render;
 use crate::rt::scope::Scopes;
+use crate::rt::val;
 use crate::rt::val::{Bool, Char, Dict, List, Nil, Num, Obj, Proc, Str, Val};
 use crate::sem::protos::{Behaviors, ProtoId};
 use crate::sem::types::{self, MethodSite};
@@ -115,39 +115,46 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Nil",
 		new: Some(Nil::new),
-		methods: &[],
+		methods: &[("inspect", &[], Nil::inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Num",
 		new: Some(Num::new),
-		methods: &[(
-			"order",
-			&[NativeParam {
-				name: "other",
-				default: None,
-			}],
-			Num::order,
-		)],
+		methods: &[
+			(
+				"order",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Num::order,
+			),
+			("inspect", &[], Num::inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Bool",
 		new: Some(Bool::new),
-		methods: &[],
+		methods: &[("inspect", &[], Bool::inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Char",
 		new: None,
-		methods: &[(
-			"order",
-			&[NativeParam {
-				name: "other",
-				default: None,
-			}],
-			Char::order,
-		)],
+		methods: &[
+			(
+				"order",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Char::order,
+			),
+			("display", &[], Char::display),
+			("inspect", &[], Char::inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
@@ -164,43 +171,45 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Str::order,
 			),
+			("display", &[], Str::display),
+			("inspect", &[], Str::inspect),
 		],
 		statics: &[("empty", &[], Str::empty)],
 	},
 	NativeTypeSpec {
 		name: "List",
 		new: Some(List::new),
-		methods: &[("size", &[], List::size)],
+		methods: &[("size", &[], List::size), ("inspect", &[], List::inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Dict",
 		new: Some(Dict::new),
-		methods: &[("size", &[], Dict::size)],
+		methods: &[("size", &[], Dict::size), ("inspect", &[], Dict::inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Proc",
 		new: None,
-		methods: &[],
+		methods: &[("inspect", &[], val::proc_inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Type",
 		new: None,
-		methods: &[],
+		methods: &[("inspect", &[], val::type_inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Proto",
 		new: None,
-		methods: &[],
+		methods: &[("inspect", &[], val::proto_inspect)],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Module",
 		new: None,
-		methods: &[],
+		methods: &[("inspect", &[], val::module_inspect)],
 		statics: &[],
 	},
 ];
@@ -238,7 +247,7 @@ mod core_types_tests {
 
 const INSPECT: NativeMethod = NativeMethod {
 	params: &[],
-	call: render::inspect_member,
+	call: val::derived_inspect,
 };
 
 // The implementation of a method the language derives. A name the semantic

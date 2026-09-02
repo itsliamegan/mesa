@@ -3,7 +3,7 @@ mod eval;
 mod modules;
 mod native;
 pub mod pkg;
-mod render;
+mod print;
 mod scope;
 mod types;
 mod val;
@@ -17,10 +17,10 @@ pub use err::{Errors, build_errors};
 pub use eval::{Prelude, Raise, Raised, build_prelude};
 pub use native::TYPES as STDLIB_NATIVE_TYPES;
 pub use pkg::Packages;
-pub use render::{display_val, inspect_val};
+pub use print::inspect_val;
 pub use types::{CORE_TYPES, NativeTypeSpec, Natives, TypeId};
 
-use val::{Member, Val, namespace_name};
+use val::{Member, Val};
 
 // The runtime's representation of the world. Contains every package built so
 // far and the native implementations any of them may bind an 'extern' to.
@@ -156,7 +156,7 @@ pub enum Error {
 	MemberError(MemberError),
 	IndexError(IndexError),
 	NameError(Sym),
-	KeyError(Val),
+	KeyError(String),
 }
 
 #[derive(Debug)]
@@ -165,6 +165,8 @@ pub enum ProtocolError {
 	NotAccessible(TypeId),
 	NotAppendable(TypeId),
 	NotOrderable(TypeId),
+	NotInspectable(TypeId),
+	NotDisplayable(TypeId),
 }
 
 #[derive(Debug)]
@@ -177,7 +179,7 @@ pub enum ArgumentError {
 
 #[derive(Debug)]
 pub enum TypeError {
-	IndexNonNum(Val),
+	IndexNonNum(String),
 	ArithNonNum(TypeId),
 	ConcatNonStr(TypeId),
 	NotCallable(TypeId),
@@ -188,8 +190,8 @@ pub enum TypeError {
 
 #[derive(Debug)]
 pub enum MemberError {
-	Missing(Val, Sym),
-	ReadOnly(Val, Sym),
+	Missing(String, Sym),
+	ReadOnly(String, Sym),
 }
 
 #[derive(Debug)]
@@ -204,10 +206,10 @@ impl Error {
 			Self::ProtocolError(err) => err.message(syms, rt),
 			Self::ArgumentError(err) => err.message(syms),
 			Self::TypeError(err) => err.message(syms, rt),
-			Self::MemberError(err) => err.message(syms, rt),
+			Self::MemberError(err) => err.message(syms),
 			Self::IndexError(err) => err.message(),
 			Self::NameError(name) => format!("name '{}' is not defined", syms.resolve(*name)),
-			Self::KeyError(key) => format!("key {} not found", inspect_val(syms, rt, key)),
+			Self::KeyError(key) => format!("key {} not found", key),
 		}
 	}
 }
@@ -223,6 +225,12 @@ impl ProtocolError {
 				format!("type {} is not appendable", rt.type_name(syms, *id))
 			}
 			Self::NotOrderable(id) => format!("type {} is not orderable", rt.type_name(syms, *id)),
+			Self::NotInspectable(id) => {
+				format!("type {} is not inspectable", rt.type_name(syms, *id))
+			}
+			Self::NotDisplayable(id) => {
+				format!("type {} is not displayable", rt.type_name(syms, *id))
+			}
 		}
 	}
 }
@@ -251,9 +259,7 @@ impl ArgumentError {
 impl TypeError {
 	fn message(&self, syms: &Interner, rt: &Runtime) -> String {
 		match self {
-			Self::IndexNonNum(val) => {
-				format!("index {} is not a number", inspect_val(syms, rt, val))
-			}
+			Self::IndexNonNum(index) => format!("index {} is not a number", index),
 			Self::ArithNonNum(id) => format!(
 				"type {} cannot be used in arithmetic",
 				rt.type_name(syms, *id)
@@ -274,18 +280,18 @@ impl TypeError {
 }
 
 impl MemberError {
-	fn message(&self, syms: &Interner, rt: &Runtime) -> String {
+	fn message(&self, syms: &Interner) -> String {
 		match self {
-			Self::Missing(namespace, name) => format!(
-				"{} has no such member '{}'",
-				namespace_name(syms, rt, namespace),
-				syms.resolve(*name)
-			),
-			Self::ReadOnly(namespace, name) => format!(
-				"member '{}' on {} is read-only",
-				syms.resolve(*name),
-				namespace_name(syms, rt, namespace)
-			),
+			Self::Missing(namespace, name) => {
+				format!("{} has no such member '{}'", namespace, syms.resolve(*name))
+			}
+			Self::ReadOnly(namespace, name) => {
+				format!(
+					"member '{}' on {} is read-only",
+					syms.resolve(*name),
+					namespace
+				)
+			}
 		}
 	}
 }
