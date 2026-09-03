@@ -116,7 +116,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Nil",
 		new: Some(Nil::new),
 		methods: &[
-			("hash", &[], Nil::hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -125,6 +124,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Nil::equal,
 			),
+			("hash", &[], Nil::hash),
 			("inspect", &[], Nil::inspect),
 		],
 		statics: &[],
@@ -133,7 +133,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Num",
 		new: Some(Num::new),
 		methods: &[
-			("hash", &[], Num::hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -142,6 +141,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Num::equal,
 			),
+			("hash", &[], Num::hash),
 			(
 				"order",
 				&[NativeParam {
@@ -158,7 +158,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Bool",
 		new: Some(Bool::new),
 		methods: &[
-			("hash", &[], Bool::hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -167,6 +166,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Bool::equal,
 			),
+			("hash", &[], Bool::hash),
 			("inspect", &[], Bool::inspect),
 		],
 		statics: &[],
@@ -175,7 +175,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Char",
 		new: None,
 		methods: &[
-			("hash", &[], Char::hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -184,6 +183,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Char::equal,
 			),
+			("hash", &[], Char::hash),
 			(
 				"order",
 				&[NativeParam {
@@ -201,7 +201,8 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Str",
 		new: Some(Str::new),
 		methods: &[
-			("hash", &[], Str::hash),
+			("chars", &[], Str::chars),
+			("size", &[], Str::size),
 			(
 				"equal",
 				&[NativeParam {
@@ -210,8 +211,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Str::equal,
 			),
-			("size", &[], Str::size),
-			("chars", &[], Str::chars),
+			("hash", &[], Str::hash),
 			(
 				"order",
 				&[NativeParam {
@@ -226,8 +226,8 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		statics: &[("empty", &[], Str::empty)],
 	},
 	NativeTypeSpec {
-		name: "List",
-		new: Some(List::new),
+		name: "Digest",
+		new: None,
 		methods: &[
 			(
 				"equal",
@@ -235,17 +235,25 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 					name: "other",
 					default: None,
 				}],
-				List::equal,
+				Digest::equal,
 			),
+			("hash", &[], Digest::hash),
+			("inspect", &[], Digest::inspect),
+		],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "List",
+		new: Some(List::new),
+		methods: &[
 			("size", &[], List::size),
-			("inspect", &[], List::inspect),
 			(
-				"append",
+				"equal",
 				&[NativeParam {
-					name: "item",
+					name: "other",
 					default: None,
 				}],
-				List::append,
+				List::equal,
 			),
 			(
 				"access",
@@ -269,6 +277,15 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				],
 				List::store,
 			),
+			(
+				"append",
+				&[NativeParam {
+					name: "item",
+					default: None,
+				}],
+				List::append,
+			),
+			("inspect", &[], List::inspect),
 		],
 		statics: &[],
 	},
@@ -276,6 +293,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Dict",
 		new: Some(Dict::new),
 		methods: &[
+			("size", &[], Dict::size),
 			(
 				"equal",
 				&[NativeParam {
@@ -284,8 +302,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				Dict::equal,
 			),
-			("size", &[], Dict::size),
-			("inspect", &[], Dict::inspect),
 			(
 				"access",
 				&[NativeParam {
@@ -308,6 +324,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				],
 				Dict::store,
 			),
+			("inspect", &[], Dict::inspect),
 		],
 		statics: &[],
 	},
@@ -315,7 +332,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Proc",
 		new: None,
 		methods: &[
-			("hash", &[], val::proc_hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -324,6 +340,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				val::identity_equal,
 			),
+			("hash", &[], val::proc_hash),
 			("inspect", &[], val::proc_inspect),
 		],
 		statics: &[],
@@ -332,7 +349,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Type",
 		new: None,
 		methods: &[
-			("hash", &[], val::type_hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -341,6 +357,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				val::identity_equal,
 			),
+			("hash", &[], val::type_hash),
 			("inspect", &[], val::type_inspect),
 		],
 		statics: &[],
@@ -349,7 +366,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Proto",
 		new: None,
 		methods: &[
-			("hash", &[], val::proto_hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -358,6 +374,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				val::identity_equal,
 			),
+			("hash", &[], val::proto_hash),
 			("inspect", &[], val::proto_inspect),
 		],
 		statics: &[],
@@ -366,7 +383,6 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Module",
 		new: None,
 		methods: &[
-			("hash", &[], val::module_hash),
 			(
 				"equal",
 				&[NativeParam {
@@ -375,24 +391,8 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 				}],
 				val::identity_equal,
 			),
+			("hash", &[], val::module_hash),
 			("inspect", &[], val::module_inspect),
-		],
-		statics: &[],
-	},
-	NativeTypeSpec {
-		name: "Digest",
-		new: None,
-		methods: &[
-			("hash", &[], Digest::hash),
-			(
-				"equal",
-				&[NativeParam {
-					name: "other",
-					default: None,
-				}],
-				Digest::equal,
-			),
-			("inspect", &[], Digest::inspect),
 		],
 		statics: &[],
 	},
@@ -404,13 +404,13 @@ impl NativeTypeId {
 	pub const BOOL: NativeTypeId = NativeTypeId::new(2);
 	pub const CHAR: NativeTypeId = NativeTypeId::new(3);
 	pub const STR: NativeTypeId = NativeTypeId::new(4);
-	pub const LIST: NativeTypeId = NativeTypeId::new(5);
-	pub const DICT: NativeTypeId = NativeTypeId::new(6);
-	pub const PROC: NativeTypeId = NativeTypeId::new(7);
-	pub const TYPE: NativeTypeId = NativeTypeId::new(8);
-	pub const PROTO: NativeTypeId = NativeTypeId::new(9);
-	pub const MODULE: NativeTypeId = NativeTypeId::new(10);
-	pub const DIGEST: NativeTypeId = NativeTypeId::new(11);
+	pub const DIGEST: NativeTypeId = NativeTypeId::new(5);
+	pub const LIST: NativeTypeId = NativeTypeId::new(6);
+	pub const DICT: NativeTypeId = NativeTypeId::new(7);
+	pub const PROC: NativeTypeId = NativeTypeId::new(8);
+	pub const TYPE: NativeTypeId = NativeTypeId::new(9);
+	pub const PROTO: NativeTypeId = NativeTypeId::new(10);
+	pub const MODULE: NativeTypeId = NativeTypeId::new(11);
 }
 
 #[cfg(test)]
@@ -424,8 +424,8 @@ mod core_types_tests {
 	fn core_types_match_reserved_slots() {
 		let names: Vec<&str> = CORE_TYPES.iter().map(|spec| spec.name).collect();
 		let expected = [
-			"Nil", "Num", "Bool", "Char", "Str", "List", "Dict", "Proc", "Type", "Proto", "Module",
-			"Digest",
+			"Nil", "Num", "Bool", "Char", "Str", "Digest", "List", "Dict", "Proc", "Type", "Proto",
+			"Module",
 		];
 		assert_eq!(names, expected);
 	}

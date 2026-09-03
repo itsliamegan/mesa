@@ -27,14 +27,12 @@ impl Num {
 		Val::Num(Num(0.0))
 	}
 
-	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Num(Num(self_)) = self_ else {
-			panic!()
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(num) = self_ else { panic!() };
+		let Val::Num(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
 		};
-		let Val::Num(Num(other)) = &args[0] else {
-			panic!()
-		};
-		Ok(Val::Num(Num(self_ - other)))
+		Ok(Val::Bool(Bool(num.0 == other.0)))
 	}
 
 	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -45,12 +43,14 @@ impl Num {
 		))
 	}
 
-	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Num(num) = self_ else { panic!() };
-		let Val::Num(other) = &args[0] else {
-			return Ok(Val::Bool(Bool(false)));
+	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(Num(self_)) = self_ else {
+			panic!()
 		};
-		Ok(Val::Bool(Bool(num.0 == other.0)))
+		let Val::Num(Num(other)) = &args[0] else {
+			panic!()
+		};
+		Ok(Val::Num(Num(self_ - other)))
 	}
 
 	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -67,19 +67,19 @@ impl Bool {
 		Val::Bool(Bool(false))
 	}
 
-	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Bool(bool) = self_ else { panic!() };
-		Ok(Val::Digest(
-			hash_type_id(self_.type_id()).mix(Digest(u64::from(bool.0))),
-		))
-	}
-
 	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Bool(bool) = self_ else { panic!() };
 		let Val::Bool(other) = &args[0] else {
 			return Ok(Val::Bool(Bool(false)));
 		};
 		Ok(Val::Bool(Bool(bool.0 == other.0)))
+	}
+
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Bool(bool) = self_ else { panic!() };
+		Ok(Val::Digest(
+			hash_type_id(self_.type_id()).mix(Digest(u64::from(bool.0))),
+		))
 	}
 
 	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -100,6 +100,13 @@ impl Char {
 		Ok(Val::Bool(Bool(char.0 == other.0)))
 	}
 
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = self_ else { panic!() };
+		Ok(Val::Digest(
+			hash_type_id(self_.type_id()).mix(Digest(char.0 as u64)),
+		))
+	}
+
 	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Char(Char(self_)) = self_ else {
 			panic!()
@@ -108,13 +115,6 @@ impl Char {
 			panic!()
 		};
 		Ok(Val::Num(Num(*self_ as u32 as f64 - *other as u32 as f64)))
-	}
-
-	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Char(char) = self_ else { panic!() };
-		Ok(Val::Digest(
-			hash_type_id(self_.type_id()).mix(Digest(char.0 as u64)),
-		))
 	}
 
 	pub fn display(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -149,6 +149,10 @@ impl Str {
 		}))
 	}
 
+	pub fn empty(_interp: &mut Interpreter, _self: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		Ok(Str::new())
+	}
+
 	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(str) = self_ else { panic!() };
 		let size = match str.size.get() {
@@ -162,25 +166,18 @@ impl Str {
 		Ok(Val::Num(Num(size)))
 	}
 
-	pub fn empty(_interp: &mut Interpreter, _self: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		Ok(Str::new())
-	}
-
 	pub fn chars(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(str) = self_ else { panic!() };
 		let items = str.text.chars().map(|c| Val::Char(Char(c))).collect();
 		Ok(Val::Obj(Rc::new(RefCell::new(Obj::List(List { items })))))
 	}
 
-	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(self_) = self_ else { panic!() };
-		let Val::Str(other) = &args[0] else { panic!() };
-		let order = match self_.text.cmp(&other.text) {
-			std::cmp::Ordering::Less => -1.0,
-			std::cmp::Ordering::Equal => 0.0,
-			std::cmp::Ordering::Greater => 1.0,
+		let Val::Str(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
 		};
-		Ok(Val::Num(Num(order)))
+		Ok(Val::Bool(Bool(self_.text == other.text)))
 	}
 
 	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -192,12 +189,15 @@ impl Str {
 		))
 	}
 
-	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(self_) = self_ else { panic!() };
-		let Val::Str(other) = &args[0] else {
-			return Ok(Val::Bool(Bool(false)));
+		let Val::Str(other) = &args[0] else { panic!() };
+		let order = match self_.text.cmp(&other.text) {
+			std::cmp::Ordering::Less => -1.0,
+			std::cmp::Ordering::Equal => 0.0,
+			std::cmp::Ordering::Greater => 1.0,
 		};
-		Ok(Val::Bool(Bool(self_.text == other.text)))
+		Ok(Val::Num(Num(order)))
 	}
 
 	pub fn display(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -219,15 +219,15 @@ impl Nil {
 		Val::Nil(Nil)
 	}
 
-	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		Ok(Val::Digest(hash_type_id(self_.type_id())))
-	}
-
 	pub fn equal(_interp: &mut Interpreter, _self: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Nil(_) = &args[0] else {
 			return Ok(Val::Bool(Bool(false)));
 		};
 		Ok(Val::Bool(Bool(true)))
+	}
+
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		Ok(Val::Digest(hash_type_id(self_.type_id())))
 	}
 
 	pub fn inspect(_interp: &mut Interpreter, _self: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -325,17 +325,17 @@ impl Digest {
 		Digest(mixed ^ (mixed >> 31))
 	}
 
-	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Digest(digest) = self_ else { panic!() };
-		Ok(Val::Digest(*digest))
-	}
-
 	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Digest(digest) = self_ else { panic!() };
 		let Val::Digest(other) = &args[0] else {
 			return Ok(Val::Bool(Bool(false)));
 		};
 		Ok(Val::Bool(Bool(digest.0 == other.0)))
+	}
+
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Digest(digest) = self_ else { panic!() };
+		Ok(Val::Digest(*digest))
 	}
 
 	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -352,6 +352,14 @@ pub struct List {
 impl List {
 	pub fn new() -> Val {
 		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
+	}
+
+	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Obj::List(list) = &*obj.borrow() else {
+			panic!()
+		};
+		Ok(Val::Num(Num(list.items.len() as f64)))
 	}
 
 	pub fn equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
@@ -384,23 +392,6 @@ impl List {
 			}
 		}
 		Ok(Val::Bool(Bool(true)))
-	}
-
-	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = self_ else { panic!() };
-		let Obj::List(list) = &*obj.borrow() else {
-			panic!()
-		};
-		Ok(Val::Num(Num(list.items.len() as f64)))
-	}
-
-	pub fn append(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = self_ else { panic!() };
-		let Obj::List(list) = &mut *obj.borrow_mut() else {
-			panic!()
-		};
-		list.items.push(args[0].clone());
-		Ok(self_.clone())
 	}
 
 	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
@@ -436,6 +427,15 @@ impl List {
 		};
 		list.items[index] = args[1].clone();
 		Ok(args[1].clone())
+	}
+
+	pub fn append(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Obj::List(list) = &mut *obj.borrow_mut() else {
+			panic!()
+		};
+		list.items.push(args[0].clone());
+		Ok(self_.clone())
 	}
 
 	pub fn inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -486,6 +486,14 @@ impl Dict {
 		self.index.entry(hash).or_default().push(index);
 	}
 
+	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Obj::Dict(dict) = &*obj.borrow() else {
+			panic!()
+		};
+		Ok(Val::Num(Num(dict.pairs.len() as f64)))
+	}
+
 	pub fn equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Obj(obj) = self_ else { panic!() };
 		let Val::Obj(other) = &args[0] else {
@@ -522,14 +530,6 @@ impl Dict {
 			}
 		}
 		Ok(Val::Bool(Bool(true)))
-	}
-
-	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-		let Val::Obj(obj) = self_ else { panic!() };
-		let Obj::Dict(dict) = &*obj.borrow() else {
-			panic!()
-		};
-		Ok(Val::Num(Num(dict.pairs.len() as f64)))
 	}
 
 	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {

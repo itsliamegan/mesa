@@ -10,16 +10,6 @@ proto Hash
 	extern def hash end
 end
 
-proto Inspect
-	extern def inspect end
-end
-
-proto Display
-	impl Inspect
-
-	def display end
-end
-
 proto Order
 	def order(other) end
 
@@ -32,11 +22,21 @@ proto Order
 	end
 end
 
+proto Access
+	def access(key) end
+	extern def store(key, item) end
+end
+
 proto Append
 	def append(item) end
 end
 
-proto Access
-	def access(key) end
-	extern def store(key, item) end
+proto Display
+	impl Inspect
+
+	def display end
+end
+
+proto Inspect
+	extern def inspect end
 end
