@@ -551,8 +551,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 											return Err(signal);
 										}
 									};
-									Place::Member(Member::User(receiver.clone(), *name))
-										.set(&self.rt.pkgs, val)
+									Place::Member(Member::Field(receiver.clone(), *name))
+										.set(val)
 										.unwrap();
 								}
 								self.scope = saved_scope;
@@ -614,8 +614,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				}
 			}
 			Expr::Member(member) => {
-				let val = self.eval_member_raw(chunk, expr_id, member.receiver, member.name)?;
-				self.invoke_or_return(chunk, expr_id, val)
+				let place = self.resolve_member(chunk, expr_id, member.receiver, member.name)?;
+				let val = self.read_place(chunk, expr_id, &place)?;
+				if place.invokes(self.rt, self.pkg_id) {
+					self.invoke(chunk, expr_id, val)
+				} else {
+					Ok(val)
+				}
 			}
 			Expr::Access(access) => {
 				let receiver = self.eval_expr(chunk, access.receiver)?;
@@ -656,7 +661,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 								place
 							}
 						};
-						if let Err(()) = place.set(&self.rt.pkgs, val.clone()) {
+						if let Err(()) = place.set(val.clone()) {
 							let namespace = match &place {
 								Place::Member(Member::Module(pkg, id, name)) => {
 									let pkg_modules = &self.rt.pkgs.get(*pkg).modules;
@@ -686,7 +691,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					syn::nodes::Place::Member(member) => {
 						let receiver = self.eval_expr(chunk, member.receiver)?;
 						if let Some(m) = self.member(&receiver, member.name) {
-							if let Err(()) = Place::Member(m).set(&self.rt.pkgs, val.clone()) {
+							if let Err(()) = Place::Member(m).set(val.clone()) {
 								let loc = self
 									.rt
 									.pkgs
@@ -992,8 +997,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				None => todo!(),
 			},
 			Expr::Name(name) => {
-				let val = self.eval_name_raw(chunk, expr_id, name.sym)?;
-				self.invoke_or_return(chunk, expr_id, val)
+				let place = self.resolve_name(name.sym);
+				let val = self.read_place(chunk, expr_id, &place)?;
+				if place.invokes(self.rt, self.pkg_id) {
+					self.invoke(chunk, expr_id, val)
+				} else {
+					Ok(val)
+				}
 			}
 			Expr::Builtin(builtin) => match builtin {
 				Builtin::Print { val: val_id } => {
@@ -1078,9 +1088,13 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 
 	fn eval_expr_raw(&mut self, chunk: &Chunk, expr_id: ExprId) -> Result<Val, Signal> {
 		match chunk.get_expr(expr_id) {
-			Expr::Name(name) => self.eval_name_raw(chunk, expr_id, name.sym),
+			Expr::Name(name) => {
+				let place = self.resolve_name(name.sym);
+				self.read_place(chunk, expr_id, &place)
+			}
 			Expr::Member(member) => {
-				self.eval_member_raw(chunk, expr_id, member.receiver, member.name)
+				let place = self.resolve_member(chunk, expr_id, member.receiver, member.name)?;
+				self.read_place(chunk, expr_id, &place)
 			}
 			_ => self.eval_expr(chunk, expr_id),
 		}
@@ -1360,16 +1374,46 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		}
 	}
 
-	fn eval_name_raw(&mut self, chunk: &Chunk, expr_id: ExprId, name: Sym) -> Result<Val, Signal> {
-		let place = self.resolve_name(name);
-		if !place.is_bound() {
+	fn resolve_member(
+		&mut self,
+		chunk: &Chunk,
+		expr_id: ExprId,
+		val_id: ExprId,
+		name: Sym,
+	) -> Result<Place, Signal> {
+		let val = self.eval_expr(chunk, val_id)?;
+
+		if let Some(member) = self.member(&val, name) {
+			Ok(Place::Member(member))
+		} else {
+			let loc = self
+				.rt
+				.pkgs
+				.desc(self.pkg_id)
+				.loc(chunk.get_expr_span(expr_id));
+			Err(Signal::raise(
+				Raised::Native(Error::MemberError(MemberError::Missing(
+					namespace_name(self.syms, self.rt, &val),
+					name,
+				))),
+				vec![(String::new(), loc)],
+			))
+		}
+	}
+
+	fn read_place(&mut self, chunk: &Chunk, expr_id: ExprId, place: &Place) -> Result<Val, Signal> {
+		// A member or a module has a value by the fact that it resolved; only a
+		// local may name something not written yet.
+		if let Place::Local(local) = place
+			&& !local.is_bound()
+		{
 			let loc = self
 				.rt
 				.pkgs
 				.desc(self.pkg_id)
 				.loc(chunk.get_expr_span(expr_id));
 			return Err(Signal::raise(
-				Raised::Native(Error::NameError(name)),
+				Raised::Native(Error::NameError(local.name)),
 				vec![(String::new(), loc)],
 			));
 		}
@@ -1386,46 +1430,6 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 					vec![(String::new(), loc)],
 				))
 			}
-		}
-	}
-
-	fn eval_member_raw(
-		&mut self,
-		chunk: &Chunk,
-		expr_id: ExprId,
-		val_id: ExprId,
-		name: Sym,
-	) -> Result<Val, Signal> {
-		let val = self.eval_expr(chunk, val_id)?;
-
-		if let Some(member) = self.member(&val, name) {
-			match Place::Member(member).get(self.rt) {
-				Ok(val) => Ok(val),
-				Err(err) => {
-					let loc = self
-						.rt
-						.pkgs
-						.desc(self.pkg_id)
-						.loc(chunk.get_expr_span(expr_id));
-					Err(Signal::raise(
-						Raised::Native(err),
-						vec![(String::new(), loc)],
-					))
-				}
-			}
-		} else {
-			let loc = self
-				.rt
-				.pkgs
-				.desc(self.pkg_id)
-				.loc(chunk.get_expr_span(expr_id));
-			Err(Signal::raise(
-				Raised::Native(Error::MemberError(MemberError::Missing(
-					namespace_name(self.syms, self.rt, &val),
-					name,
-				))),
-				vec![(String::new(), loc)],
-			))
 		}
 	}
 
@@ -1469,13 +1473,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		))
 	}
 
-	fn invoke_or_return(
-		&mut self,
-		chunk: &Chunk,
-		expr_id: ExprId,
-		val: Val,
-	) -> Result<Val, Signal> {
-		let Val::Obj(obj) = &val else { return Ok(val) };
+	fn invoke(&mut self, chunk: &Chunk, expr_id: ExprId, val: Val) -> Result<Val, Signal> {
+		let Val::Obj(obj) = &val else { panic!() };
 		let obj = obj.clone();
 		let span = chunk.get_expr_span(expr_id);
 
@@ -1501,7 +1500,7 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				.iter()
 				.find(|param| param.default.is_none())
 				.map(|param| self.syms.intern(param.name)),
-			_ => return Ok(val),
+			_ => panic!(),
 		};
 
 		// Used in an invoking position but requires arguments; error.

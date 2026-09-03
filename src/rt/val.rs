@@ -601,7 +601,8 @@ pub struct Instance {
 pub enum Member {
 	Module(PackageId, ModuleId, Sym),
 	Static(Rc<RefCell<Obj>>, Sym),
-	User(Rc<RefCell<Obj>>, Sym),
+	Field(Rc<RefCell<Obj>>, Sym),
+	Method(Rc<RefCell<Obj>>, Sym),
 	Native(Val, Sym),
 }
 

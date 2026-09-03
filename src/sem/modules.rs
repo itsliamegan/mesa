@@ -503,12 +503,23 @@ fn check_members_unique(
 				ModuleItem::Extern(extern_) => (extern_.name, Member::Type(*item_id)),
 				ModuleItem::Proto(proto) => (proto.name, Member::Proto(*item_id)),
 				ModuleItem::Def(def_id) => (chunk.get_def(*def_id).name, Member::Proc(*item_id)),
-				// A second 'x := ...' is reassignment, not redeclaration; a
-				// binding claims its key only if nothing holds it, and names
-				// the declaration that first claimed it.
 				ModuleItem::Expr(expr_id) => match bound_name(chunk, *expr_id) {
 					Some(name) => {
-						members.entry(name).or_insert(Member::Var(*item_id));
+						match members.get(&name) {
+							None => {
+								members.insert(name, Member::Var(*item_id));
+							}
+							// A second 'x := ...' is reassignment, not
+							// redeclaration; the member keeps naming the
+							// assignment that first claimed the name.
+							Some(Member::Var(_)) => {}
+							// A 'def', 'type', or 'proto' already claims the
+							// name, and an assignment cannot displace it.
+							Some(_) => errs.push(Error::DuplicateMember(
+								pkg.sources().loc(span),
+								syms.resolve(name).to_string(),
+							)),
+						}
 						continue;
 					}
 					None => continue,

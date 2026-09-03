@@ -5,7 +5,6 @@ use rustc_hash::FxHashMap;
 
 use crate::intern::Sym;
 use crate::pkg::PackageId;
-use crate::rt::pkg::Packages;
 use crate::rt::types::{MethodImpl, Static, TypeId};
 use crate::rt::val::{Member, Method, Obj, Val};
 use crate::rt::{Error, Runtime};
@@ -61,14 +60,48 @@ pub enum Place {
 }
 
 impl Place {
-	// Whether this place holds a value yet. A member or a module always does,
-	// because it would not have resolved otherwise, but a local may have not
-	// been written yet.
-	pub fn is_bound(&self) -> bool {
+	// Whether reading this place invokes what it holds. True only where a 'def'
+	// declared the name: a method, a type-level method, or a module-level proc.
+	// A field, a local, and a top-level assignment all read their value as-is,
+	// whatever it holds.
+	pub fn invokes(&self, rt: &Runtime, pkg: PackageId) -> bool {
 		match self {
-			Place::Local(local) => local.is_bound(),
-			Place::Member(_) => true,
-			Place::Module(_, _) => true,
+			// A 'def' never nests inside a proc body, so a local scope's names
+			// are all bindings; a module scope holds both.
+			Place::Local(local) => match local.tier {
+				Tier::Local | Tier::Prelude => false,
+				Tier::Module(id) => match rt.pkgs.get(pkg).modules.descs.member(id, local.name) {
+					Some(sem::modules::Member::Proc(_)) => true,
+					_ => false,
+				},
+			},
+			Place::Member(Member::Module(pkg, id, name)) => {
+				match rt.pkgs.get(*pkg).modules.descs.member(*id, *name) {
+					Some(sem::modules::Member::Proc(_)) => true,
+					_ => false,
+				}
+			}
+			Place::Member(Member::Static(receiver, name)) => {
+				let Obj::Type(type_id) = *receiver.borrow() else {
+					panic!();
+				};
+				match type_id {
+					// A nested type is declared by a 'type', not a 'def', so
+					// reading it yields the type itself.
+					TypeId::User(type_pkg, type_id) => {
+						match rt.pkgs.get(type_pkg).types.static_(type_id, *name).unwrap() {
+							Static::Proc(_) => true,
+							Static::Type(_) => false,
+						}
+					}
+					// A native type declares no nested types, only statics.
+					TypeId::Native(_) => true,
+				}
+			}
+			Place::Member(Member::Field(_, _)) => false,
+			Place::Member(Member::Method(_, _)) => true,
+			Place::Member(Member::Native(_, _)) => true,
+			Place::Module(_, _) => false,
 		}
 	}
 
@@ -118,28 +151,29 @@ impl Place {
 					}
 				}
 			}
-			Place::Member(Member::User(receiver, name)) => {
+			Place::Member(Member::Field(receiver, name)) => {
 				let Obj::Instance(instance) = &*receiver.borrow() else {
 					panic!()
 				};
-				if let Some(val) = instance.fields.get(name) {
-					Ok(val.clone())
-				} else if let Some(member) = rt
+				Ok(instance.fields.get(name).unwrap().clone())
+			}
+			Place::Member(Member::Method(receiver, name)) => {
+				let Obj::Instance(instance) = &*receiver.borrow() else {
+					panic!()
+				};
+				let member = rt
 					.pkgs
 					.get(instance.pkg)
 					.types
 					.method(instance.type_, *name)
-				{
-					let method = match member {
-						MethodImpl::Native(method) => {
-							Method::Native(Val::Obj(receiver.clone()), *name, method)
-						}
-						MethodImpl::User(proc) => Method::User(Val::Obj(receiver.clone()), proc),
-					};
-					Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
-				} else {
-					panic!();
-				}
+					.unwrap();
+				let method = match member {
+					MethodImpl::Native(method) => {
+						Method::Native(Val::Obj(receiver.clone()), *name, method)
+					}
+					MethodImpl::User(proc) => Method::User(Val::Obj(receiver.clone()), proc),
+				};
+				Ok(Val::Obj(Rc::new(RefCell::new(Obj::Method(method)))))
 			}
 			Place::Member(Member::Native(receiver, name)) => {
 				let TypeId::Native(type_id) = receiver.type_id() else {
@@ -154,7 +188,7 @@ impl Place {
 		}
 	}
 
-	pub fn set(&self, pkgs: &Packages, val: Val) -> Result<(), ()> {
+	pub fn set(&self, val: Val) -> Result<(), ()> {
 		match self {
 			// Setting a local overwrites the value.
 			Place::Local(local) => {
@@ -165,24 +199,16 @@ impl Place {
 			Place::Member(Member::Module(_, _, _)) => Err(()),
 			// Statics cannot be reassigned.
 			Place::Member(Member::Static(_, _)) => Err(()),
-			// Setting a member consults the member's type.
-			Place::Member(Member::User(receiver, name)) => {
+			// Setting a field overwrites its value.
+			Place::Member(Member::Field(receiver, name)) => {
 				let Obj::Instance(instance) = &mut *receiver.borrow_mut() else {
 					panic!()
 				};
-				// A method cannot be replaced by a field of the same name.
-				if !instance.fields.contains_key(name)
-					&& pkgs
-						.get(instance.pkg)
-						.types
-						.method(instance.type_, *name)
-						.is_some()
-				{
-					return Err(());
-				}
 				instance.fields.insert(*name, val);
 				Ok(())
 			}
+			// A method cannot be replaced by a field of the same name.
+			Place::Member(Member::Method(_, _)) => Err(()),
 			// Native members cannot be reassigned.
 			Place::Member(Member::Native(_, _)) => Err(()),
 		}

@@ -121,8 +121,10 @@ impl<'descs> Runtime<'descs> {
 						panic!();
 					};
 					let types = &self.pkgs.get(pkg).types;
-					if types.field(id, name) || types.method(id, name).is_some() {
-						Some(Member::User(obj.clone(), name))
+					if types.field(id, name) {
+						Some(Member::Field(obj.clone(), name))
+					} else if types.method(id, name).is_some() {
+						Some(Member::Method(obj.clone(), name))
 					} else {
 						None
 					}

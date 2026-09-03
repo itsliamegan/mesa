@@ -31,6 +31,8 @@ $print(Account("Ada").balance)
 #> 50
 $print(Account("Ada", balance: 50).balance)
 #> Ada
+$print(Account.opened.name)
+#> Ada
 $print(Account.opened().name)
 #> 15
 $print(Account("Ada", balance: 10).deposit())
@@ -179,8 +181,36 @@ $print(&five)
 $print(&t.get)
 
 f := &five
+#> def five
+$print(f)
+#> def five
+$print(&f)
 #> 5
 $print(f())
+
+def sum(a, b)
+	a + b
+end
+
+s := &sum
+#> def sum(a, b)
+$print(s)
+#> 3
+$print(s(1, 2))
+
+def pass(val)
+	val
+end
+
+#> def five
+$print(pass(&five))
+#> def five
+$print(&pass(&five))
+
+n := 0
+n := &five
+#> def five
+$print(n)
 
 def id(val)
 	&val
@@ -188,6 +218,21 @@ end
 
 #> def id(val)
 $print(id(&id))
+
+type Ledger(entry)
+end
+
+def run
+	"ran"
+end
+
+led := Ledger(&run)
+#> def run
+$print(led.entry)
+#> ran
+$print(led.entry())
+#> def run
+$print(&led.entry)
 
 #---
 

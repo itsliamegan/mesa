@@ -85,6 +85,10 @@ import Test.Counter
 Counter.bump
 #> 1
 $print(Counter.n)
+#> def bump
+$print(&Counter.bump)
+#> def bump
+$print(Counter.saved)
 
 #:counter.ms
 
@@ -95,6 +99,8 @@ n := 0
 def bump
 	n := n + 1
 end
+
+saved := &bump
 
 #---
 
@@ -245,6 +251,29 @@ end
 
 #:ledger.ms
 module Test.Ledger
+
+#---
+
+n := 1
+n := 2
+#> 2
+$print(n)
+
+#---
+
+#! semantic error: duplicate member 'total'
+#! semantic error: duplicate member 'Ledger'
+
+def total
+	1
+end
+
+total := 2
+
+Ledger := 3
+
+type Ledger
+end
 
 #---
 
