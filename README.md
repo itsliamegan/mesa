@@ -17,6 +17,8 @@ have a comprehensive manual.
 module Ledger
 
 import Core.IO
+import Core.Behaviors.Equal
+import Core.Behaviors.Hash
 import Core.Behaviors.Display
 
 type Amount(cents: 0)
@@ -44,7 +46,9 @@ type Transaction
 	case Debit(amount) end
 end
 
-type Account(transactions)
+type Account(id, transactions)
+	impl Equal, Hash
+
 	def balance
 		total := 0
 		each transaction in transactions do
@@ -57,11 +61,19 @@ type Account(transactions)
 		end
 		Amount(cents: total)
 	end
+
+	def equal(other)
+		id == other.id
+	end
+
+	def hash
+		id.hash
+	end
 end
 
-account := Account([
-	Transaction.Credit(Amount(105.21)),
-	Transaction.Debit(Amount(30.74)),
+account := Account(45203, [
+	Transaction.Credit(Amount.of_dollars(105.21)),
+	Transaction.Debit(Amount.of_dollars(30.74)),
 ])
 
 IO.print(account.balance) # => $74.47
