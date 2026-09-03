@@ -7,6 +7,7 @@ use rustc_hash::{FxBuildHasher, FxHashMap};
 use crate::intern::{Interner, Sym};
 use crate::pkg::{self, PackageId};
 use crate::rt::modules::Modules;
+use crate::rt::protos::Protos;
 use crate::rt::scope::{Local, Place, Scope, Tier};
 use crate::rt::types::{MethodImpl, NativeMethod, NativeParam, Natives, TypeId, Types};
 use crate::rt::val::{
@@ -160,6 +161,10 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 		&self.rt.pkgs.get(self.pkg_id).modules
 	}
 
+	fn protos(&self) -> &'rt Protos<'descs> {
+		&self.rt.pkgs.get(self.pkg_id).protos
+	}
+
 	pub fn eval(mut self) -> Result<(), Raise> {
 		// Declarations are order-independent, so every module's items enter its
 		// scope before anything is evaluated.
@@ -213,13 +218,8 @@ impl<'syms, 'descs, 'rt> Interpreter<'syms, 'descs, 'rt> {
 				self.scope.borrow_mut().locals.insert(extern_.name, val);
 			}
 			ModuleItem::Proto(proto) => {
-				let id = self
-					.rt
-					.pkgs
-					.desc(self.pkg_id)
-					.protos()
-					.get_proto_by_item(chunk_id, item_id);
-				let val = Val::Obj(Rc::new(RefCell::new(Obj::Proto(self.pkg_id, id))));
+				let id = self.protos().descs.get_proto_by_item(chunk_id, item_id);
+				let val = Val::Obj(self.protos().obj(id));
 				self.scope.borrow_mut().locals.insert(proto.name, val);
 			}
 			ModuleItem::Def(def_id) => {

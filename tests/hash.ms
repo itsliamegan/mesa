@@ -253,8 +253,10 @@ end
 
 #---
 
+import Core.Protos
 import Core.Protos.Hash
 import Test.Left
+import Test.Left.Ready
 
 def run
 	"run"
@@ -266,6 +268,10 @@ type Task
 	end
 end
 
+proto Waiting
+	def wait end
+end
+
 proc := &run
 method := &Task().run
 
@@ -274,6 +280,9 @@ dict[proc] := "proc"
 dict[method] := "method"
 dict[Task] := "type"
 dict[Left] := "module"
+dict[Waiting] := "proto"
+dict[Ready] := "imported proto"
+dict[Hash] := "stdlib proto"
 
 #> proc
 $print(dict[proc])
@@ -283,6 +292,18 @@ $print(dict[method])
 $print(dict[Task])
 #> module
 $print(dict[Left])
+#> proto
+$print(dict[Waiting])
+#> imported proto
+$print(dict[Left.Ready])
+#> stdlib proto
+$print(dict[Protos.Hash])
+#> 7
+$print(dict.size)
 
 #:left.ms
 module Test.Left
+
+proto Ready
+	def ready end
+end

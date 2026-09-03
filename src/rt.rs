@@ -4,6 +4,7 @@ mod modules;
 mod native;
 pub mod pkg;
 mod print;
+mod protos;
 mod scope;
 mod types;
 mod val;

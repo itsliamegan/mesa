@@ -195,6 +195,7 @@ $print(a == b)
 #---
 
 import Test.Left
+import Test.Left.Ready
 import Test.Right
 
 type First
@@ -209,6 +210,10 @@ end
 def second
 end
 
+proto Waiting
+	def wait end
+end
+
 #> true
 $print(Left == Left)
 #> true
@@ -221,9 +226,19 @@ $print(First != Second)
 $print(&first == &first)
 #> true
 $print(&first != &second)
+#> true
+$print(Waiting == Waiting)
+#> true
+$print(Waiting != Ready)
+#> true
+$print(Ready == Left.Ready)
 
 #:left.ms
 module Test.Left
+
+proto Ready
+	def ready end
+end
 
 #:right.ms
 module Test.Right

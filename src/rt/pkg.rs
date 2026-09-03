@@ -3,12 +3,14 @@ use crate::sem::protos::Behaviors;
 
 use super::eval::Prelude;
 use super::modules::Modules;
+use super::protos::Protos;
 use super::scope::Scopes;
 use super::types::{Natives, Types, add_extern_members};
 
 pub struct Package<'descs> {
 	pub types: Types<'descs>,
 	pub modules: Modules<'descs>,
+	pub protos: Protos<'descs>,
 }
 
 impl<'descs> Package<'descs> {
@@ -24,8 +26,13 @@ impl<'descs> Package<'descs> {
 		let types = Types::new(pkgs, id, desc, &scopes, behaviors);
 		add_extern_members(pkgs, natives, id, desc, &scopes, behaviors);
 		let modules = Modules::new(id, desc.modules(), scopes);
+		let protos = Protos::new(id, desc.protos());
 
-		Self { types, modules }
+		Self {
+			types,
+			modules,
+			protos,
+		}
 	}
 }
 

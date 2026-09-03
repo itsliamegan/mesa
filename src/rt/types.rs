@@ -349,6 +349,7 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Proto",
 		new: None,
 		methods: &[
+			("hash", &[], val::proto_hash),
 			(
 				"equal",
 				&[NativeParam {

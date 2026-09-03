@@ -81,7 +81,8 @@ extern type Type impl Hash
 	extern def inspect end
 end
 
-extern type Proto
+extern type Proto impl Hash
+	extern def hash end
 	extern def equal(other) end
 	extern def inspect end
 end

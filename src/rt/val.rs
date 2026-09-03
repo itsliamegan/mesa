@@ -807,6 +807,19 @@ pub fn type_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> R
 	)))
 }
 
+pub fn proto_hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
+	let Obj::Proto(pkg, proto_id) = &*obj.borrow() else {
+		panic!()
+	};
+	let mut hasher = FxHasher::default();
+	pkg.hash(&mut hasher);
+	proto_id.index().hash(&mut hasher);
+	Ok(Val::Digest(
+		hash_type_id(self_.type_id()).mix(Digest(hasher.finish())),
+	))
+}
+
 pub fn proto_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 	let Val::Obj(obj) = self_ else { panic!() };
 	let Obj::Proto(pkg, proto_id) = &*obj.borrow() else {
