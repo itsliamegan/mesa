@@ -192,6 +192,7 @@ pub enum TypeError {
 	IndexNonNum(String),
 	ArithNonNum(TypeId),
 	ConcatNonStr(TypeId),
+	MixNonDigest(TypeId),
 	NotCallable(TypeId),
 	NotConstructible(TypeId),
 	NotInvocable(TypeId),
@@ -285,6 +286,10 @@ impl TypeError {
 			Self::ConcatNonStr(id) => {
 				format!("type {} cannot be concatenated", rt.type_name(syms, *id))
 			}
+			Self::MixNonDigest(id) => format!(
+				"type {} cannot be mixed into a digest",
+				rt.type_name(syms, *id)
+			),
 			Self::NotCallable(id) => format!("type {} is not callable", rt.type_name(syms, *id)),
 			Self::NotConstructible(id) => {
 				format!("type {} cannot be constructed", rt.type_name(syms, *id))

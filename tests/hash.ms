@@ -38,6 +38,32 @@ $print(dict[two_cycle])
 
 #---
 
+import Core.Protos.Hash
+
+type Task(priority)
+	impl Hash
+end
+
+#> true
+$print(nil.hash != (0).hash)
+#> true
+$print((0).hash != false.hash)
+#> true
+$print(false.hash != true.hash)
+#> true
+$print(Task.hash != Task(1).hash)
+#> true
+$print(Task(1).hash != Task(2).hash)
+#> true
+$print((0).hash == (0 * (0 - 1)).hash)
+#> 1
+zero := {}
+zero[0] := "pos"
+zero[0 * (0 - 1)] := "neg"
+$print(zero.size)
+
+#---
+
 #! runtime error: type Task is not hashable
 
 type Task(priority)
@@ -69,7 +95,7 @@ type Task(priority)
 
 	def hash
 		$print("custom hash")
-		1
+		(1).hash
 	end
 end
 
@@ -92,13 +118,47 @@ type Task(priority)
 	end
 
 	def hash
-		0
+		(0).hash
 	end
 end
 
 dict := {Task(1): "task"}
 #> task
 $print(dict[Task(2)])
+
+#---
+
+import Core.Protos.Hash
+
+type Meddler(id)
+	impl Hash
+
+	dict := nil
+
+	def hash
+		(0).hash
+	end
+
+	def equal(other)
+		when self.dict != nil then
+			meddled := self.dict
+			self.dict := nil
+			meddled[Meddler(other.id)] := "meddled"
+		end
+		self.id == other.id
+	end
+end
+
+dict := {}
+first := Meddler(1)
+dict[first] := "first"
+first.dict := dict
+dict[Meddler(2)] := "second"
+
+#> 2
+$print(dict.size)
+#> second
+$print(dict[Meddler(2)])
 
 #---
 
@@ -120,6 +180,45 @@ end
 
 import Core.Protos.Hash
 
+type Account(id, name)
+	impl Hash
+
+	def hash
+		self.id.hash + self.name.hash
+	end
+end
+
+#> true
+$print(Account(1, "a").hash == Account(1, "a").hash)
+#> true
+$print(Account(1, "a").hash != Account(2, "a").hash)
+#> true
+$print(Account(1, "a").hash != Account(1, "b").hash)
+#> true
+$print(Account(1, 2).hash != Account(2, 1).hash)
+
+dict := {}
+dict[Account(1, "a")] := "first"
+dict[Account(2, "a")] := "second"
+dict[Account(1, "b")] := "third"
+#> 3
+$print(dict.size)
+#> second
+$print(dict[Account(2, "a")])
+
+#---
+
+#! runtime error: type Num cannot be mixed into a digest
+
+import Core.Protos.Hash
+
+(1).hash + 5
+
+
+#---
+
+import Core.Protos.Hash
+
 type Task
 	case Ready(priority)
 		impl Hash
@@ -130,7 +229,7 @@ type Task
 	end
 
 	def hash
-		0
+		(0).hash
 	end
 end
 

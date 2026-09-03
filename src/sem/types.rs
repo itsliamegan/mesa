@@ -215,6 +215,7 @@ pub fn check(
 	pkgs: &Packages,
 	pkg_id: PackageId,
 	natives: &HashMap<Sym, NativeTypeShape>,
+	behaviors: &Behaviors,
 ) -> (Types, Vec<Error>) {
 	let pkg = pkgs.get(pkg_id);
 	let mut types = Types::new();
@@ -228,8 +229,8 @@ pub fn check(
 			match chunk.get_module_item(*item_id) {
 				ModuleItem::Type(type_) => {
 					let id = describe_type(
-						syms, pkgs, pkg_id, &mut types, module, chunk_id, span, type_, None, None,
-						false, &mut errs,
+						syms, pkgs, pkg_id, behaviors, &mut types, module, chunk_id, span, type_,
+						None, None, false, &mut errs,
 					);
 					types.type_by_item.insert((chunk_id, *item_id), id);
 				}
@@ -258,6 +259,7 @@ fn describe_type(
 	syms: &mut Interner,
 	pkgs: &Packages,
 	pkg_id: PackageId,
+	behaviors: &Behaviors,
 	types: &mut Types,
 	module: ModuleId,
 	chunk_id: ChunkId,
@@ -401,17 +403,7 @@ fn describe_type(
 	}
 	methods.extend(&declared);
 
-	let core_protos = [syms.intern("Core"), syms.intern("Protos")];
-	let hash_proto_name = syms.intern(Behaviors::HASH.0);
-	let implements_hash = impls.iter().any(|(proto_pkg, proto_id)| {
-		let pkg = pkgs.get(*proto_pkg);
-		let proto = pkg.protos().get_proto(*proto_id);
-		proto.name == hash_proto_name
-			&& pkg
-				.modules()
-				.by_path(&core_protos)
-				.is_some_and(|module| pkg.modules().chunk(module) == proto.chunk)
-	});
+	let implements_hash = impls.contains(&behaviors.hash.proto);
 	let equal = syms.intern(Behaviors::EQUAL.1);
 	let hash = syms.intern(Behaviors::HASH.1);
 	let equal_is_declared = if let Some(MethodSite::Declared(..)) = methods.get(&equal) {
@@ -444,6 +436,7 @@ fn describe_type(
 					syms,
 					pkgs,
 					pkg_id,
+					behaviors,
 					types,
 					module,
 					chunk_id,
@@ -465,6 +458,7 @@ fn describe_type(
 					syms,
 					pkgs,
 					pkg_id,
+					behaviors,
 					types,
 					module,
 					chunk_id,

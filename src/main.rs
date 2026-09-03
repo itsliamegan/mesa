@@ -42,10 +42,18 @@ fn main() {
 		&mut natives,
 		&stdlib_dir,
 		&[CORE_TYPES, STDLIB_NATIVE_TYPES],
+		None,
 	);
 
 	let current_dir = env::current_dir().unwrap();
-	let current_pkg_id = load_package(&mut syms, &mut pkgs, &mut natives, &current_dir, &[]);
+	let current_pkg_id = load_package(
+		&mut syms,
+		&mut pkgs,
+		&mut natives,
+		&current_dir,
+		&[],
+		Some(stdlib_pkg_id),
+	);
 
 	let prelude = match build_prelude(&pkgs, &mut syms, stdlib_pkg_id, &natives) {
 		Ok(prelude) => prelude,
@@ -87,6 +95,7 @@ fn load_package(
 	natives: &mut Natives,
 	start_dir: &Path,
 	native_type_lists: &[&[NativeTypeSpec]],
+	stdlib: Option<PackageId>,
 ) -> PackageId {
 	let (root_dir, manifest) = match load::find(start_dir) {
 		Ok(found) => found,
@@ -121,7 +130,7 @@ fn load_package(
 		native_shapes.extend(natives.register(syms, specs));
 	}
 
-	match sem::check(syms, pkgs, pkg_id, &native_shapes) {
+	match sem::check(syms, pkgs, pkg_id, &native_shapes, stdlib.unwrap_or(pkg_id)) {
 		Ok(()) => {}
 		Err(errs) => {
 			for err in errs {

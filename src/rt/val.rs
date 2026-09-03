@@ -37,6 +37,22 @@ impl Num {
 		Ok(Val::Num(Num(self_ - other)))
 	}
 
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(num) = self_ else { panic!() };
+		let canonical = if num.0 == 0.0 { 0.0 } else { num.0 };
+		Ok(Val::Digest(
+			hash_type_id(self_.type_id()).mix(Digest(canonical.to_bits())),
+		))
+	}
+
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Num(num) = self_ else { panic!() };
+		let Val::Num(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		Ok(Val::Bool(Bool(num.0 == other.0)))
+	}
+
 	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Num(num) = self_ else { panic!() };
 		Ok(Str::of(&print::print_num(num.0)))
@@ -51,6 +67,21 @@ impl Bool {
 		Val::Bool(Bool(false))
 	}
 
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Bool(bool) = self_ else { panic!() };
+		Ok(Val::Digest(
+			hash_type_id(self_.type_id()).mix(Digest(u64::from(bool.0))),
+		))
+	}
+
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Bool(bool) = self_ else { panic!() };
+		let Val::Bool(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		Ok(Val::Bool(Bool(bool.0 == other.0)))
+	}
+
 	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Bool(self_) = self_ else { panic!() };
 		Ok(Str::of(&print::print_bool(self_.0)))
@@ -61,6 +92,14 @@ impl Bool {
 pub struct Char(pub char);
 
 impl Char {
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = self_ else { panic!() };
+		let Val::Char(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		Ok(Val::Bool(Bool(char.0 == other.0)))
+	}
+
 	pub fn order(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Char(Char(self_)) = self_ else {
 			panic!()
@@ -69,6 +108,13 @@ impl Char {
 			panic!()
 		};
 		Ok(Val::Num(Num(*self_ as u32 as f64 - *other as u32 as f64)))
+	}
+
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Char(char) = self_ else { panic!() };
+		Ok(Val::Digest(
+			hash_type_id(self_.type_id()).mix(Digest(char.0 as u64)),
+		))
 	}
 
 	pub fn display(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -137,6 +183,23 @@ impl Str {
 		Ok(Val::Num(Num(order)))
 	}
 
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(str) = self_ else { panic!() };
+		let mut hasher = FxHasher::default();
+		str.text.hash(&mut hasher);
+		Ok(Val::Digest(
+			hash_type_id(self_.type_id()).mix(Digest(hasher.finish())),
+		))
+	}
+
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Str(self_) = self_ else { panic!() };
+		let Val::Str(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		Ok(Val::Bool(Bool(self_.text == other.text)))
+	}
+
 	pub fn display(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		let Val::Str(self_) = self_ else { panic!() };
 		Ok(Str::of(&self_.text))
@@ -156,6 +219,17 @@ impl Nil {
 		Val::Nil(Nil)
 	}
 
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		Ok(Val::Digest(hash_type_id(self_.type_id())))
+	}
+
+	pub fn equal(_interp: &mut Interpreter, _self: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Nil(_) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		Ok(Val::Bool(Bool(true)))
+	}
+
 	pub fn inspect(_interp: &mut Interpreter, _self: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 		Ok(Str::of(&print::print_nil()))
 	}
@@ -167,6 +241,7 @@ pub enum Val {
 	Bool(Bool),
 	Char(Char),
 	Str(Rc<Str>),
+	Digest(Digest),
 	Obj(Rc<RefCell<Obj>>),
 	Nil(Nil),
 }
@@ -178,6 +253,7 @@ impl Val {
 			Val::Bool(_) => TypeId::Native(NativeTypeId::BOOL),
 			Val::Char(_) => TypeId::Native(NativeTypeId::CHAR),
 			Val::Str(_) => TypeId::Native(NativeTypeId::STR),
+			Val::Digest(_) => TypeId::Native(NativeTypeId::DIGEST),
 			Val::Obj(obj) => obj.borrow().type_id(),
 			Self::Nil(_) => TypeId::Native(NativeTypeId::NIL),
 		}
@@ -239,6 +315,35 @@ impl Obj {
 	}
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Digest(pub u64);
+
+impl Digest {
+	pub(crate) fn mix(self, other: Digest) -> Digest {
+		let mut mixed = self.0.rotate_left(27) ^ other.0.wrapping_mul(0xff51afd7ed558ccd);
+		mixed = mixed.wrapping_mul(0x9e3779b97f4a7c15);
+		Digest(mixed ^ (mixed >> 31))
+	}
+
+	pub fn hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Digest(digest) = self_ else { panic!() };
+		Ok(Val::Digest(*digest))
+	}
+
+	pub fn equal(_interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Digest(digest) = self_ else { panic!() };
+		let Val::Digest(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		Ok(Val::Bool(Bool(digest.0 == other.0)))
+	}
+
+	pub fn inspect(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Digest(digest) = self_ else { panic!() };
+		Ok(Str::of(&print::print_digest(digest.0)))
+	}
+}
+
 #[derive(Debug)]
 pub struct List {
 	pub items: Vec<Val>,
@@ -247,6 +352,38 @@ pub struct List {
 impl List {
 	pub fn new() -> Val {
 		Val::Obj(Rc::new(RefCell::new(Obj::List(List { items: Vec::new() }))))
+	}
+
+	pub fn equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Val::Obj(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		if Rc::ptr_eq(obj, other) {
+			return Ok(Val::Bool(Bool(true)));
+		}
+		let items = {
+			let obj_ref = obj.borrow();
+			let other_ref = other.borrow();
+			let Obj::List(list) = &*obj_ref else { panic!() };
+			let Obj::List(other_list) = &*other_ref else {
+				return Ok(Val::Bool(Bool(false)));
+			};
+			if list.items.len() != other_list.items.len() {
+				return Ok(Val::Bool(Bool(false)));
+			}
+			list.items
+				.iter()
+				.cloned()
+				.zip(other_list.items.iter().cloned())
+				.collect::<Vec<_>>()
+		};
+		for (item, other_item) in items {
+			if !interp.equal_vals(&item, &other_item)? {
+				return Ok(Val::Bool(Bool(false)));
+			}
+		}
+		Ok(Val::Bool(Bool(true)))
 	}
 
 	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -338,19 +475,53 @@ impl Dict {
 		}
 	}
 
-	pub(crate) fn candidates(&self, hash: u64) -> Vec<(usize, Val)> {
-		self.index
-			.get(&hash)
-			.into_iter()
-			.flatten()
-			.map(|index| (*index, self.pairs[*index].0.clone()))
-			.collect()
+	pub(crate) fn candidate(&self, hash: u64, position: usize) -> Option<(usize, Val)> {
+		let index = *self.index.get(&hash)?.get(position)?;
+		Some((index, self.pairs[index].0.clone()))
 	}
 
 	pub(crate) fn insert(&mut self, hash: u64, key: Val, val: Val) {
 		let index = self.pairs.len();
 		self.pairs.push((key, val));
 		self.index.entry(hash).or_default().push(index);
+	}
+
+	pub fn equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
+		let Val::Obj(obj) = self_ else { panic!() };
+		let Val::Obj(other) = &args[0] else {
+			return Ok(Val::Bool(Bool(false)));
+		};
+		if Rc::ptr_eq(obj, other) {
+			return Ok(Val::Bool(Bool(true)));
+		}
+		let pairs = {
+			let obj_ref = obj.borrow();
+			let other_ref = other.borrow();
+			let Obj::Dict(dict) = &*obj_ref else { panic!() };
+			let Obj::Dict(other_dict) = &*other_ref else {
+				return Ok(Val::Bool(Bool(false)));
+			};
+			if dict.pairs.len() != other_dict.pairs.len() {
+				return Ok(Val::Bool(Bool(false)));
+			}
+			dict.pairs.clone()
+		};
+		for (key, val) in pairs {
+			let (_, found) = interp.dict_probe_val(&args[0], &key)?;
+			let Some(index) = found else {
+				return Ok(Val::Bool(Bool(false)));
+			};
+			let other_val = {
+				let Obj::Dict(other_dict) = &*other.borrow() else {
+					panic!()
+				};
+				other_dict.pairs[index].1.clone()
+			};
+			if !interp.equal_vals(&val, &other_val)? {
+				return Ok(Val::Bool(Bool(false)));
+			}
+		}
+		Ok(Val::Bool(Bool(true)))
 	}
 
 	pub fn size(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -362,21 +533,13 @@ impl Dict {
 	}
 
 	pub fn access(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let hash = interp.hash_val(&args[0])?;
-		let Val::Obj(obj) = self_ else { panic!() };
-		let candidates = {
+		let (_, found) = interp.dict_probe_val(self_, &args[0])?;
+		if let Some(index) = found {
+			let Val::Obj(obj) = self_ else { panic!() };
 			let Obj::Dict(dict) = &*obj.borrow() else {
 				panic!()
 			};
-			dict.candidates(hash)
-		};
-		for (index, key) in candidates {
-			if interp.equal_vals(&key, &args[0])? {
-				let Obj::Dict(dict) = &*obj.borrow() else {
-					panic!()
-				};
-				return Ok(dict.pairs[index].1.clone());
-			}
+			return Ok(dict.pairs[index].1.clone());
 		}
 		Err(interp.native_error(Error::KeyError(print::inspect_val(
 			interp.syms(),
@@ -386,27 +549,15 @@ impl Dict {
 	}
 
 	pub fn store(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-		let hash = interp.hash_val(&args[0])?;
+		let (hash, found) = interp.dict_probe_val(self_, &args[0])?;
 		let Val::Obj(obj) = self_ else { panic!() };
-		let candidates = {
-			let Obj::Dict(dict) = &*obj.borrow() else {
-				panic!()
-			};
-			dict.candidates(hash)
-		};
-		for (index, key) in candidates {
-			if interp.equal_vals(&key, &args[0])? {
-				let Obj::Dict(dict) = &mut *obj.borrow_mut() else {
-					panic!()
-				};
-				dict.pairs[index].1 = args[1].clone();
-				return Ok(args[1].clone());
-			}
-		}
 		let Obj::Dict(dict) = &mut *obj.borrow_mut() else {
 			panic!()
 		};
-		dict.insert(hash, args[0].clone(), args[1].clone());
+		match found {
+			Some(index) => dict.pairs[index].1 = args[1].clone(),
+			None => dict.insert(hash, args[0].clone(), args[1].clone()),
+		}
 		Ok(args[1].clone())
 	}
 
@@ -472,190 +623,99 @@ pub fn namespace_name(syms: &Interner, rt: &Runtime, val: &Val) -> String {
 	format!("type {}", rt.type_name(syms, val.namespace_type_id()))
 }
 
-fn hash_type_id(type_id: TypeId, hasher: &mut FxHasher) {
+fn hash_type_id(type_id: TypeId) -> Digest {
 	match type_id {
-		TypeId::User(pkg, id) => {
-			0_u8.hash(hasher);
-			pkg.hash(hasher);
-			id.index().hash(hasher);
-		}
-		TypeId::Native(id) => {
-			1_u8.hash(hasher);
-			id.index().hash(hasher);
-		}
+		TypeId::User(pkg, id) => Digest(1)
+			.mix(Digest(pkg.index() as u64))
+			.mix(Digest(id.index() as u64)),
+		TypeId::Native(id) => Digest(2).mix(Digest(id.index() as u64)),
 	}
 }
 
 pub fn derived_hash(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
-	let top_level = interp.start_derived_hash();
-	let result = derived_hash_bounded(interp, self_);
-	interp.finish_derived_hash(top_level);
-	result.map(|hash| Val::Num(Num(f64::from_bits(hash))))
-}
-
-fn derived_hash_bounded(interp: &mut Interpreter, self_: &Val) -> Result<u64, Raise> {
-	let hash = match self_ {
-		Val::Num(num) => num.0.to_bits(),
-		Val::Bool(bool) => u64::from(bool.0),
-		Val::Char(char) => char.0 as u64,
-		Val::Str(str) => {
-			let mut hasher = FxHasher::default();
-			str.text.hash(&mut hasher);
-			hasher.finish()
-		}
-		Val::Obj(obj) => {
-			let obj_ref = obj.borrow();
-			match &*obj_ref {
-				Obj::Proc(_) | Obj::Method(_) => Rc::as_ptr(obj) as usize as u64,
-				Obj::Type(type_id) => {
-					let mut hasher = FxHasher::default();
-					hash_type_id(*type_id, &mut hasher);
-					hasher.finish()
-				}
-				Obj::Module(pkg, id) => {
-					let mut hasher = FxHasher::default();
-					pkg.hash(&mut hasher);
-					id.index().hash(&mut hasher);
-					hasher.finish()
-				}
-				Obj::Instance(instance) => {
-					let type_id = TypeId::User(instance.pkg, instance.type_);
-					let types::Type::User(desc) = interp
-						.rt()
-						.pkgs
-						.get(instance.pkg)
-						.types
-						.descs
-						.get_type(instance.type_)
-					else {
-						panic!()
-					};
-					let fields = desc
-						.ctor_fields
-						.iter()
-						.map(|field| field.name)
-						.chain(desc.body_fields.iter().map(|(name, _)| *name))
-						.map(|name| instance.fields.get(&name).unwrap().clone())
-						.collect::<Vec<_>>();
-					drop(obj_ref);
-					let mut hasher = FxHasher::default();
-					hash_type_id(type_id, &mut hasher);
-					for field in fields {
-						if interp.hash_exhausted() {
-							break;
-						}
-						interp.hash_val(&field)?.hash(&mut hasher);
-					}
-					hasher.finish()
-				}
-				_ => unreachable!(),
+	let Val::Obj(obj) = self_ else { panic!() };
+	let obj_ref = obj.borrow();
+	let digest = match &*obj_ref {
+		Obj::Instance(instance) => {
+			let type_id = TypeId::User(instance.pkg, instance.type_);
+			let types::Type::User(desc) = interp
+				.rt()
+				.pkgs
+				.get(instance.pkg)
+				.types
+				.descs
+				.get_type(instance.type_)
+			else {
+				panic!()
+			};
+			let fields = desc
+				.ctor_fields
+				.iter()
+				.map(|field| field.name)
+				.chain(desc.body_fields.iter().map(|(name, _)| *name))
+				.map(|name| instance.fields.get(&name).unwrap().clone())
+				.collect::<Vec<_>>();
+			drop(obj_ref);
+			let mut digest = hash_type_id(type_id);
+			for field in fields {
+				digest = digest.mix(Digest(interp.hash_val(&field)?));
 			}
+			digest
 		}
-		Val::Nil(_) => 0,
+		Obj::Native(_, _) => {
+			hash_type_id(self_.type_id()).mix(Digest(Rc::as_ptr(obj) as usize as u64))
+		}
+		_ => panic!(),
 	};
-	Ok(hash)
+	Ok(Val::Digest(digest))
 }
 
 pub fn derived_equal(interp: &mut Interpreter, self_: &Val, args: Vec<Val>) -> Result<Val, Raise> {
-	let other = &args[0];
-	if self_.type_id() != other.type_id() {
+	if self_.type_id() != args[0].type_id() {
 		return Ok(Val::Bool(Bool(false)));
 	}
-	let equal = match (self_, other) {
-		(Val::Num(num), Val::Num(other)) => num.0 == other.0,
-		(Val::Bool(bool), Val::Bool(other)) => bool.0 == other.0,
-		(Val::Char(char), Val::Char(other)) => char.0 == other.0,
-		(Val::Str(str), Val::Str(other)) => str.text == other.text,
-		(Val::Obj(obj), Val::Obj(other)) if Rc::ptr_eq(obj, other) => true,
-		(Val::Obj(obj), Val::Obj(other)) => {
-			let obj_ref = obj.borrow();
-			let other_ref = other.borrow();
-			match (&*obj_ref, &*other_ref) {
-				(Obj::Instance(instance), Obj::Instance(other)) => {
-					let types::Type::User(desc) = interp
-						.rt()
-						.pkgs
-						.get(instance.pkg)
-						.types
-						.descs
-						.get_type(instance.type_)
-					else {
-						panic!()
-					};
-					let values = desc
-						.ctor_fields
-						.iter()
-						.map(|field| field.name)
-						.chain(desc.body_fields.iter().map(|(name, _)| *name))
-						.map(|name| {
-							(
-								instance.fields.get(&name).unwrap().clone(),
-								other.fields.get(&name).unwrap().clone(),
-							)
-						})
-						.collect::<Vec<_>>();
-					drop(other_ref);
-					drop(obj_ref);
-					for (val, other) in values {
-						if !interp.equal_vals(&val, &other)? {
-							return Ok(Val::Bool(Bool(false)));
-						}
-					}
-					true
-				}
-				(Obj::List(list), Obj::List(other_list)) => {
-					if list.items.len() != other_list.items.len() {
-						return Ok(Val::Bool(Bool(false)));
-					}
-					let values = list
-						.items
-						.iter()
-						.cloned()
-						.zip(other_list.items.iter().cloned())
-						.collect::<Vec<_>>();
-					drop(other_ref);
-					drop(obj_ref);
-					for (val, other) in values {
-						if !interp.equal_vals(&val, &other)? {
-							return Ok(Val::Bool(Bool(false)));
-						}
-					}
-					true
-				}
-				(Obj::Dict(dict), Obj::Dict(other_dict)) => {
-					if dict.pairs.len() != other_dict.pairs.len() {
-						return Ok(Val::Bool(Bool(false)));
-					}
-					let pairs = dict.pairs.clone();
-					let other_pairs = other_dict.pairs.clone();
-					let other_index = other_dict.index.clone();
-					drop(other_ref);
-					drop(obj_ref);
-					for (key, val) in pairs {
-						let hash = interp.hash_val(&key)?;
-						let mut found = false;
-						for index in other_index.get(&hash).into_iter().flatten() {
-							if interp.equal_vals(&key, &other_pairs[*index].0)? {
-								if !interp.equal_vals(&val, &other_pairs[*index].1)? {
-									return Ok(Val::Bool(Bool(false)));
-								}
-								found = true;
-								break;
-							}
-						}
-						if !found {
-							return Ok(Val::Bool(Bool(false)));
-						}
-					}
-					true
-				}
-				_ => false,
-			}
+	let Val::Obj(obj) = self_ else { panic!() };
+	let Val::Obj(other) = &args[0] else { panic!() };
+	if Rc::ptr_eq(obj, other) {
+		return Ok(Val::Bool(Bool(true)));
+	}
+	let obj_ref = obj.borrow();
+	let other_ref = other.borrow();
+	let values = match (&*obj_ref, &*other_ref) {
+		(Obj::Instance(instance), Obj::Instance(other)) => {
+			let types::Type::User(desc) = interp
+				.rt()
+				.pkgs
+				.get(instance.pkg)
+				.types
+				.descs
+				.get_type(instance.type_)
+			else {
+				panic!()
+			};
+			desc.ctor_fields
+				.iter()
+				.map(|field| field.name)
+				.chain(desc.body_fields.iter().map(|(name, _)| *name))
+				.map(|name| {
+					(
+						instance.fields.get(&name).unwrap().clone(),
+						other.fields.get(&name).unwrap().clone(),
+					)
+				})
+				.collect::<Vec<_>>()
 		}
-		(Val::Nil(_), Val::Nil(_)) => true,
-		_ => unreachable!(),
+		(Obj::Native(_, _), Obj::Native(_, _)) => return Ok(Val::Bool(Bool(false))),
+		_ => panic!(),
 	};
-	Ok(Val::Bool(Bool(equal)))
+	drop(other_ref);
+	drop(obj_ref);
+	for (val, other) in values {
+		if !interp.equal_vals(&val, &other)? {
+			return Ok(Val::Bool(Bool(false)));
+		}
+	}
+	Ok(Val::Bool(Bool(true)))
 }
 
 pub fn derived_inspect(
@@ -696,6 +756,25 @@ pub fn derived_store(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> 
 	)
 }
 
+pub fn identity_equal(
+	_interp: &mut Interpreter,
+	self_: &Val,
+	args: Vec<Val>,
+) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
+	let Val::Obj(other) = &args[0] else {
+		return Ok(Val::Bool(Bool(false)));
+	};
+	Ok(Val::Bool(Bool(Rc::ptr_eq(obj, other))))
+}
+
+pub fn proc_hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
+	Ok(Val::Digest(
+		hash_type_id(self_.type_id()).mix(Digest(Rc::as_ptr(obj) as usize as u64)),
+	))
+}
+
 pub fn proc_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
 	let Val::Obj(obj) = self_ else { panic!() };
 	let text = match &*obj.borrow() {
@@ -704,6 +783,16 @@ pub fn proc_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> R
 		_ => panic!(),
 	};
 	Ok(Str::of(&text))
+}
+
+pub fn type_hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
+	let Obj::Type(type_id) = &*obj.borrow() else {
+		panic!()
+	};
+	Ok(Val::Digest(
+		hash_type_id(self_.type_id()).mix(hash_type_id(*type_id)),
+	))
 }
 
 pub fn type_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
@@ -729,6 +818,19 @@ pub fn proto_inspect(interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> 
 		*pkg,
 		*proto_id,
 	)))
+}
+
+pub fn module_hash(_interp: &mut Interpreter, self_: &Val, _args: Vec<Val>) -> Result<Val, Raise> {
+	let Val::Obj(obj) = self_ else { panic!() };
+	let Obj::Module(pkg, id) = &*obj.borrow() else {
+		panic!()
+	};
+	let mut hasher = FxHasher::default();
+	pkg.hash(&mut hasher);
+	id.index().hash(&mut hasher);
+	Ok(Val::Digest(
+		hash_type_id(self_.type_id()).mix(Digest(hasher.finish())),
+	))
 }
 
 pub fn module_inspect(

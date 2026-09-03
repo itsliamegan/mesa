@@ -10,7 +10,7 @@ use crate::rt::eval::{Interpreter, Raise};
 use crate::rt::pkg::Packages;
 use crate::rt::scope::Scopes;
 use crate::rt::val;
-use crate::rt::val::{Bool, Char, Dict, List, Nil, Num, Obj, Proc, Str, Val};
+use crate::rt::val::{Bool, Char, Dict, Digest, List, Nil, Num, Obj, Proc, Str, Val};
 use crate::sem::protos::{Behaviors, ProtoId};
 use crate::sem::types::{self, MethodSite};
 use crate::syn::ChunkId;
@@ -115,13 +115,33 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Nil",
 		new: Some(Nil::new),
-		methods: &[("inspect", &[], Nil::inspect)],
+		methods: &[
+			("hash", &[], Nil::hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Nil::equal,
+			),
+			("inspect", &[], Nil::inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Num",
 		new: Some(Num::new),
 		methods: &[
+			("hash", &[], Num::hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Num::equal,
+			),
 			(
 				"order",
 				&[NativeParam {
@@ -137,13 +157,33 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Bool",
 		new: Some(Bool::new),
-		methods: &[("inspect", &[], Bool::inspect)],
+		methods: &[
+			("hash", &[], Bool::hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Bool::equal,
+			),
+			("inspect", &[], Bool::inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Char",
 		new: None,
 		methods: &[
+			("hash", &[], Char::hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Char::equal,
+			),
 			(
 				"order",
 				&[NativeParam {
@@ -161,6 +201,15 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Str",
 		new: Some(Str::new),
 		methods: &[
+			("hash", &[], Str::hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Str::equal,
+			),
 			("size", &[], Str::size),
 			("chars", &[], Str::chars),
 			(
@@ -180,6 +229,14 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "List",
 		new: Some(List::new),
 		methods: &[
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				List::equal,
+			),
 			("size", &[], List::size),
 			("inspect", &[], List::inspect),
 			(
@@ -219,6 +276,14 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 		name: "Dict",
 		new: Some(Dict::new),
 		methods: &[
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Dict::equal,
+			),
 			("size", &[], Dict::size),
 			("inspect", &[], Dict::inspect),
 			(
@@ -249,25 +314,85 @@ pub const CORE_TYPES: &[NativeTypeSpec] = &[
 	NativeTypeSpec {
 		name: "Proc",
 		new: None,
-		methods: &[("inspect", &[], val::proc_inspect)],
+		methods: &[
+			("hash", &[], val::proc_hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				val::identity_equal,
+			),
+			("inspect", &[], val::proc_inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Type",
 		new: None,
-		methods: &[("inspect", &[], val::type_inspect)],
+		methods: &[
+			("hash", &[], val::type_hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				val::identity_equal,
+			),
+			("inspect", &[], val::type_inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Proto",
 		new: None,
-		methods: &[("inspect", &[], val::proto_inspect)],
+		methods: &[
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				val::identity_equal,
+			),
+			("inspect", &[], val::proto_inspect),
+		],
 		statics: &[],
 	},
 	NativeTypeSpec {
 		name: "Module",
 		new: None,
-		methods: &[("inspect", &[], val::module_inspect)],
+		methods: &[
+			("hash", &[], val::module_hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				val::identity_equal,
+			),
+			("inspect", &[], val::module_inspect),
+		],
+		statics: &[],
+	},
+	NativeTypeSpec {
+		name: "Digest",
+		new: None,
+		methods: &[
+			("hash", &[], Digest::hash),
+			(
+				"equal",
+				&[NativeParam {
+					name: "other",
+					default: None,
+				}],
+				Digest::equal,
+			),
+			("inspect", &[], Digest::inspect),
+		],
 		statics: &[],
 	},
 ];
@@ -284,6 +409,7 @@ impl NativeTypeId {
 	pub const TYPE: NativeTypeId = NativeTypeId::new(8);
 	pub const PROTO: NativeTypeId = NativeTypeId::new(9);
 	pub const MODULE: NativeTypeId = NativeTypeId::new(10);
+	pub const DIGEST: NativeTypeId = NativeTypeId::new(11);
 }
 
 #[cfg(test)]
@@ -298,6 +424,7 @@ mod core_types_tests {
 		let names: Vec<&str> = CORE_TYPES.iter().map(|spec| spec.name).collect();
 		let expected = [
 			"Nil", "Num", "Bool", "Char", "Str", "List", "Dict", "Proc", "Type", "Proto", "Module",
+			"Digest",
 		];
 		assert_eq!(names, expected);
 	}

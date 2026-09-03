@@ -238,6 +238,7 @@ pub fn check(
 	pkgs: &mut Packages,
 	pkg_id: PackageId,
 	natives: &HashMap<Sym, types::NativeTypeShape>,
+	stdlib: PackageId,
 ) -> Result<(), Vec<Error>> {
 	let modules = modules::check(syms, pkgs, pkg_id)?;
 	pkgs.publish_modules(pkg_id, modules);
@@ -245,11 +246,13 @@ pub fn check(
 	let (protos, mut errs) = protos::check(syms, pkgs, pkg_id);
 	pkgs.publish_protos(pkg_id, protos);
 
+	let behaviors = protos::build_behaviors(syms, pkgs, stdlib);
+
 	// Describing resolves 'impl' names and decides conformance itself, so it
 	// tolerates the package not yet being known valid; it runs before the
 	// chunk walk rather than after, and its errors precede that walk's in the
 	// bundle, mirroring how module errors already precede every chunk error.
-	let (types, mut type_errs) = types::check(syms, pkgs, pkg_id, natives);
+	let (types, mut type_errs) = types::check(syms, pkgs, pkg_id, natives, &behaviors);
 	errs.append(&mut type_errs);
 	pkgs.publish_types(pkg_id, types);
 

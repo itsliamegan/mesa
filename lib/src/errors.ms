@@ -32,6 +32,7 @@ type TypeError
 	case IndexNonNum(message) end
 	case ArithNonNum(message) end
 	case ConcatNonStr(message) end
+	case MixNonDigest(message) end
 	case NotCallable(message) end
 	case NotConstructible(message) end
 	case NotInvocable(message) end

@@ -37,6 +37,10 @@ pub(crate) fn print_char(char: char) -> String {
 	res
 }
 
+pub(crate) fn print_digest(digest: u64) -> String {
+	format!("digest({:016x})", digest)
+}
+
 pub(crate) fn print_str(str: &str) -> String {
 	let mut res = String::new();
 	res.push('"');
@@ -145,6 +149,7 @@ fn print_val(syms: &Interner, rt: &Runtime, val: &Val, active: &mut Active) -> S
 		Val::Bool(bool) => print_bool(bool.0),
 		Val::Char(char) => print_char(char.0),
 		Val::Str(str) => print_str(&str.text),
+		Val::Digest(digest) => print_digest(digest.0),
 		Val::Obj(obj) => {
 			let ptr = Rc::as_ptr(obj);
 			if !active.insert(ptr) {

@@ -39,7 +39,7 @@ type Task(priority)
 	impl Hash
 
 	def hash
-		0
+		(0).hash
 	end
 end
 
