@@ -305,7 +305,7 @@ $print(Group([1, 2]).inspect)
 
 #---
 
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Group(items)
 	impl Display

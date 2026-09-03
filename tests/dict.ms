@@ -1,4 +1,4 @@
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 dict := {"id": 105}
 #> {"id": 105}

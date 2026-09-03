@@ -1,5 +1,5 @@
 import Core.Errors.Error
-import Core.Protos.Access
+import Core.Behaviors.Access
 
 def unused
 	raise Error.KeyError("boom")

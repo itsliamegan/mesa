@@ -1,10 +1,10 @@
 module Core.Prelude
 
-import Core.Protos.Access
-import Core.Protos.Append
-import Core.Protos.Display
-import Core.Protos.Hash
-import Core.Protos.Order
+import Core.Behaviors.Access
+import Core.Behaviors.Append
+import Core.Behaviors.Display
+import Core.Behaviors.Hash
+import Core.Behaviors.Order
 
 extern type Nil impl Hash
 	extern def hash end

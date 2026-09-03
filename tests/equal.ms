@@ -1,4 +1,4 @@
-import Core.Protos.Equal
+import Core.Behaviors.Equal
 
 $print((1).equal(1))
 #> true

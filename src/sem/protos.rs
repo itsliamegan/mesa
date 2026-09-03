@@ -90,13 +90,12 @@ impl Behaviors {
 	pub const ACCESS: (&str, &str, &str) = ("Access", "access", "store");
 }
 
-// Resolve the protocols of 'Core.Protos' governing built-in behavior, and the
-// method each behavior dispatches through. A missing or misnamed protocol is a
-// broken build.
+// Resolve the protocols of 'Core.Behaviors' and the method each behavior
+// dispatches through. A missing or misnamed protocol is a broken build.
 pub fn build_behaviors(syms: &mut Interner, pkgs: &Packages, stdlib: PackageId) -> Behaviors {
-	let path = [syms.intern("Core"), syms.intern("Protos")];
+	let path = [syms.intern("Core"), syms.intern("Behaviors")];
 	let Some(module) = pkgs.get(stdlib).modules().by_path(&path) else {
-		panic!("stdlib does not declare a 'Core.Protos' module");
+		panic!("stdlib does not declare a 'Core.Behaviors' module");
 	};
 	Behaviors {
 		equal: build_behavior(syms, pkgs, stdlib, module, Behaviors::EQUAL),
@@ -119,7 +118,10 @@ fn build_behavior(
 	let (proto, method) = names;
 	let pkg = pkgs.get(stdlib);
 	let Some(Member::Proto(item_id)) = pkg.modules().member(module, syms.intern(proto)) else {
-		panic!("stdlib does not declare a 'Core.Protos.{}' protocol", proto);
+		panic!(
+			"stdlib does not declare a 'Core.Behaviors.{}' protocol",
+			proto
+		);
 	};
 	let chunk_id = pkg.modules().chunk(module);
 	Behavior {
@@ -138,7 +140,10 @@ fn build_access_behavior(
 	let (proto, access, store) = names;
 	let pkg = pkgs.get(stdlib);
 	let Some(Member::Proto(item_id)) = pkg.modules().member(module, syms.intern(proto)) else {
-		panic!("stdlib does not declare a 'Core.Protos.{}' protocol", proto);
+		panic!(
+			"stdlib does not declare a 'Core.Behaviors.{}' protocol",
+			proto
+		);
 	};
 	let chunk_id = pkg.modules().chunk(module);
 	AccessBehavior {

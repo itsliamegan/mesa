@@ -1,4 +1,4 @@
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task(priority)
 	impl Hash
@@ -38,7 +38,7 @@ $print(dict[two_cycle])
 
 #---
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task(priority)
 	impl Hash
@@ -75,7 +75,7 @@ end
 
 #! runtime error: type List is not hashable
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Group(tasks)
 	impl Hash
@@ -88,7 +88,7 @@ end
 
 #---
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task(priority)
 	impl Hash
@@ -108,7 +108,7 @@ $print(dict[Task(1)])
 
 #---
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task(priority)
 	impl Hash
@@ -128,7 +128,7 @@ $print(dict[Task(2)])
 
 #---
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Meddler(id)
 	impl Hash
@@ -164,7 +164,7 @@ $print(dict[Meddler(2)])
 
 #! runtime error: type Task is not hashable
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task(priority)
 	impl Hash
@@ -178,7 +178,7 @@ end
 
 #---
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Account(id, name)
 	impl Hash
@@ -210,14 +210,14 @@ $print(dict[Account(2, "a")])
 
 #! runtime error: type Num cannot be mixed into a digest
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 (1).hash + 5
 
 
 #---
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task
 	case Ready(priority)
@@ -241,7 +241,7 @@ $print(dict[Task.Ready(2)])
 
 #! semantic error: type 'Task' must declare 'hash' when overriding 'equal' and implementing 'Hash'
 
-import Core.Protos.Hash
+import Core.Behaviors.Hash
 
 type Task(priority)
 	impl Hash
@@ -253,8 +253,8 @@ end
 
 #---
 
-import Core.Protos
-import Core.Protos.Hash
+import Core.Behaviors
+import Core.Behaviors.Hash
 import Test.Left
 import Test.Left.Ready
 
@@ -297,7 +297,7 @@ $print(dict[Waiting])
 #> imported proto
 $print(dict[Left.Ready])
 #> stdlib proto
-$print(dict[Protos.Hash])
+$print(dict[Behaviors.Hash])
 #> 7
 $print(dict.size)
 

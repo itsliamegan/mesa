@@ -1,6 +1,6 @@
 module Core
 
-import Core.Protos.Order
+import Core.Behaviors.Order
 
 extern type Counter impl Order
 	extern def count end

@@ -1,4 +1,4 @@
-module Core.Protos
+module Core.Behaviors
 
 proto Equal
 	extern def equal(other) end

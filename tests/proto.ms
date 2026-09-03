@@ -189,7 +189,7 @@ $print('a'.max('z'))
 
 #---
 
-import Core.Protos.Order
+import Core.Behaviors.Order
 
 type Task(priority)
 	impl Order
@@ -210,7 +210,7 @@ $print(Task(1) >= Task(5))
 
 #---
 
-import Core.Protos.Append
+import Core.Behaviors.Append
 
 type Collection(items: [])
 	impl Append
@@ -228,7 +228,7 @@ $print(Collection() << "a" << "b")
 
 #---
 
-import Core.Protos.Access
+import Core.Behaviors.Access
 
 type Collection(items: [])
 	impl Access
@@ -247,7 +247,7 @@ $print(Collection(["Item"])[0])
 
 #! runtime error: type Collection does not implement 'store'
 
-import Core.Protos.Access
+import Core.Behaviors.Access
 
 type Collection(items: [])
 	impl Access
@@ -261,7 +261,7 @@ Collection()[0] := "Item"
 
 #---
 
-import Core.Protos.Access
+import Core.Behaviors.Access
 
 type Collection(items: [])
 	impl Access
@@ -286,7 +286,7 @@ $print(collection[0])
 
 #! semantic error: type 'Collection' does not implement 'access', required by protocol 'Access'
 
-import Core.Protos.Access
+import Core.Behaviors.Access
 
 type Collection(items: [])
 	impl Access
@@ -303,7 +303,7 @@ Task(1) << 1
 
 #---
 
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Task(priority)
 	impl Display
@@ -324,7 +324,7 @@ $print(Task(1).display)
 
 #---
 
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Task(priority)
 	impl Display
@@ -343,7 +343,7 @@ $print(Task(1).display)
 
 #! semantic error: 'inspect' on type 'Task' does not match the signature declared by protocol 'Inspect'
 
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Task(priority)
 	impl Display
@@ -740,7 +740,7 @@ $print(Task(1) < Task(2))
 
 #! runtime error: type Task is not orderable
 
-import Core.Protos.Order
+import Core.Behaviors.Order
 
 type Task(priority)
 	impl Order
@@ -785,7 +785,7 @@ $print("Multi-\nline".inspect)
 
 #! semantic error: type 'Task' does not implement 'display', required by protocol 'Display'
 
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Task(priority)
 	impl Display
@@ -809,7 +809,7 @@ $print(Task("a"))
 
 #! runtime error: type Task is not displayable
 
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Task(name)
 	impl Display

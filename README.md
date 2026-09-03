@@ -17,7 +17,7 @@ have a comprehensive manual.
 module Ledger
 
 import Core.IO
-import Core.Protos.Display
+import Core.Behaviors.Display
 
 type Amount(cents: 0)
 	impl Display
