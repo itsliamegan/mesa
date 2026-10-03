@@ -34,10 +34,15 @@ When working on a feature, bug fix, or documentation change, follow this process
 4. If the user requests manual review, stop between WIP commits and let the user
    provide comments and direct file edits, steering the design. If the user
    makes edits, rewrite the WIP commit in-place
-3. If the user requests a remote workflow, push the WIP commits to `origin`
-4. Once finished, squash into a single commit with a user-provided message and
+5. If the user requests a remote workflow, push the WIP commits to `origin`
+6. Once finished, squash into a single commit with a user-provided message and
    rebase `main` on top of the branch
-5. Push `main` to `origin` and clean up the local & remote branches
+7. Push `main` to `origin` and clean up the local & remote branches
+
+WIP commits on the working branch, and pushing them when a remote workflow is
+requested, do not need confirmation. When a plan calls for a WIP commit after
+each step, commit at the end of every step without asking. The final squashed
+commit always needs the user's message and confirmation.
 
 Avoid this planning & branching process if either a) the file you're working on is untracked or b) the user specifically requests a branchless or planless workflow on `main`.
 
@@ -63,6 +68,10 @@ whose specifics are flexible, so as to keep conceptual overhead minimal. Prefer
 to use one of these types, or define one in the same universe, as opposed to
 inventing a new one.
 
+Consolidate related edge cases into one dense section rather than one section
+per case. Never add prose comments to a fixture; the code and its expectations
+are the whole statement.
+
 ## Documentation
 
 `doc/language.md` contains a detailed description of the language and its
@@ -70,7 +79,12 @@ features. Consult it to understand how a language feature works, and treat it as
 the source of truth. If there is a conflict between the implementation and this
 file, the implementation has a bug.
 
+`doc/language.md` is maintained by hand. Edit it only when the user asks; when a
+change seems to require an edit, say so instead. It states the rules of the
+language, never the rationale behind them. Conventions for writing Mesa belong
+in `doc/style.md`.
+
 `doc/implementation.md` contains a detailed description of the interpreter,
 including its phase structure and architecture conventions. Consult it to
 understand where to make changes in the interpreter and how its different pieces
-fit together.
+fit together. Follow its Patterns section when writing interpreter code.
